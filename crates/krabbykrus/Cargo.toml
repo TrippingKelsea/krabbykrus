@@ -1,0 +1,32 @@
+[package]
+name = "krabbykrus"
+version = "0.1.0"
+edition = "2021"
+description = "Next-generation AI agent framework"
+license = "MIT"
+authors = ["Krabbykrus Team"]
+repository = "https://github.com/krabbykrus/krabbykrus"
+
+[[bin]]
+name = "krabbykrus"
+path = "src/main.rs"
+
+[dependencies]
+krabbykrus-core = { path = "../krabbykrus-core" }
+krabbykrus-cli = { path = "../krabbykrus-cli" }
+krabbykrus-llm = { path = "../krabbykrus-llm" }
+krabbykrus-tools = { path = "../krabbykrus-tools" }
+krabbykrus-memory = { path = "../krabbykrus-memory" }
+krabbykrus-security = { path = "../krabbykrus-security" }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[example]]
+name = "demo"
+path = "../../examples/demo.rs"

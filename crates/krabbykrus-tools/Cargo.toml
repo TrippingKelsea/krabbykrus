@@ -1,0 +1,18 @@
+[package]
+name = "krabbykrus-tools"
+version = "0.1.0"
+edition = "2021"
+description = "Built-in tools for Krabbykrus"
+license = "MIT"
+
+[dependencies]
+krabbykrus-security = { path = "../krabbykrus-security" }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }

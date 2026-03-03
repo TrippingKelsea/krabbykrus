@@ -1,0 +1,17 @@
+[package]
+name = "krabbykrus-llm"
+version = "0.1.0"
+edition = "2021"
+description = "LLM provider abstraction for Krabbykrus"
+license = "MIT"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+async-trait = "0.1"
+uuid = { workspace = true }

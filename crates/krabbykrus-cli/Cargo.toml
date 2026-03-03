@@ -1,0 +1,34 @@
+[package]
+name = "krabbykrus-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line interface for Krabbykrus"
+license = "MIT"
+
+[dependencies]
+krabbykrus-core = { path = "../krabbykrus-core" }
+krabbykrus-tools = { path = "../krabbykrus-tools" }
+krabbykrus-memory = { path = "../krabbykrus-memory" }
+krabbykrus-security = { path = "../krabbykrus-security" }
+krabbykrus-credentials = { path = "../krabbykrus-credentials" }
+krabbykrus-llm = { path = "../krabbykrus-llm" }
+
+uuid = { workspace = true }
+
+tokio = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs = { workspace = true }
+reqwest = { workspace = true }
+rpassword = "7"
+getrandom = "0.2"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"

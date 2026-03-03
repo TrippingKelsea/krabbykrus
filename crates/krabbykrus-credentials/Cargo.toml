@@ -1,0 +1,42 @@
+[package]
+name = "krabbykrus-credentials"
+version = "0.1.0"
+edition = "2021"
+description = "Secure credential storage for Krabbykrus agents"
+license = "MIT"
+
+[dependencies]
+# Age encryption
+age = { version = "0.10", features = ["armor"] }
+
+# SSH key parsing
+ssh-key = { version = "0.6", features = ["crypto", "encryption"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Time handling
+chrono = { workspace = true }
+
+# UUID generation
+uuid = { workspace = true }
+
+# Async runtime (for manager module)
+tokio = { workspace = true, features = ["sync"] }
+
+# Cryptography - AES-256-GCM + Argon2
+aes-gcm = "0.10"
+argon2 = "0.5"
+sha2 = "0.10"
+zeroize = { version = "1.7", features = ["derive"] }
+
+# Encoding
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
