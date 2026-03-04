@@ -600,8 +600,8 @@ impl App {
         match self.state.menu_item {
             MenuItem::Dashboard => render_dashboard(frame, main_chunks[0], &self.state),
             MenuItem::Credentials => render_credentials(frame, main_chunks[0], &self.state, self.credentials_tab.index(), &self.effect_state),
-            MenuItem::Agents => render_agents(frame, main_chunks[0], &self.state),
-            MenuItem::Sessions => render_sessions(frame, main_chunks[0], &self.state),
+            MenuItem::Agents => render_agents(frame, main_chunks[0], &self.state, &self.effect_state),
+            MenuItem::Sessions => render_sessions(frame, main_chunks[0], &self.state, &self.effect_state),
             MenuItem::Models => render_models(frame, main_chunks[0], &self.state, &self.effect_state),
             MenuItem::Settings => render_settings(frame, main_chunks[0], &self.state),
         }

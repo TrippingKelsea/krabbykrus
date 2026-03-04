@@ -8,23 +8,32 @@ use ratatui::{
     Frame,
 };
 
+use crate::tui::effects::{self, palette, EffectState};
 use crate::tui::state::AppState;
 use super::render_spinner;
 
 /// Render the sessions page
-pub fn render_sessions(frame: &mut Frame, area: Rect, state: &AppState) {
+pub fn render_sessions(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
         .split(area);
 
-    render_session_list(frame, chunks[0], state);
+    render_session_list(frame, chunks[0], state, effect_state);
     render_session_details(frame, chunks[1], state);
 }
 
-fn render_session_list(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_session_list(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
+    // Use animated border when content pane is focused
+    let border_style = if !state.sidebar_focus {
+        effects::active_border_style(effect_state.elapsed_secs())
+    } else {
+        effects::inactive_border_style()
+    };
+    
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_style(border_style)
         .title("Active Sessions");
     
     if state.sessions_loading {
@@ -54,14 +63,22 @@ fn render_session_list(frame: &mut Frame, area: Rect, state: &AppState) {
         }).collect()
     };
 
+    // Use active highlight only when content is focused
+    let highlight_style = if !state.sidebar_focus {
+        Style::default()
+            .bg(palette::ACTIVE_PRIMARY)
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::DIM)
+    };
+
     let list = List::new(items)
         .block(block)
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("> ");
+        .highlight_style(highlight_style)
+        .highlight_symbol("▶ ");
 
     let mut list_state = ListState::default();
     if !state.sessions.is_empty() {
