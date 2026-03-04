@@ -113,8 +113,8 @@ pub fn render_add_credential_modal(frame: &mut Frame, area: Rect, state: &AddCre
     let fields = get_fields_for_endpoint_type(state.endpoint_type);
     
     // Calculate modal height based on number of fields
-    // Name (3) + Type (3) + dynamic fields (3 each) + help (2) + margins (2)
-    let content_height = 3 + 3 + (fields.len() * 3) + 2 + 2;
+    // Name (3) + Type (3) + dynamic fields (3 each) + help (2) + layout margins (2) + block borders (2)
+    let content_height = 3 + 3 + (fields.len() * 3) + 2 + 4;
     let modal_height = (content_height as u16).min(area.height.saturating_sub(4)).max(20);
     let modal_percent_y = ((modal_height as f32 / area.height as f32) * 100.0) as u16;
     
