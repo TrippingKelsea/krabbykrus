@@ -395,14 +395,14 @@ fn render_providers(frame: &mut Frame, area: Rect, state: &AppState, effect_stat
         .highlight_style(highlight_style)
         .highlight_symbol("▶ ");
     
-    // TODO: Add selected_category to state - for now show first
     let mut list_state = ListState::default();
-    list_state.select(Some(0));
+    list_state.select(Some(state.selected_category));
     
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
     
     // Provider details - show providers for selected category
-    render_category_providers(frame, chunks[1], state, CredentialCategory::All);
+    let selected_category = categories.get(state.selected_category).copied().unwrap_or(CredentialCategory::All);
+    render_category_providers(frame, chunks[1], state, selected_category);
 }
 
 /// Render provider list for a category

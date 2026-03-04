@@ -282,8 +282,10 @@ pub struct AppState {
     pub vault_loading: bool,
     pub endpoints: Vec<EndpointInfo>,
     pub selected_endpoint: usize,
+    pub selected_category: usize,  // For Providers tab navigation
+    pub credentials_tab: usize,    // Which tab is active (0=Endpoints, 1=Providers, etc.)
     
-    // Models
+    // Models (5 known providers: Anthropic, OpenAI, Ollama, Bedrock, Google)
     pub providers: Vec<ModelProvider>,
     pub selected_provider: usize,
     
@@ -607,6 +609,8 @@ impl AppState {
             vault_loading: true,
             endpoints: Vec::new(),
             selected_endpoint: 0,
+            selected_category: 0,
+            credentials_tab: 0,
             
             providers: Vec::new(),
             selected_provider: 0,
@@ -711,12 +715,27 @@ impl AppState {
         !matches!(self.input_mode, InputMode::Normal)
     }
     
+    /// Number of known LLM providers (Anthropic, OpenAI, Ollama, Bedrock, Google)
+    pub const MODEL_PROVIDER_COUNT: usize = 5;
+    
+    /// Number of credential categories (All, Model, Communication, Tools, OAuth2, Generic)
+    pub const CREDENTIAL_CATEGORY_COUNT: usize = 6;
+    
     /// Move selection up in current list
     pub fn select_prev(&mut self) {
         match self.menu_item {
             MenuItem::Dashboard => {}
             MenuItem::Credentials => {
-                if !self.endpoints.is_empty() {
+                // Navigate based on which tab is active
+                if self.credentials_tab == 1 {
+                    // Providers tab - navigate categories
+                    self.selected_category = if self.selected_category == 0 {
+                        Self::CREDENTIAL_CATEGORY_COUNT - 1
+                    } else {
+                        self.selected_category - 1
+                    };
+                } else if self.credentials_tab == 0 && !self.endpoints.is_empty() {
+                    // Endpoints tab
                     self.selected_endpoint = if self.selected_endpoint == 0 {
                         self.endpoints.len() - 1
                     } else {
@@ -743,13 +762,12 @@ impl AppState {
                 }
             }
             MenuItem::Models => {
-                if !self.providers.is_empty() {
-                    self.selected_provider = if self.selected_provider == 0 {
-                        self.providers.len() - 1
-                    } else {
-                        self.selected_provider - 1
-                    };
-                }
+                // Always allow navigation - we have 5 known providers
+                self.selected_provider = if self.selected_provider == 0 {
+                    Self::MODEL_PROVIDER_COUNT - 1
+                } else {
+                    self.selected_provider - 1
+                };
             }
             MenuItem::Settings => {}
         }
@@ -760,7 +778,12 @@ impl AppState {
         match self.menu_item {
             MenuItem::Dashboard => {}
             MenuItem::Credentials => {
-                if !self.endpoints.is_empty() {
+                // Navigate based on which tab is active
+                if self.credentials_tab == 1 {
+                    // Providers tab - navigate categories
+                    self.selected_category = (self.selected_category + 1) % Self::CREDENTIAL_CATEGORY_COUNT;
+                } else if self.credentials_tab == 0 && !self.endpoints.is_empty() {
+                    // Endpoints tab
                     self.selected_endpoint = (self.selected_endpoint + 1) % self.endpoints.len();
                 }
             }
@@ -775,9 +798,8 @@ impl AppState {
                 }
             }
             MenuItem::Models => {
-                if !self.providers.is_empty() {
-                    self.selected_provider = (self.selected_provider + 1) % self.providers.len();
-                }
+                // Always allow navigation - we have 5 known providers
+                self.selected_provider = (self.selected_provider + 1) % Self::MODEL_PROVIDER_COUNT;
             }
             MenuItem::Settings => {}
         }

@@ -8,10 +8,11 @@ use ratatui::{
     Frame,
 };
 
+use crate::tui::effects::{self, EffectState};
 use crate::tui::state::AppState;
 
 /// Render the settings page
-pub fn render_settings(frame: &mut Frame, area: Rect, state: &AppState) {
+pub fn render_settings(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -21,12 +22,19 @@ pub fn render_settings(frame: &mut Frame, area: Rect, state: &AppState) {
         ])
         .split(area);
 
-    render_general(frame, chunks[0], state);
+    render_general(frame, chunks[0], state, effect_state);
     render_paths(frame, chunks[1], state);
     render_about(frame, chunks[2]);
 }
 
-fn render_general(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_general(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
+    // Use animated border when content pane is focused
+    let border_style = if !state.sidebar_focus {
+        effects::active_border_style(effect_state.elapsed_secs())
+    } else {
+        effects::inactive_border_style()
+    };
+    
     let gateway_status = if state.gateway.connected {
         Span::styled("● Running", Style::default().fg(Color::Green))
     } else {
@@ -59,6 +67,7 @@ fn render_general(frame: &mut Frame, area: Rect, state: &AppState) {
     
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_style(border_style)
         .title("General");
     
     let paragraph = Paragraph::new(content).block(block);
@@ -99,7 +108,7 @@ fn render_about(frame: &mut Frame, area: Rect) {
         )),
         Line::from("A Rust-native AI agent framework"),
         Line::from(""),
-        Line::from(Span::styled("https://github.com/openclaw/krabbykrus", Style::default().fg(Color::Blue))),
+        Line::from(Span::styled("https://github.com/TrippingKelsea/krabbykrus", Style::default().fg(Color::Blue))),
         Line::from(""),
         Line::from(Span::styled(
             "Press ? for keyboard shortcuts",

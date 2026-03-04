@@ -72,8 +72,6 @@ pub struct App {
     rx: mpsc::UnboundedReceiver<Message>,
     /// Effect state for visual animations
     effect_state: EffectState,
-    /// Current tab within Credentials view
-    credentials_tab: CredentialsTab,
     /// Current tab within Models view (for future use)
     models_tab: usize,
 }
@@ -86,18 +84,20 @@ impl App {
             state: AppState::new(config_path, vault_path, tx),
             rx,
             effect_state: EffectState::new(),
-            credentials_tab: CredentialsTab::default(),
             models_tab: 0,
         }
+    }
+    
+    /// Get current credentials tab as enum
+    fn credentials_tab(&self) -> CredentialsTab {
+        CredentialsTab::from_index(self.state.credentials_tab)
     }
     
     /// Navigate to previous content tab (Shift+[)
     fn prev_content_tab(&mut self) {
         match self.state.menu_item {
             MenuItem::Credentials => {
-                let idx = self.credentials_tab.index();
-                let new_idx = if idx == 0 { 3 } else { idx - 1 };
-                self.credentials_tab = CredentialsTab::from_index(new_idx);
+                self.state.credentials_tab = if self.state.credentials_tab == 0 { 3 } else { self.state.credentials_tab - 1 };
             }
             MenuItem::Models => {
                 self.models_tab = if self.models_tab == 0 { 2 } else { self.models_tab - 1 };
@@ -110,8 +110,7 @@ impl App {
     fn next_content_tab(&mut self) {
         match self.state.menu_item {
             MenuItem::Credentials => {
-                let idx = self.credentials_tab.index();
-                self.credentials_tab = CredentialsTab::from_index(idx + 1);
+                self.state.credentials_tab = (self.state.credentials_tab + 1) % 4;
             }
             MenuItem::Models => {
                 self.models_tab = (self.models_tab + 1) % 3;
@@ -599,11 +598,11 @@ impl App {
         // Content area - pass effect state for active border animation
         match self.state.menu_item {
             MenuItem::Dashboard => render_dashboard(frame, main_chunks[0], &self.state),
-            MenuItem::Credentials => render_credentials(frame, main_chunks[0], &self.state, self.credentials_tab.index(), &self.effect_state),
+            MenuItem::Credentials => render_credentials(frame, main_chunks[0], &self.state, self.state.credentials_tab, &self.effect_state),
             MenuItem::Agents => render_agents(frame, main_chunks[0], &self.state, &self.effect_state),
             MenuItem::Sessions => render_sessions(frame, main_chunks[0], &self.state, &self.effect_state),
             MenuItem::Models => render_models(frame, main_chunks[0], &self.state, &self.effect_state),
-            MenuItem::Settings => render_settings(frame, main_chunks[0], &self.state),
+            MenuItem::Settings => render_settings(frame, main_chunks[0], &self.state, &self.effect_state),
         }
 
         // Status bar
@@ -648,7 +647,7 @@ impl App {
                         MenuItem::Credentials => {
                             format!(
                                 "a:Add │ d:Delete │ u:Unlock │ l:Lock │ {{}}:Tabs ({}) │ Esc:←",
-                                self.credentials_tab.label()
+                                self.credentials_tab().label()
                             )
                         }
                         MenuItem::Agents => {
