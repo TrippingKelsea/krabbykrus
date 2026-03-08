@@ -85,6 +85,7 @@ async fn main() -> Result<()> {
         id: "demo-agent".to_string(),
         workspace: Some(workspace_path),
         model: Some(model.to_string()),
+        max_tool_calls: None,
         config: HashMap::new(),
     };
 
@@ -96,6 +97,7 @@ async fn main() -> Result<()> {
         memory_manager,
         security_manager,
         session_manager,
+        None, // No credential accessor for demo
     )
     .await?;
     println!("  ✓ Agent created\n");

@@ -99,6 +99,7 @@ fn create_default_config() -> Config {
                     id: "main".to_string(),
                     workspace: None,
                     model: None,
+                    max_tool_calls: None,
                     config: HashMap::new(),
                 },
             ],
