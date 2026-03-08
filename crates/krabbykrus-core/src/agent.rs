@@ -290,21 +290,41 @@ impl Agent {
         Ok(())
     }
     
-    /// Build LLM chat completion request
+    /// Build LLM chat completion request with system prompt assembly
     async fn build_llm_request(&self, context: &mut ProcessingContext) -> Result<ChatCompletionRequest> {
-        // Convert messages to LLM format
-        let messages = context.messages.iter().map(|m| {
-            krabbykrus_llm::Message {
-                role: match m.metadata.role {
+        // Assemble system prompt with context injection
+        let system_prompt = self.assemble_system_prompt(&context).await?;
+        
+        // Convert messages to LLM format, injecting system message if needed
+        let mut messages = Vec::new();
+        
+        // Add system message first if we have a system prompt
+        if !system_prompt.is_empty() {
+            messages.push(krabbykrus_llm::Message {
+                role: krabbykrus_llm::MessageRole::System,
+                content: system_prompt,
+                tool_calls: None,
+            });
+        }
+        
+        // Add conversation messages
+        for message in &context.messages {
+            // Skip system messages from conversation (they're handled above)
+            if matches!(message.metadata.role, MessageRole::System) {
+                continue;
+            }
+            
+            messages.push(krabbykrus_llm::Message {
+                role: match message.metadata.role {
                     MessageRole::User => krabbykrus_llm::MessageRole::User,
                     MessageRole::Assistant => krabbykrus_llm::MessageRole::Assistant,
                     MessageRole::System => krabbykrus_llm::MessageRole::System,
                     MessageRole::Tool => krabbykrus_llm::MessageRole::Tool,
                 },
-                content: m.extract_text().unwrap_or_default(),
+                content: message.extract_text().unwrap_or_default(),
                 tool_calls: None, // TODO: Handle tool calls
-            }
-        }).collect();
+            });
+        }
         
         // Get tool definitions if tools are available
         let tools = if !context.available_tools.is_empty() {
@@ -333,6 +353,114 @@ impl Agent {
             max_tokens: Some(4000),
             stream: false,
         })
+    }
+    
+    /// Assemble system prompt with context injection
+    async fn assemble_system_prompt(&self, context: &ProcessingContext) -> Result<String> {
+        let mut prompt_parts = Vec::new();
+        
+        // Load and inject identity context (SOUL.md)
+        if let Ok(soul_content) = self.load_context_file("SOUL.md").await {
+            prompt_parts.push(format!("# Agent Identity\n\n{}", soul_content));
+        }
+        
+        // Load and inject operational context (AGENTS.md)
+        if let Ok(agents_content) = self.load_context_file("AGENTS.md").await {
+            prompt_parts.push(format!("# Operational Guidelines\n\n{}", agents_content));
+        }
+        
+        // Inject skills/tools information
+        if !context.available_tools.is_empty() {
+            let skills_section = self.build_skills_section(&context.available_tools).await?;
+            prompt_parts.push(skills_section);
+        }
+        
+        // Add session and agent context
+        let context_section = format!(
+            "# Current Context\n\n- Agent ID: {}\n- Session ID: {}\n- Available tools: {}\n- Workspace: {}",
+            self.config.id,
+            context.session_id,
+            context.available_tools.join(", "),
+            self.get_workspace_path().display()
+        );
+        prompt_parts.push(context_section);
+        
+        // Add current timestamp
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+        prompt_parts.push(format!("# Current Time\n\n{}", timestamp));
+        
+        Ok(prompt_parts.join("\n\n---\n\n"))
+    }
+    
+    /// Load a context file from the agent's workspace
+    async fn load_context_file(&self, filename: &str) -> Result<String> {
+        let workspace_path = self.get_workspace_path();
+        let file_path = workspace_path.join(filename);
+        
+        match tokio::fs::read_to_string(&file_path).await {
+            Ok(content) => Ok(content),
+            Err(e) => {
+                debug!("Could not load context file {}: {}", filename, e);
+                // Try loading from default locations
+                self.load_context_file_fallback(filename).await
+            }
+        }
+    }
+    
+    /// Try loading context files from fallback locations
+    async fn load_context_file_fallback(&self, filename: &str) -> Result<String> {
+        // Try standard locations for agent context files
+        let fallback_paths = [
+            // Check if it exists in the global workspace
+            dirs::config_dir()
+                .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
+                .join("krabbykrus")
+                .join(filename),
+            // Check current directory (for development/testing)
+            std::env::current_dir().unwrap_or_default().join(filename),
+            // Check home directory
+            dirs::home_dir().unwrap_or_default().join(".openclaw").join(filename),
+        ];
+        
+        for path in fallback_paths {
+            if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                debug!("Loaded context file {} from fallback location: {}", filename, path.display());
+                return Ok(content);
+            }
+        }
+        
+        debug!("No fallback location found for context file: {}", filename);
+        Err(crate::error::KrabbykrusError::Agent(AgentError::ExecutionFailed {
+            message: format!("Context file {} not found", filename),
+        }))
+    }
+    
+    /// Build the skills/tools section of the system prompt
+    async fn build_skills_section(&self, available_tools: &[String]) -> Result<String> {
+        if available_tools.is_empty() {
+            return Ok("# Available Tools\n\nNo tools available in this session.".to_string());
+        }
+        
+        let mut skills_parts = vec!["# Available Tools".to_string()];
+        
+        // Get tool definitions
+        let tool_definitions = self.tool_registry.get_tool_definitions(available_tools).await?;
+        
+        for tool in tool_definitions {
+            let tool_description = format!(
+                "## {}\n\n{}\n\n**Parameters:** {}", 
+                tool.name, 
+                tool.description,
+                serde_json::to_string_pretty(&tool.parameters).unwrap_or_else(|_| "{}".to_string())
+            );
+            skills_parts.push(tool_description);
+        }
+        
+        skills_parts.push(
+            "Use these tools when appropriate to help the user. Always explain what you're doing when using tools.".to_string()
+        );
+        
+        Ok(skills_parts.join("\n\n"))
     }
     
     /// Process LLM response and handle any tool calls with multi-turn execution
