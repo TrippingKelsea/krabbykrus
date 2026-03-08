@@ -94,6 +94,9 @@ pub struct AgentInstance {
     pub workspace: Option<PathBuf>,
     /// Model override
     pub model: Option<String>,
+    /// Maximum number of tool calls per turn (default: 10)
+    #[serde(default = "default_max_tool_calls")]
+    pub max_tool_calls: Option<u32>,
     /// Agent-specific configuration
     #[serde(default)]
     pub config: HashMap<String, serde_json::Value>,
@@ -410,6 +413,10 @@ fn default_heartbeat_interval() -> String {
 
 fn default_max_context_tokens() -> usize {
     128000
+}
+
+fn default_max_tool_calls() -> Option<u32> {
+    Some(10)
 }
 
 fn default_tool_profile() -> String {

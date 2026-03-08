@@ -335,27 +335,125 @@ impl Agent {
         })
     }
     
-    /// Process LLM response and handle any tool calls
+    /// Process LLM response and handle any tool calls with multi-turn execution
     async fn process_llm_response(
         &self,
         session_id: &str,
         context: &mut ProcessingContext,
-        llm_response: ChatCompletionResponse,
+        initial_llm_response: ChatCompletionResponse,
     ) -> Result<(Message, Vec<ToolExecutionResult>, TokenUsage)> {
-        let mut tool_results = Vec::new();
-        let mut response_content = String::new();
-        
-        // Extract token usage
-        let token_usage = TokenUsage {
-            prompt_tokens: llm_response.usage.prompt_tokens,
-            completion_tokens: llm_response.usage.completion_tokens,
-            total_tokens: llm_response.usage.total_tokens,
+        let mut all_tool_results = Vec::new();
+        let mut cumulative_token_usage = TokenUsage {
+            prompt_tokens: initial_llm_response.usage.prompt_tokens,
+            completion_tokens: initial_llm_response.usage.completion_tokens,
+            total_tokens: initial_llm_response.usage.total_tokens,
         };
         
-        // Process the response
+        let mut current_response = initial_llm_response;
+        let mut final_response_content = String::new();
+        let mut iteration_count = 0;
+        
+        // Maximum tool execution iterations to prevent infinite loops
+        let max_tool_iterations = self.config.max_tool_calls.unwrap_or(10);
+        
+        loop {
+            iteration_count += 1;
+            debug!("Tool execution iteration {} for session {}", iteration_count, session_id);
+            
+            // Check for iteration limit
+            if iteration_count > max_tool_iterations {
+                warn!("Maximum tool execution iterations ({}) reached for session {}", 
+                      max_tool_iterations, session_id);
+                break;
+            }
+            
+            let has_tool_calls = current_response.choices
+                .first()
+                .and_then(|c| c.message.tool_calls.as_ref())
+                .map(|tc| !tc.is_empty())
+                .unwrap_or(false);
+            
+            if !has_tool_calls {
+                // No more tool calls - extract final response and finish
+                if let Some(choice) = current_response.choices.first() {
+                    if !choice.message.content.is_empty() {
+                        final_response_content = choice.message.content.clone();
+                    }
+                }
+                break;
+            }
+            
+            // Execute tool calls and prepare for next iteration
+            let (tool_results, tool_messages) = self.execute_tool_calls(
+                session_id,
+                &current_response,
+            ).await?;
+            
+            all_tool_results.extend(tool_results);
+            
+            // Add assistant's tool call message to conversation
+            if let Some(choice) = current_response.choices.first() {
+                let assistant_message = krabbykrus_llm::Message {
+                    role: krabbykrus_llm::MessageRole::Assistant,
+                    content: choice.message.content.clone(),
+                    tool_calls: choice.message.tool_calls.clone(),
+                };
+                context.messages.push(Message::from_llm_message(assistant_message, session_id, &self.config.id)?);
+            }
+            
+            // Add tool result messages to conversation
+            for tool_message in tool_messages {
+                context.messages.push(tool_message);
+            }
+            
+            // Generate next LLM request with updated conversation including tool results
+            let next_llm_request = self.build_llm_request(context).await?;
+            
+            // Get next LLM response
+            match self.llm_provider.chat_completion(next_llm_request).await {
+                Ok(response) => {
+                    // Accumulate token usage
+                    cumulative_token_usage.prompt_tokens += response.usage.prompt_tokens;
+                    cumulative_token_usage.completion_tokens += response.usage.completion_tokens;
+                    cumulative_token_usage.total_tokens += response.usage.total_tokens;
+                    
+                    current_response = response;
+                }
+                Err(e) => {
+                    error!("LLM error in tool execution loop: {}", e);
+                    return Err(crate::error::KrabbykrusError::Agent(AgentError::ModelError { message: e.to_string() }));
+                }
+            }
+        }
+        
+        // If we didn't get a final response, use the last assistant content
+        if final_response_content.is_empty() && !all_tool_results.is_empty() {
+            final_response_content = format!("Executed {} tool(s) successfully.", all_tool_results.len());
+        }
+        
+        // Create final response message
+        let response_message = Message::text(final_response_content)
+            .with_session_id(session_id)
+            .with_agent_id(&self.config.id)
+            .with_role(MessageRole::Assistant);
+        
+        info!("Completed tool execution loop with {} iterations, {} tool calls", 
+              iteration_count, all_tool_results.len());
+        
+        Ok((response_message, all_tool_results, cumulative_token_usage))
+    }
+    
+    /// Execute tool calls from an LLM response
+    async fn execute_tool_calls(
+        &self,
+        session_id: &str,
+        llm_response: &ChatCompletionResponse,
+    ) -> Result<(Vec<ToolExecutionResult>, Vec<Message>)> {
+        let mut tool_results = Vec::new();
+        let mut tool_messages = Vec::new();
+        
         if let Some(choice) = llm_response.choices.first() {
             if let Some(ref tool_calls) = choice.message.tool_calls {
-                // Execute tool calls
                 for tool_call in tool_calls {
                     debug!("Executing tool: {}", tool_call.function.name);
                     
@@ -380,48 +478,52 @@ impl Agent {
                         Ok(result) => {
                             tool_results.push(result.clone());
                             
-                            // Add tool result to response
-                            match &result.result {
-                                ToolResult::Text { content } => {
-                                    response_content.push_str(&format!("\n\nTool '{}' result:\n{}", 
-                                        tool_call.function.name, content));
-                                }
+                            // Create tool result message for conversation
+                            let tool_content = match &result.result {
+                                ToolResult::Text { content } => content.clone(),
                                 ToolResult::Error { message, .. } => {
-                                    response_content.push_str(&format!("\n\nTool '{}' error: {}", 
-                                        tool_call.function.name, message));
+                                    format!("Error: {}", message)
                                 }
-                                _ => {
-                                    response_content.push_str(&format!("\n\nTool '{}' executed successfully", 
-                                        tool_call.function.name));
+                                ToolResult::Json { data } => {
+                                    serde_json::to_string_pretty(data).unwrap_or_else(|_| "Invalid JSON".to_string())
                                 }
-                            }
+                                ToolResult::File { path, .. } => {
+                                    format!("[File: {}]", path)
+                                }
+                            };
+                            
+                            let tool_message = Message::tool_result(
+                                tool_call.id.clone(),
+                                tool_call.function.name.clone(),
+                                tool_content,
+                            ).with_session_id(session_id);
+                            
+                            tool_messages.push(tool_message);
                         }
                         Err(e) => {
                             error!("Tool execution failed: {}", e);
-                            response_content.push_str(&format!("\n\nTool '{}' failed: {}", 
-                                tool_call.function.name, e));
+                            
+                            // Create error message for conversation
+                            let error_message = Message::tool_result(
+                                tool_call.id.clone(),
+                                tool_call.function.name.clone(),
+                                format!("Tool execution failed: {}", e),
+                            ).with_session_id(session_id);
+                            
+                            tool_messages.push(error_message);
                         }
                     }
                 }
-            }
-            
-            // Add assistant's text response if any
-            if !choice.message.content.is_empty() {
-                if !response_content.is_empty() {
-                    response_content = format!("{}\n\n{}", choice.message.content, response_content);
-                } else {
-                    response_content = choice.message.content.clone();
+                
+                // Update stats
+                {
+                    let mut state = self.state.write().await;
+                    state.stats.tool_executions += tool_calls.len() as u64;
                 }
             }
         }
         
-        // Create response message
-        let response_message = Message::text(response_content)
-            .with_session_id(session_id)
-            .with_agent_id(&self.config.id)
-            .with_role(MessageRole::Assistant);
-        
-        Ok((response_message, tool_results, token_usage))
+        Ok((tool_results, tool_messages))
     }
     
     /// Get the workspace path for this agent
