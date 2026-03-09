@@ -394,6 +394,15 @@ impl Gateway {
             (&Method::GET, "/api/agents") => {
                 self.handle_list_agents().await
             }
+            (&Method::POST, "/api/agents") => {
+                self.handle_create_agent(req).await
+            }
+            (&Method::PUT, p) if p.starts_with("/api/agents/") && !p.contains("/message") => {
+                self.handle_update_agent(req).await
+            }
+            (&Method::DELETE, p) if p.starts_with("/api/agents/") && !p.contains("/message") => {
+                self.handle_delete_agent(&path).await
+            }
             // Credentials API endpoints
             (&Method::GET, "/api/credentials") | (&Method::GET, "/api/credentials/endpoints") => {
                 self.handle_list_endpoints().await
@@ -1174,14 +1183,177 @@ impl Gateway {
         &self,
     ) -> std::result::Result<Response<Full<hyper::body::Bytes>>, hyper::Error> {
         let agents = self.agents.read().await;
-        let agent_list: Vec<String> = agents.keys().cloned().collect();
+        let pending = self.pending_agents.read().await;
+
+        let mut agent_list: Vec<serde_json::Value> = agents.keys().map(|id| {
+            serde_json::json!({ "id": id, "status": "active" })
+        }).collect();
+
+        for p in pending.iter() {
+            agent_list.push(serde_json::json!({
+                "id": p.config.id,
+                "model": p.config.model,
+                "parent_id": p.config.parent_id,
+                "status": "pending",
+                "reason": p.reason,
+            }));
+        }
+
         let body = serde_json::to_string(&agent_list).unwrap();
-        
+
         Ok(Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "application/json")
             .body(Full::new(body.into()))
             .unwrap())
+    }
+
+    /// Handle create agent request
+    async fn handle_create_agent(
+        &self,
+        req: Request<IncomingBody>,
+    ) -> std::result::Result<Response<Full<hyper::body::Bytes>>, hyper::Error> {
+        let body = match req.collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(_) => return Ok(Self::json_error("Failed to read body", StatusCode::BAD_REQUEST)),
+        };
+
+        #[derive(Deserialize)]
+        struct CreateAgentRequest {
+            id: String,
+            model: Option<String>,
+            parent_id: Option<String>,
+            workspace: Option<String>,
+            max_tool_calls: Option<u32>,
+            system_prompt: Option<String>,
+        }
+
+        let req: CreateAgentRequest = match serde_json::from_slice(&body) {
+            Ok(r) => r,
+            Err(e) => return Ok(Self::json_error(&format!("Invalid JSON: {}", e), StatusCode::BAD_REQUEST)),
+        };
+
+        if req.id.trim().is_empty() {
+            return Ok(Self::json_error("Agent ID is required", StatusCode::BAD_REQUEST));
+        }
+
+        // Check if agent already exists
+        let agents = self.agents.read().await;
+        if agents.contains_key(&req.id) {
+            return Ok(Self::json_error(&format!("Agent '{}' already exists", req.id), StatusCode::CONFLICT));
+        }
+        drop(agents);
+
+        let config = crate::config::AgentInstance {
+            id: req.id.clone(),
+            model: req.model,
+            workspace: req.workspace.map(std::path::PathBuf::from),
+            max_tool_calls: req.max_tool_calls,
+            parent_id: req.parent_id,
+            system_prompt: req.system_prompt,
+            enabled: true,
+            config: std::collections::HashMap::new(),
+        };
+
+        // Try to create the agent via factory
+        if let Some(ref factory) = self.agent_factory {
+            match factory(config.clone()).await {
+                Ok(agent) => {
+                    self.agents.write().await.insert(req.id.clone(), agent);
+                    let body = serde_json::json!({ "status": "created", "id": req.id });
+                    Ok(Self::json_response(&body.to_string(), StatusCode::CREATED))
+                }
+                Err(e) => {
+                    // Add to pending
+                    self.pending_agents.write().await.push(PendingAgent {
+                        config,
+                        reason: e.to_string(),
+                    });
+                    let body = serde_json::json!({
+                        "status": "pending",
+                        "id": req.id,
+                        "reason": e.to_string(),
+                    });
+                    Ok(Self::json_response(&body.to_string(), StatusCode::ACCEPTED))
+                }
+            }
+        } else {
+            // No factory, just add to pending
+            self.pending_agents.write().await.push(PendingAgent {
+                config,
+                reason: "No agent factory configured".to_string(),
+            });
+            let body = serde_json::json!({ "status": "pending", "id": req.id });
+            Ok(Self::json_response(&body.to_string(), StatusCode::ACCEPTED))
+        }
+    }
+
+    /// Handle update agent request
+    async fn handle_update_agent(
+        &self,
+        req: Request<IncomingBody>,
+    ) -> std::result::Result<Response<Full<hyper::body::Bytes>>, hyper::Error> {
+        let path = req.uri().path().to_string();
+        let agent_id = path.strip_prefix("/api/agents/").unwrap_or("").to_string();
+
+        if agent_id.is_empty() {
+            return Ok(Self::json_error("Invalid agent ID", StatusCode::BAD_REQUEST));
+        }
+
+        let body = match req.collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(_) => return Ok(Self::json_error("Failed to read body", StatusCode::BAD_REQUEST)),
+        };
+
+        #[derive(Deserialize)]
+        struct UpdateAgentRequest {
+            model: Option<String>,
+            parent_id: Option<String>,
+            workspace: Option<String>,
+            max_tool_calls: Option<u32>,
+            system_prompt: Option<String>,
+            enabled: Option<bool>,
+        }
+
+        let _update: UpdateAgentRequest = match serde_json::from_slice(&body) {
+            Ok(r) => r,
+            Err(e) => return Ok(Self::json_error(&format!("Invalid JSON: {}", e), StatusCode::BAD_REQUEST)),
+        };
+
+        // Check if agent exists
+        let agents = self.agents.read().await;
+        if !agents.contains_key(&agent_id) {
+            return Ok(Self::json_error(&format!("Agent '{}' not found", agent_id), StatusCode::NOT_FOUND));
+        }
+        drop(agents);
+
+        // Agent runtime updates would go here (e.g., hot-reload model)
+        // For now, acknowledge the update - config file changes are handled by TUI/WebUI
+        let body = serde_json::json!({ "status": "updated", "id": agent_id });
+        Ok(Self::json_response(&body.to_string(), StatusCode::OK))
+    }
+
+    /// Handle delete agent request
+    async fn handle_delete_agent(
+        &self,
+        path: &str,
+    ) -> std::result::Result<Response<Full<hyper::body::Bytes>>, hyper::Error> {
+        let agent_id = path.strip_prefix("/api/agents/").unwrap_or("").to_string();
+
+        if agent_id.is_empty() {
+            return Ok(Self::json_error("Invalid agent ID", StatusCode::BAD_REQUEST));
+        }
+
+        let removed = self.agents.write().await.remove(&agent_id);
+        // Also remove from pending
+        self.pending_agents.write().await.retain(|p| p.config.id != agent_id);
+
+        if removed.is_some() {
+            let body = serde_json::json!({ "status": "deleted", "id": agent_id });
+            Ok(Self::json_response(&body.to_string(), StatusCode::OK))
+        } else {
+            Ok(Self::json_error(&format!("Agent '{}' not found", agent_id), StatusCode::NOT_FOUND))
+        }
     }
     
     /// Handle agent message via HTTP API

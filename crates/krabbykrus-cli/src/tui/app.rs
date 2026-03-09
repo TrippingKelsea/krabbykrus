@@ -15,13 +15,14 @@ use tokio::sync::mpsc;
 use super::components::{
     render_add_credential_modal, render_confirm_modal, render_dashboard,
     render_agents, render_credentials, render_edit_credential_modal, render_edit_provider_modal,
+    render_edit_agent_modal,
     render_models, render_password_modal, render_sessions, render_settings, render_sidebar,
     render_status_bar, render_view_session_modal,
 };
 use super::effects::EffectState;
 use super::state::{
-    AddCredentialState, AppState, ChatMessage, ConfirmAction, EditCredentialState, EndpointInfo,
-    InputMode, MenuItem, Message, PasswordAction, UnlockMethod,
+    AddCredentialState, AppState, ChatMessage, ConfirmAction, EditAgentState, EditCredentialState,
+    EndpointInfo, InputMode, MenuItem, Message, PasswordAction, UnlockMethod,
 };
 
 /// Check if Claude Code OAuth credentials are available
@@ -278,6 +279,10 @@ impl App {
                 let state = state.clone();
                 self.handle_edit_provider(key, state)
             }
+            InputMode::AddAgent(state) | InputMode::EditAgent(state) => {
+                let state = state.clone();
+                self.handle_edit_agent(key, state)
+            }
             InputMode::Confirm { action, .. } => {
                 let action = action.clone();
                 self.handle_confirm(key, action)
@@ -433,6 +438,9 @@ impl App {
 
     fn handle_add_action(&mut self) {
         match self.state.menu_item {
+            MenuItem::Agents => {
+                self.state.input_mode = InputMode::AddAgent(EditAgentState::new());
+            }
             MenuItem::Credentials if self.state.vault.initialized && !self.state.vault.locked => {
                 // Context-aware add based on which tab and what's selected
                 if self.state.credentials_tab == 1 {
@@ -714,13 +722,8 @@ impl App {
             }
             MenuItem::Agents => {
                 if let Some(agent) = self.state.agents.get(self.state.selected_agent) {
-                    // For now, show a message about editing agent config
-                    // Full implementation would open config file in editor or show edit modal
-                    self.state.status_message = Some((
-                        format!("Edit agent '{}' - open config file to modify", agent.id),
-                        false
-                    ));
-                    // Could spawn editor: self.spawn_edit_agent_config(&agent.id);
+                    let edit_state = EditAgentState::from_agent(agent);
+                    self.state.input_mode = InputMode::EditAgent(edit_state);
                 }
             }
             MenuItem::Models => {
@@ -1379,6 +1382,188 @@ impl App {
         }
     }
 
+    fn handle_edit_agent(&mut self, key: KeyEvent, mut state: EditAgentState) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+                self.state.status_message = Some(("Cancelled".to_string(), false));
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                state.next_field();
+                self.state.input_mode = if state.is_edit {
+                    InputMode::EditAgent(state)
+                } else {
+                    InputMode::AddAgent(state)
+                };
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                state.prev_field();
+                self.state.input_mode = if state.is_edit {
+                    InputMode::EditAgent(state)
+                } else {
+                    InputMode::AddAgent(state)
+                };
+            }
+            KeyCode::Enter => {
+                if state.is_last_field() {
+                    if let Some(error) = state.validate() {
+                        self.state.status_message = Some((error, true));
+                        self.state.input_mode = if state.is_edit {
+                            InputMode::EditAgent(state)
+                        } else {
+                            InputMode::AddAgent(state)
+                        };
+                    } else {
+                        // Check for duplicate ID when creating
+                        if !state.is_edit && self.state.agents.iter().any(|a| a.id == state.id) {
+                            self.state.status_message = Some((
+                                format!("Agent '{}' already exists", state.id), true
+                            ));
+                            self.state.input_mode = InputMode::AddAgent(state);
+                        } else {
+                            self.save_agent_to_config(&state);
+                            self.state.input_mode = InputMode::Normal;
+                        }
+                    }
+                } else {
+                    state.next_field();
+                    self.state.input_mode = if state.is_edit {
+                        InputMode::EditAgent(state)
+                    } else {
+                        InputMode::AddAgent(state)
+                    };
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(value) = state.current_value_mut() {
+                    value.push(c);
+                }
+                self.state.input_mode = if state.is_edit {
+                    InputMode::EditAgent(state)
+                } else {
+                    InputMode::AddAgent(state)
+                };
+            }
+            KeyCode::Backspace => {
+                if let Some(value) = state.current_value_mut() {
+                    value.pop();
+                }
+                self.state.input_mode = if state.is_edit {
+                    InputMode::EditAgent(state)
+                } else {
+                    InputMode::AddAgent(state)
+                };
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Save agent to config file (create or update)
+    fn save_agent_to_config(&mut self, state: &EditAgentState) {
+        let config_path = &self.state.config_path;
+        let content = match std::fs::read_to_string(config_path) {
+            Ok(c) => c,
+            Err(e) => {
+                self.state.status_message = Some((format!("Failed to read config: {}", e), true));
+                return;
+            }
+        };
+
+        let mut doc: toml_edit::DocumentMut = match content.parse() {
+            Ok(d) => d,
+            Err(e) => {
+                self.state.status_message = Some((format!("Failed to parse config: {}", e), true));
+                return;
+            }
+        };
+
+        // Ensure [agents] and [[agents.list]] exist
+        if !doc.contains_key("agents") {
+            doc["agents"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+
+        if state.is_edit {
+            // Find and update the existing agent
+            if let Some(list) = doc["agents"]["list"].as_array_of_tables_mut() {
+                for table in list.iter_mut() {
+                    if table.get("id").and_then(|v| v.as_str()) == Some(&state.id) {
+                        if !state.model.is_empty() {
+                            table["model"] = toml_edit::value(&state.model);
+                        } else {
+                            table.remove("model");
+                        }
+                        if !state.parent_id.is_empty() {
+                            table["parent_id"] = toml_edit::value(&state.parent_id);
+                        } else {
+                            table.remove("parent_id");
+                        }
+                        if !state.workspace.is_empty() {
+                            table["workspace"] = toml_edit::value(&state.workspace);
+                        } else {
+                            table.remove("workspace");
+                        }
+                        if !state.max_tool_calls.is_empty() {
+                            if let Ok(n) = state.max_tool_calls.parse::<i64>() {
+                                table["max_tool_calls"] = toml_edit::value(n);
+                            }
+                        } else {
+                            table.remove("max_tool_calls");
+                        }
+                        if !state.system_prompt.is_empty() {
+                            table["system_prompt"] = toml_edit::value(&state.system_prompt);
+                        } else {
+                            table.remove("system_prompt");
+                        }
+                        table["enabled"] = toml_edit::value(state.enabled);
+                        break;
+                    }
+                }
+            }
+        } else {
+            // Create new agent entry
+            let mut new_agent = toml_edit::Table::new();
+            new_agent["id"] = toml_edit::value(&state.id);
+            if !state.model.is_empty() {
+                new_agent["model"] = toml_edit::value(&state.model);
+            }
+            if !state.parent_id.is_empty() {
+                new_agent["parent_id"] = toml_edit::value(&state.parent_id);
+            }
+            if !state.workspace.is_empty() {
+                new_agent["workspace"] = toml_edit::value(&state.workspace);
+            }
+            if !state.max_tool_calls.is_empty() {
+                if let Ok(n) = state.max_tool_calls.parse::<i64>() {
+                    new_agent["max_tool_calls"] = toml_edit::value(n);
+                }
+            }
+            if !state.system_prompt.is_empty() {
+                new_agent["system_prompt"] = toml_edit::value(&state.system_prompt);
+            }
+
+            if let Some(list) = doc["agents"]["list"].as_array_of_tables_mut() {
+                list.push(new_agent);
+            } else {
+                let mut arr = toml_edit::ArrayOfTables::new();
+                arr.push(new_agent);
+                doc["agents"]["list"] = toml_edit::Item::ArrayOfTables(arr);
+            }
+        }
+
+        // Write back
+        if let Err(e) = std::fs::write(config_path, doc.to_string()) {
+            self.state.status_message = Some((format!("Failed to save config: {}", e), true));
+            return;
+        }
+
+        let action = if state.is_edit { "updated" } else { "created" };
+        self.state.status_message = Some((format!("Agent '{}' {}", state.id, action), false));
+
+        // Reload agents
+        self.spawn_agents_load();
+    }
+
     fn handle_view_session(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
@@ -1655,6 +1840,9 @@ impl App {
             InputMode::EditProvider(state) => {
                 render_edit_provider_modal(frame, frame.area(), state);
             }
+            InputMode::AddAgent(state) | InputMode::EditAgent(state) => {
+                render_edit_agent_modal(frame, frame.area(), state, &self.state.agents);
+            }
             InputMode::Confirm { message, .. } => {
                 render_confirm_modal(frame, frame.area(), message);
             }
@@ -1682,7 +1870,7 @@ impl App {
                             )
                         }
                         MenuItem::Agents => {
-                            "r:Reload │ e:Edit │ d:Disable │ Esc/Tab:←Sidebar".to_string()
+                            "a:Add │ e:Edit │ d:Disable │ r:Reload │ Esc/Tab:←Sidebar".to_string()
                         }
                         MenuItem::Sessions => {
                             "c:Chat │ k:Kill │ v:View │ Esc/Tab:←Sidebar".to_string()
@@ -1702,6 +1890,7 @@ impl App {
             InputMode::ChatInput => "Enter:Send │ Esc:Close".to_string(),
             InputMode::EditCredential(_) => "↑↓/Tab:Navigate │ Enter:Submit │ Esc:Cancel".to_string(),
             InputMode::EditProvider(_) => "↑↓/Tab:Navigate │ ←→:Auth Type │ Enter:Save │ Esc:Cancel".to_string(),
+            InputMode::AddAgent(_) | InputMode::EditAgent(_) => "↑↓/Tab:Navigate │ Enter:Submit │ Esc:Cancel".to_string(),
             InputMode::ViewSession { .. } => "Esc/Enter:Close".to_string(),
         }
     }
@@ -1985,48 +2174,41 @@ async fn check_gateway_status() -> Result<GatewayStatus> {
 }
 
 async fn load_agents(config_path: &PathBuf) -> Result<Vec<AgentInfo>> {
-    // Read config file and parse agents
     let content = tokio::fs::read_to_string(config_path).await?;
 
-    let mut agents = Vec::new();
-    let mut in_agent = false;
-    let mut current_id = String::new();
-    let mut current_model = None;
+    // Parse as TOML value for reliable field extraction
+    let doc: toml::Value = content.parse().unwrap_or(toml::Value::Table(toml::map::Map::new()));
 
-    for line in content.lines() {
-        let line = line.trim();
-        if line == "[[agents.list]]" {
-            if !current_id.is_empty() {
+    let mut agents = Vec::new();
+
+    if let Some(agents_table) = doc.get("agents") {
+        if let Some(list) = agents_table.get("list").and_then(|v| v.as_array()) {
+            for entry in list {
+                let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if id.is_empty() { continue; }
+
+                let model = entry.get("model").and_then(|v| v.as_str()).map(String::from);
+                let parent_id = entry.get("parent_id").and_then(|v| v.as_str()).map(String::from);
+                let system_prompt = entry.get("system_prompt").and_then(|v| v.as_str()).map(String::from);
+                let workspace = entry.get("workspace").and_then(|v| v.as_str()).map(String::from);
+                let max_tool_calls = entry.get("max_tool_calls").and_then(|v| v.as_integer()).map(|n| n as u32);
+                let enabled = entry.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+
+                let status = if enabled { AgentStatus::Active } else { AgentStatus::Disabled };
+
                 agents.push(AgentInfo {
-                    id: current_id.clone(),
-                    model: current_model.take(),
-                    status: AgentStatus::Active,
+                    id,
+                    model,
+                    status,
                     session_count: 0,
+                    parent_id,
+                    system_prompt,
+                    workspace,
+                    max_tool_calls,
+                    enabled,
                 });
             }
-            in_agent = true;
-            current_id.clear();
-        } else if in_agent {
-            if line.starts_with("id") {
-                if let Some(val) = line.split('=').nth(1) {
-                    current_id = val.trim().trim_matches('"').to_string();
-                }
-            } else if line.starts_with("model") {
-                if let Some(val) = line.split('=').nth(1) {
-                    current_model = Some(val.trim().trim_matches('"').to_string());
-                }
-            }
         }
-    }
-
-    // Don't forget the last agent
-    if !current_id.is_empty() {
-        agents.push(AgentInfo {
-            id: current_id,
-            model: current_model,
-            status: AgentStatus::Active,
-            session_count: 0,
-        });
     }
 
     // If no agents found, add a default
@@ -2036,6 +2218,11 @@ async fn load_agents(config_path: &PathBuf) -> Result<Vec<AgentInfo>> {
             model: Some("claude-sonnet-4-20250514".to_string()),
             status: AgentStatus::Active,
             session_count: 0,
+            parent_id: None,
+            system_prompt: None,
+            workspace: None,
+            max_tool_calls: Some(10),
+            enabled: true,
         });
     }
 

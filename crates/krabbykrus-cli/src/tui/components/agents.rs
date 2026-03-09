@@ -51,7 +51,7 @@ fn render_agent_list(frame: &mut Frame, area: Rect, state: &AppState, effect_sta
             )),
             ListItem::new(Span::raw("")),
             ListItem::new(Span::styled(
-                "Add agents in krabbykrus.toml",
+                "Press [a] to create an agent",
                 Style::default().fg(Color::DarkGray),
             )),
         ]
@@ -63,9 +63,16 @@ fn render_agent_list(frame: &mut Frame, area: Rect, state: &AppState, effect_sta
                 AgentStatus::Error => Span::styled("✗ ", Style::default().fg(Color::Red)),
                 AgentStatus::Disabled => Span::styled("○ ", Style::default().fg(Color::DarkGray)),
             };
-            
+
+            let prefix = if agent.parent_id.is_some() {
+                Span::styled("  └ ", Style::default().fg(Color::DarkGray))
+            } else {
+                Span::raw("")
+            };
+
             ListItem::new(Line::from(vec![
                 status_indicator,
+                prefix,
                 Span::raw(&agent.id),
             ]))
         }).collect()
@@ -110,7 +117,7 @@ fn render_agent_details(frame: &mut Frame, area: Rect, state: &AppState) {
             AgentStatus::Disabled => Color::DarkGray,
         };
         
-        let content = vec![
+        let mut content = vec![
             Line::from(vec![
                 Span::styled("ID: ", Style::default().fg(Color::Cyan)),
                 Span::raw(&agent.id),
@@ -123,16 +130,50 @@ fn render_agent_details(frame: &mut Frame, area: Rect, state: &AppState) {
                 Span::styled("Status: ", Style::default().fg(Color::Cyan)),
                 Span::styled(status_text, Style::default().fg(status_color)),
             ]),
-            Line::from(vec![
-                Span::styled("Sessions: ", Style::default().fg(Color::Cyan)),
-                Span::raw(format!("{}", agent.session_count)),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(
-                "[r]eload  [e]dit  [d]isable",
-                Style::default().fg(Color::DarkGray),
-            )),
         ];
+
+        if let Some(ref parent) = agent.parent_id {
+            content.push(Line::from(vec![
+                Span::styled("Parent: ", Style::default().fg(Color::Cyan)),
+                Span::styled(parent.as_str(), Style::default().fg(Color::Yellow)),
+                Span::styled(" (subagent)", Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+
+        // Show subagents of this agent
+        let subagents: Vec<&str> = state.agents.iter()
+            .filter(|a| a.parent_id.as_deref() == Some(&agent.id))
+            .map(|a| a.id.as_str())
+            .collect();
+        if !subagents.is_empty() {
+            content.push(Line::from(vec![
+                Span::styled("Subagents: ", Style::default().fg(Color::Cyan)),
+                Span::raw(subagents.join(", ")),
+            ]));
+        }
+
+        if let Some(ref ws) = agent.workspace {
+            content.push(Line::from(vec![
+                Span::styled("Workspace: ", Style::default().fg(Color::Cyan)),
+                Span::raw(ws.as_str()),
+            ]));
+        }
+
+        content.push(Line::from(vec![
+            Span::styled("Max Calls: ", Style::default().fg(Color::Cyan)),
+            Span::raw(agent.max_tool_calls.map(|n| n.to_string()).unwrap_or("-".to_string())),
+        ]));
+
+        content.push(Line::from(vec![
+            Span::styled("Sessions: ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{}", agent.session_count)),
+        ]));
+
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            "[a]dd  [e]dit  [d]isable  [r]eload",
+            Style::default().fg(Color::DarkGray),
+        )));
         
         let paragraph = Paragraph::new(content).block(block);
         frame.render_widget(paragraph, area);

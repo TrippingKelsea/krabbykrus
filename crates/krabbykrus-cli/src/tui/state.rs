@@ -48,6 +48,8 @@ pub enum Message {
     AgentsLoaded(Vec<AgentInfo>),
     AgentsError(String),
     ReloadAgents,
+    AgentSaved(String),     // agent id
+    AgentSaveError(String),
     
     // Sessions
     SessionsLoaded(Vec<SessionInfo>),
@@ -167,6 +169,11 @@ pub struct AgentInfo {
     pub model: Option<String>,
     pub status: AgentStatus,
     pub session_count: usize,
+    pub parent_id: Option<String>,
+    pub system_prompt: Option<String>,
+    pub workspace: Option<String>,
+    pub max_tool_calls: Option<u32>,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,6 +378,10 @@ pub enum InputMode {
     EditCredential(EditCredentialState),
     /// Edit model provider modal
     EditProvider(EditProviderState),
+    /// Add agent modal
+    AddAgent(EditAgentState),
+    /// Edit agent modal
+    EditAgent(EditAgentState),
     /// Confirmation dialog
     Confirm { message: String, action: ConfirmAction },
     /// Chat input
@@ -703,6 +714,129 @@ impl EditProviderState {
                 }
             }
             _ => {}
+        }
+        None
+    }
+}
+
+/// State for the "Add/Edit Agent" modal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditAgentState {
+    /// Whether this is an edit (true) or create (false)
+    pub is_edit: bool,
+    /// Current field index
+    pub field_index: usize,
+    /// Agent ID (read-only when editing)
+    pub id: String,
+    /// Model override
+    pub model: String,
+    /// Parent agent ID (empty = top-level agent)
+    pub parent_id: String,
+    /// Workspace directory
+    pub workspace: String,
+    /// Max tool calls per turn
+    pub max_tool_calls: String,
+    /// System prompt override
+    pub system_prompt: String,
+    /// Whether the agent is enabled
+    pub enabled: bool,
+}
+
+impl EditAgentState {
+    /// Field labels in order
+    pub const FIELD_LABELS: &'static [&'static str] = &[
+        "Agent ID",
+        "Model",
+        "Parent Agent (subagent)",
+        "Workspace",
+        "Max Tool Calls",
+        "System Prompt",
+    ];
+
+    pub fn new() -> Self {
+        Self {
+            is_edit: false,
+            field_index: 0,
+            id: String::new(),
+            model: String::new(),
+            parent_id: String::new(),
+            workspace: String::new(),
+            max_tool_calls: "10".to_string(),
+            system_prompt: String::new(),
+            enabled: true,
+        }
+    }
+
+    pub fn from_agent(agent: &AgentInfo) -> Self {
+        Self {
+            is_edit: true,
+            field_index: 0,
+            id: agent.id.clone(),
+            model: agent.model.clone().unwrap_or_default(),
+            parent_id: agent.parent_id.clone().unwrap_or_default(),
+            workspace: agent.workspace.clone().unwrap_or_default(),
+            max_tool_calls: agent.max_tool_calls.map(|n| n.to_string()).unwrap_or_else(|| "10".to_string()),
+            system_prompt: agent.system_prompt.clone().unwrap_or_default(),
+            enabled: agent.enabled,
+        }
+    }
+
+    pub fn total_fields(&self) -> usize {
+        Self::FIELD_LABELS.len()
+    }
+
+    pub fn next_field(&mut self) {
+        self.field_index = (self.field_index + 1) % self.total_fields();
+        // Skip ID field when editing (it's read-only)
+        if self.is_edit && self.field_index == 0 {
+            self.field_index = 1;
+        }
+    }
+
+    pub fn prev_field(&mut self) {
+        if self.field_index == 0 {
+            self.field_index = self.total_fields() - 1;
+        } else {
+            self.field_index -= 1;
+        }
+        // Skip ID field when editing
+        if self.is_edit && self.field_index == 0 {
+            self.field_index = self.total_fields() - 1;
+        }
+    }
+
+    /// Get mutable reference to current field value
+    pub fn current_value_mut(&mut self) -> Option<&mut String> {
+        match self.field_index {
+            0 => if !self.is_edit { Some(&mut self.id) } else { None },
+            1 => Some(&mut self.model),
+            2 => Some(&mut self.parent_id),
+            3 => Some(&mut self.workspace),
+            4 => Some(&mut self.max_tool_calls),
+            5 => Some(&mut self.system_prompt),
+            _ => None,
+        }
+    }
+
+    pub fn current_field_label(&self) -> &'static str {
+        Self::FIELD_LABELS.get(self.field_index).unwrap_or(&"")
+    }
+
+    pub fn is_last_field(&self) -> bool {
+        self.field_index == self.total_fields() - 1
+    }
+
+    pub fn validate(&self) -> Option<String> {
+        if self.id.trim().is_empty() {
+            return Some("Agent ID is required".to_string());
+        }
+        if self.id.contains(' ') || self.id.contains('/') {
+            return Some("Agent ID cannot contain spaces or slashes".to_string());
+        }
+        if !self.max_tool_calls.is_empty() {
+            if self.max_tool_calls.parse::<u32>().is_err() {
+                return Some("Max tool calls must be a number".to_string());
+            }
         }
         None
     }
@@ -1092,6 +1226,12 @@ impl AppState {
             }
             Message::ReloadAgents => {
                 self.agents_loading = true;
+            }
+            Message::AgentSaved(id) => {
+                self.status_message = Some((format!("Agent '{}' saved", id), false));
+            }
+            Message::AgentSaveError(err) => {
+                self.status_message = Some((format!("Failed to save agent: {}", err), true));
             }
             
             Message::SessionsLoaded(sessions) => {

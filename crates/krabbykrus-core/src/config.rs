@@ -100,6 +100,15 @@ pub struct AgentInstance {
     /// Maximum number of tool calls per turn (default: 10)
     #[serde(default = "default_max_tool_calls")]
     pub max_tool_calls: Option<u32>,
+    /// Parent agent ID (for subagents)
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    /// Custom system prompt override
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    /// Whether this agent is enabled (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     /// Agent-specific configuration
     #[serde(default)]
     pub config: HashMap<String, serde_json::Value>,

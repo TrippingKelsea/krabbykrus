@@ -268,7 +268,10 @@ pub fn get_dashboard_html() -> &'static str {
             <div id="page-agents" class="content page hidden">
                 <div class="page-header">
                     <h1>Agent Configuration</h1>
-                    <button class="btn btn-secondary" onclick="refreshAgents()">↻ Refresh</button>
+                    <div style="display:flex;gap:0.5rem">
+                        <button class="btn btn-primary" onclick="showCreateAgent()">+ Create Agent</button>
+                        <button class="btn btn-secondary" onclick="refreshAgents()">↻ Refresh</button>
+                    </div>
                 </div>
                 <div class="split split-40-60">
                     <div class="card">
@@ -280,6 +283,49 @@ pub fn get_dashboard_html() -> &'static str {
                         <div id="agent-details">
                             <p class="text-dim">Select an agent to view details</p>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Agent Create/Edit Modal -->
+            <div id="modal-agent" class="modal hidden">
+                <div class="modal-content" style="max-width:560px">
+                    <h2 id="agent-modal-title">Create Agent</h2>
+                    <div class="form-group">
+                        <label>Agent ID</label>
+                        <input type="text" id="agent-id" placeholder="e.g., my-agent">
+                        <div class="hint">Unique identifier (no spaces or slashes)</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Model</label>
+                        <input type="text" id="agent-model" placeholder="e.g., anthropic/claude-sonnet-4-20250514">
+                        <div class="hint">Leave empty to use default model</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Parent Agent (Subagent)</label>
+                        <select id="agent-parent">
+                            <option value="">None (top-level agent)</option>
+                        </select>
+                        <div class="hint">Set a parent to create a subagent</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Workspace</label>
+                        <input type="text" id="agent-workspace" placeholder="uses default if empty">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Tool Calls</label>
+                        <input type="number" id="agent-max-tools" value="10" min="1" max="100">
+                    </div>
+                    <div class="form-group">
+                        <label>System Prompt</label>
+                        <textarea id="agent-system-prompt" rows="3" placeholder="Optional system prompt override" style="width:100%;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.5rem;resize:vertical"></textarea>
+                    </div>
+                    <div id="agent-subagents-info" class="hidden" style="margin-bottom:1rem;padding:0.75rem;background:var(--surface-2);border-radius:8px;border-left:3px solid var(--accent)">
+                        <strong style="color:var(--accent)">Subagents:</strong> <span id="agent-subagents-list"></span>
+                    </div>
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary" onclick="closeModal('agent')">Cancel</button>
+                        <button class="btn btn-primary" id="agent-save-btn" onclick="saveAgent()">Create</button>
                     </div>
                 </div>
             </div>
@@ -470,6 +516,7 @@ pub fn get_dashboard_html() -> &'static str {
         }
         
         function showError(msg) { alert('Error: ' + msg); }
+        function showSuccess(msg) { alert(msg); }
         
         // Dashboard
         async function loadDashboard() {
@@ -655,34 +702,158 @@ pub fn get_dashboard_html() -> &'static str {
         }
         
         // Agents Page
+        let editingAgentId = null;
+
         async function loadAgentsPage() {
-            await loadDashboard(); // Refresh agents list
+            await loadDashboard();
             renderAgentList();
         }
-        
+
         function renderAgentList() {
             const container = document.getElementById('agent-list');
-            container.innerHTML = agents.length === 0
-                ? '<p class="text-dim" style="padding:1rem">No agents configured</p>'
-                : agents.map((a, i) => `
-                    <div class="session-item ${i === selectedAgent ? 'active' : ''}" onclick="selectAgent(${i})">
-                        <div class="agent">${a.id || a}</div>
-                        <div class="meta">${a.model || 'default model'}</div>
-                    </div>
-                `).join('');
+            // Sort: top-level agents first, then subagents grouped under parents
+            const topLevel = agents.filter(a => !a.parent_id);
+            const subOf = pid => agents.filter(a => a.parent_id === pid);
+
+            let html = '';
+            if (agents.length === 0) {
+                html = '<p class="text-dim" style="padding:1rem">No agents configured. Click "Create Agent" to get started.</p>';
+            } else {
+                const renderItem = (a, i, indent) => {
+                    const id = a.id || a;
+                    const realIdx = agents.indexOf(a);
+                    return `<div class="session-item ${realIdx === selectedAgent ? 'active' : ''}" onclick="selectAgent(${realIdx})" style="padding-left:${indent?'2rem':'1rem'}">
+                        <div class="agent">${indent ? '└ ' : ''}${id}</div>
+                        <div class="meta">${a.model || 'default'} ${a.parent_id ? '(subagent)' : ''}</div>
+                    </div>`;
+                };
+                topLevel.forEach((a, i) => {
+                    html += renderItem(a, i, false);
+                    subOf(a.id || a).forEach(sub => { html += renderItem(sub, 0, true); });
+                });
+                // Show orphan subagents (parent not found)
+                agents.filter(a => a.parent_id && !topLevel.some(t => (t.id||t) === a.parent_id)).forEach(a => {
+                    html += renderItem(a, 0, true);
+                });
+            }
+            container.innerHTML = html;
         }
-        
+
         function selectAgent(idx) {
             selectedAgent = idx;
             renderAgentList();
             const agent = agents[idx];
-            document.getElementById('agent-details').innerHTML = agent ? `
-                <div class="form-group"><label>ID</label><input type="text" readonly value="${agent.id || agent}"></div>
-                <div class="form-group"><label>Model</label><input type="text" readonly value="${agent.model || '-'}"></div>
-                <div class="form-group"><label>Status</label><span class="badge badge-success">Active</span></div>
-            ` : '<p class="text-dim">Select an agent</p>';
+            if (!agent) { document.getElementById('agent-details').innerHTML = '<p class="text-dim">Select an agent</p>'; return; }
+            const id = agent.id || agent;
+            const subs = agents.filter(a => a.parent_id === id).map(a => a.id || a);
+            const statusBadge = agent.status === 'pending'
+                ? `<span class="badge badge-warning">Pending</span><div class="hint">${agent.reason || ''}</div>`
+                : (agent.enabled === false ? '<span class="badge badge-error">Disabled</span>' : '<span class="badge badge-success">Active</span>');
+
+            document.getElementById('agent-details').innerHTML = `
+                <div class="form-group"><label>ID</label><input type="text" readonly value="${id}"></div>
+                <div class="form-group"><label>Model</label><input type="text" readonly value="${agent.model || 'default'}"></div>
+                ${agent.parent_id ? `<div class="form-group"><label>Parent</label><input type="text" readonly value="${agent.parent_id}"><div class="hint">This is a subagent</div></div>` : ''}
+                ${subs.length > 0 ? `<div class="form-group"><label>Subagents</label><div>${subs.map(s=>'<span class="badge badge-info" style="margin-right:4px">'+s+'</span>').join('')}</div></div>` : ''}
+                ${agent.workspace ? `<div class="form-group"><label>Workspace</label><input type="text" readonly value="${agent.workspace}"></div>` : ''}
+                <div class="form-group"><label>Max Tool Calls</label><input type="text" readonly value="${agent.max_tool_calls || 10}"></div>
+                <div class="form-group"><label>Status</label>${statusBadge}</div>
+                ${agent.system_prompt ? `<div class="form-group"><label>System Prompt</label><div style="background:var(--surface-2);padding:0.5rem;border-radius:6px;font-size:0.85rem;max-height:100px;overflow-y:auto">${escapeHtml(agent.system_prompt)}</div></div>` : ''}
+                <div style="display:flex;gap:0.5rem;margin-top:1rem">
+                    <button class="btn btn-primary btn-sm" onclick="showEditAgent('${id}')">Edit</button>
+                    <button class="btn btn-secondary btn-sm" onclick="showCreateSubagent('${id}')">+ Subagent</button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteAgent('${id}')">Delete</button>
+                </div>
+            `;
         }
-        
+
+        function showCreateAgent() {
+            editingAgentId = null;
+            document.getElementById('agent-modal-title').textContent = 'Create Agent';
+            document.getElementById('agent-save-btn').textContent = 'Create';
+            document.getElementById('agent-id').value = '';
+            document.getElementById('agent-id').readOnly = false;
+            document.getElementById('agent-model').value = '';
+            document.getElementById('agent-workspace').value = '';
+            document.getElementById('agent-max-tools').value = '10';
+            document.getElementById('agent-system-prompt').value = '';
+            populateParentSelect('');
+            document.getElementById('agent-subagents-info').classList.add('hidden');
+            document.getElementById('modal-agent').classList.remove('hidden');
+        }
+
+        function showCreateSubagent(parentId) {
+            showCreateAgent();
+            document.getElementById('agent-parent').value = parentId;
+        }
+
+        function showEditAgent(id) {
+            const agent = agents.find(a => (a.id || a) === id);
+            if (!agent) return;
+            editingAgentId = id;
+            document.getElementById('agent-modal-title').textContent = 'Edit Agent: ' + id;
+            document.getElementById('agent-save-btn').textContent = 'Save';
+            document.getElementById('agent-id').value = id;
+            document.getElementById('agent-id').readOnly = true;
+            document.getElementById('agent-model').value = agent.model || '';
+            document.getElementById('agent-workspace').value = agent.workspace || '';
+            document.getElementById('agent-max-tools').value = agent.max_tool_calls || 10;
+            document.getElementById('agent-system-prompt').value = agent.system_prompt || '';
+            populateParentSelect(agent.parent_id || '');
+            // Show subagents
+            const subs = agents.filter(a => a.parent_id === id);
+            if (subs.length > 0) {
+                document.getElementById('agent-subagents-list').textContent = subs.map(a => a.id || a).join(', ');
+                document.getElementById('agent-subagents-info').classList.remove('hidden');
+            } else {
+                document.getElementById('agent-subagents-info').classList.add('hidden');
+            }
+            document.getElementById('modal-agent').classList.remove('hidden');
+        }
+
+        function populateParentSelect(selected) {
+            const sel = document.getElementById('agent-parent');
+            sel.innerHTML = '<option value="">None (top-level agent)</option>' +
+                agents.filter(a => (a.id || a) !== editingAgentId)
+                    .map(a => `<option value="${a.id || a}" ${(a.id || a) === selected ? 'selected' : ''}>${a.id || a}</option>`)
+                    .join('');
+        }
+
+        async function saveAgent() {
+            const id = document.getElementById('agent-id').value.trim();
+            if (!id) { showError('Agent ID is required'); return; }
+            if (/[\s\/]/.test(id)) { showError('Agent ID cannot contain spaces or slashes'); return; }
+
+            const data = {
+                id,
+                model: document.getElementById('agent-model').value.trim() || null,
+                parent_id: document.getElementById('agent-parent').value || null,
+                workspace: document.getElementById('agent-workspace').value.trim() || null,
+                max_tool_calls: parseInt(document.getElementById('agent-max-tools').value) || 10,
+                system_prompt: document.getElementById('agent-system-prompt').value.trim() || null,
+            };
+
+            try {
+                if (editingAgentId) {
+                    await api(`/api/agents/${editingAgentId}`, 'PUT', data);
+                } else {
+                    await api('/api/agents', 'POST', data);
+                }
+                closeModal('agent');
+                await loadAgentsPage();
+                const msg = editingAgentId ? 'Agent updated' : 'Agent created';
+                showSuccess(msg + '. Reload gateway to apply changes.');
+            } catch (e) { showError(e.message); }
+        }
+
+        async function deleteAgent(id) {
+            if (!confirm(`Delete agent "${id}"? This will also remove it from running agents.`)) return;
+            try {
+                await api(`/api/agents/${id}`, 'DELETE');
+                await loadAgentsPage();
+            } catch (e) { showError(e.message); }
+        }
+
         function refreshAgents() { loadAgentsPage(); }
         
         // Sessions Page

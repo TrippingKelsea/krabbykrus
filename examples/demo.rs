@@ -86,6 +86,9 @@ async fn main() -> Result<()> {
         workspace: Some(workspace_path),
         model: Some(model.to_string()),
         max_tool_calls: None,
+        parent_id: None,
+        system_prompt: None,
+        enabled: true,
         config: HashMap::new(),
     };
 

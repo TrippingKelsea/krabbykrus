@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::state::{AddCredentialState, EditCredentialState, EditProviderState, ProviderAuthType, SessionInfo, get_fields_for_endpoint_type};
+use crate::tui::state::{AddCredentialState, AgentInfo, EditAgentState, EditCredentialState, EditProviderState, ProviderAuthType, SessionInfo, get_fields_for_endpoint_type};
 use super::centered_rect;
 
 /// Endpoint types for the add credential modal
@@ -689,12 +689,115 @@ pub fn render_edit_provider_modal(
     let paragraph = Paragraph::new(lines)
         .alignment(Alignment::Left)
         .block(Block::default().borders(Borders::NONE));
-    
+
     let inner_margin = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([Constraint::Min(0)])
         .split(inner);
-    
+
     frame.render_widget(paragraph, inner_margin[0]);
+}
+
+/// Render the add/edit agent modal
+pub fn render_edit_agent_modal(
+    frame: &mut Frame,
+    area: Rect,
+    state: &EditAgentState,
+    agents: &[AgentInfo],
+) {
+    let modal_area = centered_rect(65, 70, area);
+    frame.render_widget(Clear, modal_area);
+
+    let title = if state.is_edit {
+        format!("Edit Agent: {}", state.id)
+    } else {
+        "Create Agent".to_string()
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(title);
+
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    let constraints = vec![
+        Constraint::Length(3), // Agent ID
+        Constraint::Length(3), // Model
+        Constraint::Length(3), // Parent Agent
+        Constraint::Length(3), // Workspace
+        Constraint::Length(3), // Max Tool Calls
+        Constraint::Length(3), // System Prompt
+        Constraint::Length(2), // Help/subagent info
+        Constraint::Min(0),   // Spacer
+    ];
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints(constraints)
+        .split(inner);
+
+    // Field 0: Agent ID
+    let id_active = state.field_index == 0;
+    let id_label = if state.is_edit { "Agent ID (read-only)" } else { "Agent ID" };
+    render_input_field(
+        frame, chunks[0], id_label, &state.id,
+        "e.g., my-agent", id_active, false, true,
+    );
+
+    // Field 1: Model
+    render_input_field(
+        frame, chunks[1], "Model", &state.model,
+        "e.g., anthropic/claude-sonnet-4-20250514", state.field_index == 1, false, false,
+    );
+
+    // Field 2: Parent Agent (subagent)
+    let parent_hint = if !state.parent_id.is_empty() {
+        let parent_exists = agents.iter().any(|a| a.id == state.parent_id);
+        if parent_exists { "(valid parent)" } else { "(parent not found!)" }
+    } else {
+        "empty = top-level agent"
+    };
+    let parent_label = format!("Parent Agent {}", parent_hint);
+    render_input_field(
+        frame, chunks[2], &parent_label, &state.parent_id,
+        "leave empty for top-level", state.field_index == 2, false, false,
+    );
+
+    // Field 3: Workspace
+    render_input_field(
+        frame, chunks[3], "Workspace", &state.workspace,
+        "uses default if empty", state.field_index == 3, false, false,
+    );
+
+    // Field 4: Max Tool Calls
+    render_input_field(
+        frame, chunks[4], "Max Tool Calls", &state.max_tool_calls,
+        "10", state.field_index == 4, false, false,
+    );
+
+    // Field 5: System Prompt
+    render_input_field(
+        frame, chunks[5], "System Prompt", &state.system_prompt,
+        "optional override", state.field_index == 5, false, false,
+    );
+
+    // Subagent info / help line
+    let subagents: Vec<&str> = agents.iter()
+        .filter(|a| a.parent_id.as_deref() == Some(&state.id))
+        .map(|a| a.id.as_str())
+        .collect();
+
+    let help_text = if !subagents.is_empty() {
+        format!("Subagents: {} | Tab:Nav | Enter:Save | Esc:Cancel", subagents.join(", "))
+    } else {
+        "Tab/Up/Down:Navigate | Enter:Save | Esc:Cancel".to_string()
+    };
+
+    let help = Paragraph::new(help_text)
+        .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(help, chunks[6]);
 }
