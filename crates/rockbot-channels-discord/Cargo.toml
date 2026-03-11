@@ -1,0 +1,22 @@
+[package]
+name = "rockbot-channels-discord"
+version = "0.1.0"
+edition = "2021"
+description = "Discord channel plugin for RockBot"
+license = "MIT"
+
+[dependencies]
+rockbot-channels = { path = "../rockbot-channels", default-features = false }
+rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true }
+serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "cache", "rustls_backend"] }
+tokio-stream = "0.1"
+time = "0.3"

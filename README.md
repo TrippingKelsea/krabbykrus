@@ -1,13 +1,13 @@
-# 🦀 Krabbykrus
+# 🦀 RockBot
 
 A Rust-native AI agent framework with secure credential management.
 
-[![Build Status](https://github.com/TrippingKelsea/krabbykrus/workflows/CI/badge.svg)](https://github.com/TrippingKelsea/krabbykrus/actions)
+[![Build Status](https://github.com/TrippingKelsea/rockbot/workflows/CI/badge.svg)](https://github.com/TrippingKelsea/rockbot/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
 
-Krabbykrus is a local-first AI agent framework that prioritizes security and credential safety. Credentials never cross the agent boundary—they're stored in an encrypted vault and injected into tool execution at runtime.
+RockBot is a local-first AI agent framework that prioritizes security and credential safety. Credentials never cross the agent boundary—they're stored in an encrypted vault and injected into tool execution at runtime.
 
 ### Key Features
 
@@ -25,34 +25,34 @@ Krabbykrus is a local-first AI agent framework that prioritizes security and cre
 
 ```bash
 # Clone the repository
-git clone https://github.com/TrippingKelsea/krabbykrus.git
-cd krabbykrus
+git clone https://github.com/TrippingKelsea/rockbot.git
+cd rockbot
 
 # Build
 cargo build --release
 
 # Run
-./target/release/krabbykrus --help
+./target/release/rockbot --help
 ```
 
 ### First Run
 
 ```bash
 # Initialize configuration
-krabbykrus config init
+rockbot config init
 
 # Start the gateway
-krabbykrus gateway
+rockbot gateway
 
 # Or launch the TUI
-krabbykrus tui
+rockbot tui
 ```
 
 ### Add a Credential
 
 ```bash
 # Add Home Assistant endpoint
-krabbykrus credentials add homeassistant \
+rockbot credentials add homeassistant \
   --type home_assistant \
   --url http://homeassistant.local:8123
 ```
@@ -68,22 +68,22 @@ krabbykrus credentials add homeassistant \
 
 | Crate | Description |
 |-------|-------------|
-| `krabbykrus` | Main binary entry point |
-| `krabbykrus-cli` | CLI commands and TUI |
-| `krabbykrus-core` | Gateway, agents, sessions, web UI |
-| `krabbykrus-credentials` | Encrypted credential vault |
-| `krabbykrus-llm` | LLM provider abstraction |
-| `krabbykrus-memory` | Memory and search system |
-| `krabbykrus-security` | Capability system and sandboxing |
-| `krabbykrus-tools` | Built-in agent tools |
-| `krabbykrus-channels` | Communication channels |
-| `krabbykrus-plugins` | Plugin system |
+| `rockbot` | Main binary entry point |
+| `rockbot-cli` | CLI commands and TUI |
+| `rockbot-core` | Gateway, agents, sessions, web UI |
+| `rockbot-credentials` | Encrypted credential vault |
+| `rockbot-llm` | LLM provider abstraction |
+| `rockbot-memory` | Memory and search system |
+| `rockbot-security` | Capability system and sandboxing |
+| `rockbot-tools` | Built-in agent tools |
+| `rockbot-channels` | Communication channels |
+| `rockbot-plugins` | Plugin system |
 
 See [Crate Structure](docs/architecture/crates.md) for details.
 
 ## Configuration
 
-Configuration lives at `~/.config/krabbykrus/krabbykrus.toml`:
+Configuration lives at `~/.config/rockbot/rockbot.toml`:
 
 ```toml
 [gateway]
@@ -98,14 +98,14 @@ id = "main"
 
 [credentials]
 enabled = true
-vault_path = "~/.local/share/krabbykrus/credentials"
+vault_path = "~/.local/share/rockbot/credentials"
 ```
 
 See [Configuration Reference](docs/user-guide/configuration.md) for all options.
 
 ## Security Model
 
-Krabbykrus implements defense in depth:
+RockBot implements defense in depth:
 
 1. **Encryption at Rest** - Credentials stored with AES-256-GCM
 2. **Key Derivation** - Argon2id prevents brute-force attacks
@@ -168,7 +168,7 @@ cargo build --release
 cargo test
 
 # Run specific crate tests
-cargo test -p krabbykrus-credentials
+cargo test -p rockbot-credentials
 ```
 
 ### Project Status

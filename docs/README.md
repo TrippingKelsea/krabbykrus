@@ -1,10 +1,10 @@
-# Krabbykrus Documentation
+# RockBot Documentation
 
-Welcome to the Krabbykrus documentation. This documentation is organized into three main areas:
+Welcome to the RockBot documentation. This documentation is organized into three main areas:
 
 ## 📖 User Guide
 
-For end users and operators deploying Krabbykrus.
+For end users and operators deploying RockBot.
 
 - [Getting Started](user-guide/getting-started.md) - Installation and first run
 - [Configuration](user-guide/configuration.md) - Configuration reference
@@ -39,6 +39,6 @@ See [FEATURES.md](FEATURES.md) for a detailed breakdown of implemented vs planne
 
 ## Quick Links
 
-- [GitHub Repository](https://github.com/TrippingKelsea/krabbykrus)
-- [Issue Tracker](https://github.com/TrippingKelsea/krabbykrus/issues)
+- [GitHub Repository](https://github.com/TrippingKelsea/rockbot)
+- [Issue Tracker](https://github.com/TrippingKelsea/rockbot/issues)
 - [Contributing Guide](../CONTRIBUTING.md)

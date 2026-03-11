@@ -1,4 +1,4 @@
-# krabbykrus Implementation Gap Analysis
+# rockbot Implementation Gap Analysis
 
 **Generated:** 2026-03-08
 **Based on:** SPEC.md v1.0
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-krabbykrus is approximately **25-30% complete** relative to the full SPEC.md specification. The credential vault system is the most mature component (~85% complete), followed by the TUI (~70%) and Web UI (~55%). Core gateway infrastructure exists but many subsystems are stubbed or partial. The biggest gaps are in channel support (only Discord implemented), the cron/scheduling system (not implemented), and the full agent execution pipeline.
+rockbot is approximately **25-30% complete** relative to the full SPEC.md specification. The credential vault system is the most mature component (~85% complete), followed by the TUI (~70%) and Web UI (~55%). Core gateway infrastructure exists but many subsystems are stubbed or partial. The biggest gaps are in channel support (only Discord implemented), the cron/scheduling system (not implemented), and the full agent execution pipeline.
 
 ---
 
@@ -536,15 +536,15 @@ ws.onmessage = (e) => {
 
 | Crate | LOC | Primary Purpose |
 |-------|-----|-----------------|
-| `krabbykrus-core` | ~3,500 | Gateway, session, agent, config |
-| `krabbykrus-credentials` | ~3,300 | Vault, permissions, audit |
-| `krabbykrus-cli` | ~2,800 | Commands, TUI |
-| `krabbykrus-llm` | ~1,500 | Anthropic, OpenAI providers |
-| `krabbykrus-channels` | ~1,000 | Discord, channel traits |
-| `krabbykrus-tools` | ~700 | Tool registry, builtins |
-| `krabbykrus-memory` | ~400 | Memory system (stubbed) |
-| `krabbykrus-plugins` | ~200 | Plugin manager (scaffold) |
-| `krabbykrus-security` | ~300 | Capabilities, context |
+| `rockbot-core` | ~3,500 | Gateway, session, agent, config |
+| `rockbot-credentials` | ~3,300 | Vault, permissions, audit |
+| `rockbot-cli` | ~2,800 | Commands, TUI |
+| `rockbot-llm` | ~1,500 | Anthropic, OpenAI providers |
+| `rockbot-channels` | ~1,000 | Discord, channel traits |
+| `rockbot-tools` | ~700 | Tool registry, builtins |
+| `rockbot-memory` | ~400 | Memory system (stubbed) |
+| `rockbot-plugins` | ~200 | Plugin manager (scaffold) |
+| `rockbot-security` | ~300 | Capabilities, context |
 
 ---
 
@@ -552,15 +552,15 @@ ws.onmessage = (e) => {
 
 ### TODOs in Codebase (20 items)
 ```
-crates/krabbykrus-cli/src/tui/app.rs:        // TODO: Actually unlock via SSH agent
-crates/krabbykrus-cli/src/tui/app.rs:        // TODO: Load session details from gateway API
-crates/krabbykrus-cli/src/tui/credentials.rs: // TODO: Reload endpoints (4 items)
-crates/krabbykrus-cli/src/commands/credentials.rs: // TODO: delete_endpoint, list_permissions, remove_permission
-crates/krabbykrus-core/src/gateway.rs:        // TODO: Implement keyring support
-crates/krabbykrus-core/src/gateway.rs:        uptime_seconds: 0, // TODO: Track actual uptime
-crates/krabbykrus-core/src/agent.rs:          tool_calls: None, // TODO: Handle tool calls
-crates/krabbykrus-llm/src/anthropic.rs:       // TODO: Implement streaming with SSE
-crates/krabbykrus-llm/src/openai.rs:          // TODO: Implement streaming with SSE
+crates/rockbot-cli/src/tui/app.rs:        // TODO: Actually unlock via SSH agent
+crates/rockbot-cli/src/tui/app.rs:        // TODO: Load session details from gateway API
+crates/rockbot-cli/src/tui/credentials.rs: // TODO: Reload endpoints (4 items)
+crates/rockbot-cli/src/commands/credentials.rs: // TODO: delete_endpoint, list_permissions, remove_permission
+crates/rockbot-core/src/gateway.rs:        // TODO: Implement keyring support
+crates/rockbot-core/src/gateway.rs:        uptime_seconds: 0, // TODO: Track actual uptime
+crates/rockbot-core/src/agent.rs:          tool_calls: None, // TODO: Handle tool calls
+crates/rockbot-llm/src/anthropic.rs:       // TODO: Implement streaming with SSE
+crates/rockbot-llm/src/openai.rs:          // TODO: Implement streaming with SSE
 ```
 
 ### Missing Tests

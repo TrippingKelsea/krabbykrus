@@ -1,64 +1,64 @@
 # Crate Structure
 
-Krabbykrus is organized as a Cargo workspace with multiple crates, each responsible for a specific domain.
+RockBot is organized as a Cargo workspace with multiple crates, each responsible for a specific domain.
 
 ## Workspace Layout
 
 ```
-krabbykrus/
+rockbot/
 ├── Cargo.toml              # Workspace manifest
 ├── crates/
-│   ├── krabbykrus/         # Binary crate (entry point)
-│   ├── krabbykrus-cli/     # CLI and TUI
-│   ├── krabbykrus-core/    # Gateway, agents, sessions
-│   ├── krabbykrus-credentials/ # Secure credential vault
-│   ├── krabbykrus-llm/     # LLM provider abstraction
-│   ├── krabbykrus-memory/  # Memory and search
-│   ├── krabbykrus-security/ # Capabilities and sandboxing
-│   ├── krabbykrus-tools/   # Built-in tools
-│   ├── krabbykrus-channels/ # Communication channels
-│   └── krabbykrus-plugins/ # Plugin system
+│   ├── rockbot/         # Binary crate (entry point)
+│   ├── rockbot-cli/     # CLI and TUI
+│   ├── rockbot-core/    # Gateway, agents, sessions
+│   ├── rockbot-credentials/ # Secure credential vault
+│   ├── rockbot-llm/     # LLM provider abstraction
+│   ├── rockbot-memory/  # Memory and search
+│   ├── rockbot-security/ # Capabilities and sandboxing
+│   ├── rockbot-tools/   # Built-in tools
+│   ├── rockbot-channels/ # Communication channels
+│   └── rockbot-plugins/ # Plugin system
 ```
 
 ## Dependency Graph
 
 ```
-krabbykrus (binary)
+rockbot (binary)
     │
-    └─► krabbykrus-cli
+    └─► rockbot-cli
             │
-            ├─► krabbykrus-core
+            ├─► rockbot-core
             │       │
-            │       ├─► krabbykrus-credentials
+            │       ├─► rockbot-credentials
             │       │       │
-            │       │       └─► krabbykrus-security
+            │       │       └─► rockbot-security
             │       │
-            │       ├─► krabbykrus-llm
+            │       ├─► rockbot-llm
             │       │
-            │       ├─► krabbykrus-tools
+            │       ├─► rockbot-tools
             │       │       │
-            │       │       └─► krabbykrus-security
+            │       │       └─► rockbot-security
             │       │
-            │       ├─► krabbykrus-memory
+            │       ├─► rockbot-memory
             │       │
-            │       ├─► krabbykrus-channels
+            │       ├─► rockbot-channels
             │       │
-            │       └─► krabbykrus-plugins
+            │       └─► rockbot-plugins
             │
-            └─► krabbykrus-credentials (direct CLI access)
+            └─► rockbot-credentials (direct CLI access)
 ```
 
 ## Crate Details
 
-### `krabbykrus` (Binary)
+### `rockbot` (Binary)
 
 **Purpose**: Main entry point that ties everything together.
 
-**Dependencies**: `krabbykrus-cli`
+**Dependencies**: `rockbot-cli`
 
 **Exports**: None (binary only)
 
-### `krabbykrus-cli`
+### `rockbot-cli`
 
 **Purpose**: Command-line interface and terminal UI.
 
@@ -80,7 +80,7 @@ pub mod tui {
 }
 ```
 
-### `krabbykrus-core`
+### `rockbot-core`
 
 **Purpose**: Core framework - gateway, agents, sessions.
 
@@ -122,7 +122,7 @@ impl Config {
 }
 ```
 
-### `krabbykrus-credentials`
+### `rockbot-credentials`
 
 **Purpose**: Secure credential storage with HIL support.
 
@@ -162,7 +162,7 @@ impl MasterKey {
 }
 ```
 
-### `krabbykrus-llm`
+### `rockbot-llm`
 
 **Purpose**: LLM provider abstraction.
 
@@ -186,7 +186,7 @@ impl ProviderRegistry {
 }
 ```
 
-### `krabbykrus-tools`
+### `rockbot-tools`
 
 **Purpose**: Built-in tools for agent capabilities.
 
@@ -211,7 +211,7 @@ impl ToolRegistry {
 }
 ```
 
-### `krabbykrus-security`
+### `rockbot-security`
 
 **Purpose**: Capability system and sandboxing.
 
@@ -236,7 +236,7 @@ pub struct SecurityContext {
 }
 ```
 
-### `krabbykrus-memory`
+### `rockbot-memory`
 
 **Purpose**: Memory and search system.
 
@@ -253,7 +253,7 @@ impl MemoryManager {
 }
 ```
 
-### `krabbykrus-channels`
+### `rockbot-channels`
 
 **Purpose**: Communication channel integrations.
 
@@ -270,7 +270,7 @@ pub trait Channel: Send + Sync {
 }
 ```
 
-### `krabbykrus-plugins`
+### `rockbot-plugins`
 
 **Purpose**: Plugin system for extensibility.
 
@@ -293,7 +293,7 @@ pub trait Plugin: Send + Sync {
 Some types exist in multiple crates for layering purposes. Conversions are provided via `From` implementations:
 
 ```rust
-// krabbykrus-core::config::ToolConfig -> krabbykrus-tools::ToolConfig
+// rockbot-core::config::ToolConfig -> rockbot-tools::ToolConfig
 impl From<core::config::ToolConfig> for tools::ToolConfig { ... }
 ```
 
@@ -304,7 +304,7 @@ impl From<core::config::ToolConfig> for tools::ToolConfig { ... }
 cargo build
 
 # Build specific crate
-cargo build -p krabbykrus-credentials
+cargo build -p rockbot-credentials
 
 # Build with release optimizations
 cargo build --release
@@ -313,7 +313,7 @@ cargo build --release
 cargo test
 
 # Run tests for specific crate
-cargo test -p krabbykrus-credentials
+cargo test -p rockbot-credentials
 ```
 
 ## Documentation
@@ -328,5 +328,5 @@ cargo doc --open --no-deps
 cargo doc --open
 
 # Generate docs for specific crate
-cargo doc -p krabbykrus-credentials --open
+cargo doc -p rockbot-credentials --open
 ```

@@ -1,6 +1,6 @@
-# Contributing to Krabbykrus
+# Contributing to RockBot
 
-Thank you for your interest in contributing to Krabbykrus! This document provides guidelines for contributing.
+Thank you for your interest in contributing to RockBot! This document provides guidelines for contributing.
 
 ## Code of Conduct
 
@@ -9,7 +9,7 @@ Be respectful and inclusive. We're all here to build cool things together.
 ## Getting Started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/krabbykrus.git`
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/rockbot.git`
 3. Create a branch: `git checkout -b feature/your-feature`
 4. Make your changes
 5. Run tests: `cargo test`
@@ -51,16 +51,16 @@ RUST_LOG=debug cargo run -- gateway
 
 ```
 crates/
-├── krabbykrus/          # Binary entry point
-├── krabbykrus-cli/      # CLI and TUI
-├── krabbykrus-core/     # Gateway, agents, sessions
-├── krabbykrus-credentials/ # Credential vault
-├── krabbykrus-llm/      # LLM providers
-├── krabbykrus-memory/   # Memory system
-├── krabbykrus-security/ # Capabilities
-├── krabbykrus-tools/    # Built-in tools
-├── krabbykrus-channels/ # Communication
-└── krabbykrus-plugins/  # Plugin system
+├── rockbot/          # Binary entry point
+├── rockbot-cli/      # CLI and TUI
+├── rockbot-core/     # Gateway, agents, sessions
+├── rockbot-credentials/ # Credential vault
+├── rockbot-llm/      # LLM providers
+├── rockbot-memory/   # Memory system
+├── rockbot-security/ # Capabilities
+├── rockbot-tools/    # Built-in tools
+├── rockbot-channels/ # Communication
+└── rockbot-plugins/  # Plugin system
 ```
 
 ## Coding Guidelines
@@ -184,7 +184,7 @@ Open an issue with the `enhancement` label. Include:
 ## Bug Reports
 
 Open an issue with the `bug` label. Include:
-- Krabbykrus version
+- RockBot version
 - Operating system
 - Steps to reproduce
 - Expected vs actual behavior

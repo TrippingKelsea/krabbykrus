@@ -1,0 +1,19 @@
+[package]
+name = "rockbot-channels"
+version = "0.1.0"
+edition = "2021"
+description = "Communication channel traits and registry for RockBot"
+license = "MIT"
+
+[dependencies]
+rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }

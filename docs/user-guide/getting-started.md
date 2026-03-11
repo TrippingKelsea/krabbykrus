@@ -1,6 +1,6 @@
-# Getting Started with Krabbykrus
+# Getting Started with RockBot
 
-This guide will help you install, configure, and run Krabbykrus for the first time.
+This guide will help you install, configure, and run RockBot for the first time.
 
 ## Prerequisites
 
@@ -14,22 +14,22 @@ This guide will help you install, configure, and run Krabbykrus for the first ti
 
 ```bash
 # Clone the repository
-git clone https://github.com/TrippingKelsea/krabbykrus.git
-cd krabbykrus
+git clone https://github.com/TrippingKelsea/rockbot.git
+cd rockbot
 
 # Build release binary
 cargo build --release
 
-# Binary is at ./target/release/krabbykrus
+# Binary is at ./target/release/rockbot
 ```
 
 ### Verify Installation
 
 ```bash
-./target/release/krabbykrus --version
-# krabbykrus 0.1.0
+./target/release/rockbot --version
+# rockbot 0.1.0
 
-./target/release/krabbykrus doctor
+./target/release/rockbot doctor
 # Runs diagnostic checks
 ```
 
@@ -38,14 +38,14 @@ cargo build --release
 ### Generate Default Config
 
 ```bash
-krabbykrus config init
-# Creates ~/.config/krabbykrus/krabbykrus.toml
+rockbot config init
+# Creates ~/.config/rockbot/rockbot.toml
 ```
 
 ### Minimal Configuration
 
 ```toml
-# ~/.config/krabbykrus/krabbykrus.toml
+# ~/.config/rockbot/rockbot.toml
 
 [gateway]
 bind_host = "127.0.0.1"
@@ -53,7 +53,7 @@ port = 8765
 
 [agents.defaults]
 model = "anthropic/claude-sonnet-4-20250514"
-workspace = "~/.local/share/krabbykrus/agents"
+workspace = "~/.local/share/rockbot/agents"
 
 [[agents.list]]
 id = "main"
@@ -63,7 +63,7 @@ profile = "standard"
 
 [credentials]
 enabled = true
-vault_path = "~/.local/share/krabbykrus/credentials"
+vault_path = "~/.local/share/rockbot/credentials"
 ```
 
 See [Configuration Reference](configuration.md) for all options.
@@ -73,7 +73,7 @@ See [Configuration Reference](configuration.md) for all options.
 ### 1. Start the Gateway
 
 ```bash
-krabbykrus gateway
+rockbot gateway
 # INFO Starting gateway on 127.0.0.1:8765
 ```
 
@@ -93,7 +93,7 @@ Navigate to [http://localhost:8765](http://localhost:8765) in your browser.
 ### 4. Or Use the TUI
 
 ```bash
-krabbykrus tui
+rockbot tui
 ```
 
 Use arrow keys to navigate, `q` to quit.
@@ -105,7 +105,7 @@ Use arrow keys to navigate, `q` to quit.
 The credential vault is automatically created on first use. You'll be prompted for a master password.
 
 ```bash
-krabbykrus credentials status
+rockbot credentials status
 # Vault: Not initialized
 # Would you like to create a new vault? [y/N]
 ```
@@ -114,7 +114,7 @@ krabbykrus credentials status
 
 ```bash
 # Add a Home Assistant endpoint
-krabbykrus credentials add homeassistant \
+rockbot credentials add homeassistant \
   --type home_assistant \
   --url http://homeassistant.local:8123
 
@@ -125,7 +125,7 @@ Enter secret (will not echo): ********
 ### List Endpoints
 
 ```bash
-krabbykrus credentials list
+rockbot credentials list
 # ID                                    Name           Type              URL
 # a1b2c3d4-...                         homeassistant  home_assistant    http://homeassistant.local:8123
 ```
@@ -150,18 +150,18 @@ lsof -i :8765
 
 If you forgot your password, the vault must be recreated:
 ```bash
-rm -rf ~/.local/share/krabbykrus/credentials
-krabbykrus credentials status  # Will prompt to create new vault
+rm -rf ~/.local/share/rockbot/credentials
+rockbot credentials status  # Will prompt to create new vault
 ```
 
 ### Configuration Errors
 
 Validate your config:
 ```bash
-krabbykrus config validate
+rockbot config validate
 ```
 
 Show current config with resolved paths:
 ```bash
-krabbykrus config show
+rockbot config show
 ```

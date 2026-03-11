@@ -1,4 +1,4 @@
-# Krabbykrus Feature Matrix
+# RockBot Feature Matrix
 
 This document tracks feature implementation status and helps identify gaps between planned functionality and current implementation.
 
@@ -10,7 +10,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 ---
 
-## Core Framework (`krabbykrus-core`)
+## Core Framework (`rockbot-core`)
 
 ### Gateway Server
 
@@ -59,7 +59,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 ---
 
-## Credential Management (`krabbykrus-credentials`)
+## Credential Management (`rockbot-credentials`)
 
 ### Vault
 
@@ -71,7 +71,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 | Keyfile unlock | ✅ | |
 | Age encryption | 🚧 | Stubbed |
 | SSH key unlock | 🚧 | Stubbed |
-| Auto-unlock via env var | ✅ | `KRABBYKRUS_VAULT_PASSWORD` |
+| Auto-unlock via env var | ✅ | `ROCKBOT_VAULT_PASSWORD` |
 
 ### Endpoint Types
 
@@ -126,7 +126,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 ---
 
-## LLM Providers (`krabbykrus-llm`)
+## LLM Providers (`rockbot-llm`)
 
 | Provider | Status | Notes |
 |----------|--------|-------|
@@ -140,7 +140,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 ---
 
-## Tools (`krabbykrus-tools`)
+## Tools (`rockbot-tools`)
 
 ### Built-in Tools
 
@@ -166,7 +166,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 ---
 
-## Security (`krabbykrus-security`)
+## Security (`rockbot-security`)
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -180,7 +180,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 ---
 
-## Memory (`krabbykrus-memory`)
+## Memory (`rockbot-memory`)
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -193,7 +193,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 ---
 
-## CLI (`krabbykrus-cli`)
+## CLI (`rockbot-cli`)
 
 ### Commands
 
@@ -244,7 +244,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 ---
 
-## Web UI (`krabbykrus-core::web_ui`)
+## Web UI (`rockbot-core::web_ui`)
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -260,7 +260,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 ---
 
-## Channels (`krabbykrus-channels`)
+## Channels (`rockbot-channels`)
 
 | Channel | Status | Notes |
 |---------|--------|-------|
@@ -273,7 +273,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 ---
 
-## Plugins (`krabbykrus-plugins`)
+## Plugins (`rockbot-plugins`)
 
 | Feature | Status | Notes |
 |---------|--------|-------|

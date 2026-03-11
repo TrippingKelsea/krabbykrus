@@ -1,14 +1,14 @@
-# krabbykrus System Specification
+# rockbot System Specification
 
 **Version:** 1.0
 **Generated:** 2026-03-08
-**Purpose:** Complete specification enabling reconstruction of krabbykrus functionality in any programming language
+**Purpose:** Complete specification enabling reconstruction of rockbot functionality in any programming language
 
 ---
 
 ## 1. Executive Summary
 
-krabbykrus is a **self-hosted, multi-channel AI gateway** that connects messaging applications to AI agents for real-time conversation and task execution. It acts as a unified control plane routing messages from 30+ messaging platforms (WhatsApp, Telegram, Discord, Slack, Signal, iMessage, etc.) through AI agents that can execute tools, maintain conversational context, and deliver responses back through the originating channels.
+rockbot is a **self-hosted, multi-channel AI gateway** that connects messaging applications to AI agents for real-time conversation and task execution. It acts as a unified control plane routing messages from 30+ messaging platforms (WhatsApp, Telegram, Discord, Slack, Signal, iMessage, etc.) through AI agents that can execute tools, maintain conversational context, and deliver responses back through the originating channels.
 
 ### Core Design Principles
 
@@ -41,7 +41,11 @@ krabbykrus is a **self-hosted, multi-channel AI gateway** that connects messagin
 │  │   Agent      │ │   Plugin     │ │    Cron      │                 │
 │  │   Runtime    │ │   Registry   │ │   Scheduler  │                 │
 │  └──────────────┘ └──────────────┘ └──────────────┘                 │
-│                         WebSocket RPC                                │
+│  ┌──────────────┐                                                    │
+│  │  Provider    │                                                    │
+│  │  Registry    │                                                    │
+│  └──────────────┘                                                    │
+│                         WebSocket RPC / HTTP API                     │
 └────────────────────────────────┬────────────────────────────────────┘
                                  │
          ┌───────────────────────┼───────────────────────┐
@@ -57,14 +61,26 @@ krabbykrus is a **self-hosted, multi-channel AI gateway** that connects messagin
 
 | Component | Responsibility |
 |-----------|----------------|
-| **Gateway Server** | Central orchestration; WebSocket RPC server; manages all state |
+| **Gateway Server** | Central orchestration; WebSocket RPC server; HTTP API server; single source of truth for all state |
 | **Channel Manager** | Maintains connections to messaging platforms; handles inbound/outbound |
 | **Routing Engine** | Maps incoming messages to agents based on bindings and policies |
 | **Session Store** | Persists conversation transcripts and session metadata |
 | **Agent Runtime** | Executes AI agents with tool calling and streaming responses |
 | **Plugin Registry** | Loads and manages extension plugins |
 | **Cron Scheduler** | Executes scheduled jobs and heartbeats |
+| **Provider Registry** | Manages LLM provider lifecycle; auto-detection, registration, status, and model routing |
 | **CLI Client** | Command-line interface for gateway interaction |
+
+### 2.3 Interface Principle
+
+TUI, WebUI, and CLI are **purely presentation layers**. They do NOT directly instantiate LLM providers, make LLM API calls, or maintain provider state. All LLM operations flow through the gateway's HTTP/WebSocket API.
+
+This makes the gateway the single manager of the bot — everything else is just an interface:
+
+- Interfaces query the gateway for provider lists and status via `/api/providers`
+- Interfaces send chat messages through the gateway via `/api/chat` or `chat.send` RPC
+- Interfaces never hardcode provider lists or call LLM APIs directly
+- Provider credentials, model availability, and auth state are determined by the gateway at runtime
 
 ---
 
@@ -193,6 +209,13 @@ krabbykrus is a **self-hosted, multi-channel AI gateway** that connects messagin
 | `config.apply` | Apply configuration changes |
 | `config.schema` | Get configuration schema |
 
+#### Provider Methods
+| Method | Description |
+|--------|-------------|
+| `providers.list` | List registered LLM providers and their status |
+| `providers.status` | Get specific provider status including auth and models |
+| `providers.test` | Test provider connectivity |
+
 #### Cron Methods
 | Method | Description |
 |--------|-------------|
@@ -302,7 +325,7 @@ interface ChannelOutboundAdapter {
 }
 
 interface ChannelOutboundContext {
-  cfg: krabbykrusConfig;
+  cfg: rockbotConfig;
   to: string;              // Target ID/phone/email
   text: string;            // Message body
   mediaUrl?: string;       // Remote media URL
@@ -449,7 +472,7 @@ interface SessionEntry {
 ### 6.2 Transcript Storage
 
 - **Format**: JSONL (JSON Lines)
-- **Location**: `~/.openclaw/agents/{agentId}/sessions/{sessionId}.jsonl`
+- **Location**: `~/.rockbot/agents/{agentId}/sessions/{sessionId}.jsonl`
 - **Entry Types**:
   - `user`: User messages
   - `assistant`: Agent responses
@@ -563,7 +586,7 @@ interface AgentTool<TParams, TResult> {
 }
 
 interface ToolContext {
-  config: krabbykrusConfig;
+  config: rockbotConfig;
   workspaceDir: string;
   agentDir: string;
   agentId: string;
@@ -623,11 +646,11 @@ type AfterToolCallHook = (event: {
 ### 9.1 Plugin Registration API
 
 ```typescript
-interface krabbykrusPluginApi {
+interface rockbotPluginApi {
   id: string;
   name: string;
   version?: string;
-  config: krabbykrusConfig;
+  config: rockbotConfig;
   runtime: PluginRuntime;
   logger: PluginLogger;
 
@@ -680,7 +703,7 @@ interface krabbykrusPluginApi {
 interface PluginRuntime {
   // Configuration
   config: {
-    loadConfig(): Promise<krabbykrusConfig>;
+    loadConfig(): Promise<rockbotConfig>;
     writeConfigFile(content: string): Promise<void>;
   };
 
@@ -722,14 +745,14 @@ interface PluginRuntime {
 
 ### 10.1 Configuration File
 
-- **Location**: `~/.openclaw/config.json5`
+- **Location**: `~/.rockbot/config.json5`
 - **Format**: JSON5 (supports comments, trailing commas)
 - **Hot Reload**: Changes applied without restart (most settings)
 
 ### 10.2 Top-Level Configuration Sections
 
 ```typescript
-interface krabbykrusConfig {
+interface rockbotConfig {
   // Authentication
   auth: {
     profiles: Record<string, AuthProfile>;
@@ -737,6 +760,10 @@ interface krabbykrusConfig {
   };
 
   // Model Configuration
+  // NOTE: The `providers` map feeds the gateway's Provider Registry at startup.
+  // Actual available providers are determined at runtime based on credentials
+  // and feature flags. Interfaces must query /api/providers (or providers.list RPC)
+  // to discover available providers — never hardcode or instantiate them directly.
   models: {
     primary?: string;
     providers?: Record<string, ProviderConfig>;
@@ -826,10 +853,10 @@ Built-in shortcuts for common models:
 
 | Variable | Description |
 |----------|-------------|
-| `OPENCLAW_GATEWAY_TOKEN` | Gateway authentication token |
-| `OPENCLAW_GATEWAY_PASSWORD` | Gateway password |
-| `OPENCLAW_LOG_LEVEL` | Override log level |
-| `OPENCLAW_PROFILE` | Load specific profile |
+| `ROCKBOT_GATEWAY_TOKEN` | Gateway authentication token |
+| `ROCKBOT_GATEWAY_PASSWORD` | Gateway password |
+| `ROCKBOT_LOG_LEVEL` | Override log level |
+| `ROCKBOT_PROFILE` | Load specific profile |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `GOOGLE_API_KEY` | Google AI API key |
@@ -841,7 +868,7 @@ Built-in shortcuts for common models:
 ### 11.1 Command Structure
 
 ```
-openclaw <command> [subcommand] [options]
+rockbot <command> [subcommand] [options]
 ```
 
 ### 11.2 Core Commands
@@ -867,7 +894,7 @@ openclaw <command> [subcommand] [options]
 
 ### 11.3 Key Command Options
 
-#### `openclaw agent`
+#### `rockbot agent`
 ```
 --message <text>      Message body (required)
 --to <number>         Recipient (E.164 format)
@@ -881,7 +908,7 @@ openclaw <command> [subcommand] [options]
 --timeout <seconds>   Command timeout
 ```
 
-#### `openclaw message send`
+#### `rockbot message send`
 ```
 --message <text>      Message body
 --media <path>        Attach media file
@@ -1044,7 +1071,7 @@ type CronPayload =
 
 ## 14. Security Model
 
-Krabbykrus implements defense-in-depth security with a core principle: **credentials never cross the agent boundary**. Sensitive data is stored encrypted, injected at tool execution time, and sanitized from responses.
+RockBot implements defense-in-depth security with a core principle: **credentials never cross the agent boundary**. Sensitive data is stored encrypted, injected at tool execution time, and sanitized from responses.
 
 ### 14.1 Threat Model
 
@@ -1131,7 +1158,7 @@ The credential vault provides secure storage for API keys, tokens, passwords, an
 #### Storage Structure
 
 ```
-~/.local/share/krabbykrus/credentials/
+~/.local/share/rockbot/credentials/
 ├── vault.json           # Encrypted vault metadata
 ├── endpoints/           # Endpoint configurations (encrypted)
 │   └── {uuid}.json
@@ -1345,7 +1372,7 @@ Entry N hash = SHA256(
 
 ```bash
 # Verify audit log integrity
-krabbykrus credentials audit --verify
+rockbot credentials audit --verify
 ```
 
 Verification checks:
@@ -1363,7 +1390,7 @@ Verification checks:
        │
        ▼
 2. Gateway intercepts tool call
-   Detects credential requirement: krabbykrus://homeassistant/api/**
+   Detects credential requirement: rockbot://homeassistant/api/**
        │
        ▼
 3. Permission evaluation
@@ -1424,9 +1451,9 @@ pub struct MasterKey {
 ```toml
 [credentials]
 enabled = true
-vault_path = "~/.local/share/krabbykrus/credentials"
+vault_path = "~/.local/share/rockbot/credentials"
 unlock_method = "env"  # "env", "password", "keyring", "yubikey"
-password_env_var = "KRABBYKRUS_VAULT_PASSWORD"
+password_env_var = "ROCKBOT_VAULT_PASSWORD"
 default_permission = "deny"
 hil_timeout_seconds = 300
 audit_retention_days = 90
@@ -1472,7 +1499,20 @@ level = "deny"
 | POST | `/api/credentials/approvals/:id/approve` | Approve HIL request |
 | POST | `/api/credentials/approvals/:id/deny` | Deny HIL request |
 
-### 14.14 Security Checklist
+### 14.14 Provider Registry API Endpoints
+
+The gateway exposes provider state through the following HTTP API. All interfaces (TUI, WebUI, CLI) must use these endpoints to discover and interact with LLM providers — they must never hardcode provider lists or call LLM APIs directly.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/providers` | List all registered providers with status, auth type, and available models |
+| GET | `/api/providers/:id` | Get details for a specific provider |
+| POST | `/api/providers/:id/test` | Test provider connectivity and authentication |
+| POST | `/api/chat` | Send a chat message through the gateway (replaces direct LLM calls from interfaces) |
+
+LLM providers register with the gateway at startup based on the `models.providers` configuration and available credentials. The `/api/providers` response reflects the live runtime state — which providers are reachable, authenticated, and which models are available.
+
+### 14.15 Security Checklist
 
 #### Implementation Requirements
 
@@ -1502,7 +1542,7 @@ level = "deny"
 ### 15.1 Directory Structure
 
 ```
-~/.openclaw/
+~/.rockbot/
 ├── config.json5              # Main configuration
 ├── credentials/              # Encrypted credentials
 ├── agents/
@@ -1578,7 +1618,7 @@ interface InstallSpec {
 ### 16.2 Skill Discovery
 
 1. **Bundled**: `{packageRoot}/skills/`
-2. **Workspace**: Configured in `openclaw.config.ts`
+2. **Workspace**: Configured in `rockbot.config.ts`
 3. **Agent-specific**: Per-agent skill filters
 
 ### 16.3 Skill Invocation
@@ -1703,7 +1743,7 @@ interface ChannelHealth {
 
 ## 20. User Interface Design
 
-Krabbykrus provides two unified interfaces: a **Terminal UI (TUI)** for power users and a **Web UI** for browser-based access. Both interfaces share the same navigation structure, design language, and state model to ensure consistency.
+RockBot provides two unified interfaces: a **Terminal UI (TUI)** for power users and a **Web UI** for browser-based access. Both interfaces share the same navigation structure, design language, and state model to ensure consistency.
 
 ### 20.1 Design Philosophy
 
@@ -1899,7 +1939,7 @@ Embedded single-page application served by the gateway. No build step required�
 ```html
 <div class="app">
   <aside class="sidebar">
-    <div class="logo">🦀 Krabbykrus</div>
+    <div class="logo">🦀 RockBot</div>
     <ul class="nav">
       <li class="nav-item" data-page="dashboard">📊 Dashboard</li>
       <li class="nav-item" data-page="credentials">🔐 Credentials</li>

@@ -1,0 +1,19 @@
+[package]
+name = "rockbot-channels-signal"
+version = "0.1.0"
+edition = "2021"
+description = "Signal channel plugin for RockBot (placeholder)"
+license = "MIT"
+
+[dependencies]
+rockbot-channels = { path = "../rockbot-channels", default-features = false }
+rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+uuid = { workspace = true }

@@ -1,15 +1,22 @@
 [workspace]
 members = [
-    "crates/krabbykrus",
-    "crates/krabbykrus-core",
-    "crates/krabbykrus-tools",
-    "crates/krabbykrus-channels",
-    "crates/krabbykrus-memory",
-    "crates/krabbykrus-security",
-    "crates/krabbykrus-credentials",
-    "crates/krabbykrus-llm",
-    "crates/krabbykrus-plugins",
-    "crates/krabbykrus-cli",
+    "crates/rockbot",
+    "crates/rockbot-core",
+    "crates/rockbot-tools",
+    "crates/rockbot-tools-credentials",
+    "crates/rockbot-tools-mcp",
+    "crates/rockbot-tools-markdown",
+    "crates/rockbot-channels",
+    "crates/rockbot-channels-discord",
+    "crates/rockbot-channels-telegram",
+    "crates/rockbot-channels-signal",
+    "crates/rockbot-memory",
+    "crates/rockbot-security",
+    "crates/rockbot-credentials",
+    "crates/rockbot-credentials-schema",
+    "crates/rockbot-llm",
+    "crates/rockbot-plugins",
+    "crates/rockbot-cli",
 ]
 resolver = "2"
 
@@ -110,7 +117,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
-repository = "https://github.com/TrippingKelsea/krabbykrus"
-documentation = "https://docs.rs/krabbykrus"
+repository = "https://github.com/TrippingKelsea/rockbot"
+documentation = "https://docs.rs/rockbot"
 keywords = ["ai", "agent", "llm", "credentials", "security"]
 categories = ["command-line-utilities", "cryptography", "development-tools"]

@@ -1,0 +1,36 @@
+[package]
+name = "rockbot-llm"
+version = "0.1.0"
+edition = "2021"
+description = "LLM provider abstraction for RockBot"
+license = "MIT"
+
+[features]
+default = ["bedrock"]
+anthropic = ["dep:claude-agent-sdk"]
+openai = []
+bedrock = ["dep:aws-config", "dep:aws-sdk-bedrockruntime", "dep:aws-smithy-types"]
+
+[dependencies]
+rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+async-trait = "0.1"
+uuid = { workspace = true }
+dirs = "5"
+bytes = "1.0"
+async-stream = "0.3"
+
+# Anthropic provider (optional)
+claude-agent-sdk = { workspace = true, optional = true }
+
+# AWS Bedrock provider (optional)
+aws-config = { version = "1", optional = true }
+aws-sdk-bedrockruntime = { version = "1", optional = true }
+aws-smithy-types = { version = "1", optional = true }

@@ -1,0 +1,54 @@
+[package]
+name = "rockbot-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line interface for RockBot"
+license = "MIT"
+
+[features]
+default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "tools-mcp", "tools-markdown"]
+# LLM providers
+anthropic = ["rockbot-llm/anthropic", "rockbot-core/anthropic"]
+openai = ["rockbot-llm/openai", "rockbot-core/openai"]
+bedrock = ["rockbot-llm/bedrock", "rockbot-core/bedrock"]
+# Channel providers
+discord = ["rockbot-core/discord"]
+telegram = ["rockbot-core/telegram"]
+signal = ["rockbot-core/signal"]
+# Tool providers
+tools-credentials = ["rockbot-core/tools-credentials"]
+tools-mcp = ["rockbot-core/tools-mcp"]
+tools-markdown = ["rockbot-core/tools-markdown"]
+
+[dependencies]
+rockbot-core = { path = "../rockbot-core", default-features = false }
+rockbot-tools = { path = "../rockbot-tools" }
+rockbot-memory = { path = "../rockbot-memory" }
+rockbot-security = { path = "../rockbot-security" }
+rockbot-credentials = { path = "../rockbot-credentials" }
+rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
+rockbot-llm = { path = "../rockbot-llm", default-features = false }
+
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+tokio = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs = { workspace = true }
+reqwest = { workspace = true }
+rpassword = "7"
+getrandom = "0.2"
+atty = "0.2"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+tachyonfx = "0.7"

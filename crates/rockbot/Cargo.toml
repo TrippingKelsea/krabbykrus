@@ -1,0 +1,58 @@
+[package]
+name = "rockbot"
+version = "0.1.0"
+edition = "2021"
+description = "Next-generation AI agent framework"
+license = "MIT"
+authors = ["RockBot Team"]
+repository = "https://github.com/rockbot/rockbot"
+
+[[bin]]
+name = "rockbot"
+path = "src/main.rs"
+
+[features]
+default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "tools-mcp", "tools-markdown"]
+# LLM providers
+anthropic = ["rockbot-cli/anthropic", "rockbot-core/anthropic", "rockbot-llm/anthropic"]
+openai = ["rockbot-cli/openai", "rockbot-core/openai", "rockbot-llm/openai"]
+bedrock = ["rockbot-cli/bedrock", "rockbot-core/bedrock", "rockbot-llm/bedrock"]
+all-providers = ["anthropic", "openai", "bedrock"]
+# Channel providers
+discord = ["rockbot-cli/discord", "rockbot-core/discord"]
+telegram = ["rockbot-cli/telegram", "rockbot-core/telegram"]
+signal = ["rockbot-cli/signal", "rockbot-core/signal"]
+all-channels = ["discord", "telegram", "signal"]
+# Tool providers
+tools-credentials = ["rockbot-cli/tools-credentials", "rockbot-core/tools-credentials"]
+tools-mcp = ["rockbot-cli/tools-mcp", "rockbot-core/tools-mcp"]
+tools-markdown = ["rockbot-cli/tools-markdown", "rockbot-core/tools-markdown"]
+all-tools = ["tools-credentials", "tools-mcp", "tools-markdown"]
+
+[dependencies]
+rockbot-core = { path = "../rockbot-core", default-features = false }
+rockbot-cli = { path = "../rockbot-cli", default-features = false }
+rockbot-llm = { path = "../rockbot-llm", default-features = false }
+rockbot-tools = { path = "../rockbot-tools" }
+rockbot-memory = { path = "../rockbot-memory" }
+rockbot-security = { path = "../rockbot-security" }
+rockbot-credentials = { path = "../rockbot-credentials" }
+dirs = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[example]]
+name = "demo"
+path = "../../examples/demo.rs"
+
+[[example]]
+name = "test_vault"
+path = "../../examples/test_vault.rs"

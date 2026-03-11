@@ -1,6 +1,6 @@
-# Krabbykrus Architecture Overview
+# RockBot Architecture Overview
 
-Krabbykrus is a modular AI agent framework written in Rust, designed for secure, local-first operation with emphasis on credential safety.
+RockBot is a modular AI agent framework written in Rust, designed for secure, local-first operation with emphasis on credential safety.
 
 ## High-Level Architecture
 
@@ -9,7 +9,7 @@ Krabbykrus is a modular AI agent framework written in Rust, designed for secure,
 │                        User Interfaces                          │
 ├─────────────────┬─────────────────┬─────────────────────────────┤
 │      CLI        │      TUI        │          Web UI             │
-│ (krabbykrus-cli)│ (krabbykrus-cli)│     (krabbykrus-core)       │
+│ (rockbot-cli)│ (rockbot-cli)│     (rockbot-core)       │
 └────────┬────────┴────────┬────────┴──────────────┬──────────────┘
          │                 │                       │
          └─────────────────┼───────────────────────┘
@@ -38,7 +38,7 @@ Krabbykrus is a modular AI agent framework written in Rust, designed for secure,
 
 ## Component Responsibilities
 
-### Gateway (`krabbykrus-core`)
+### Gateway (`rockbot-core`)
 
 The gateway is the central coordinator:
 
@@ -48,7 +48,7 @@ The gateway is the central coordinator:
 - **Session Manager**: Tracks conversation state
 - **Web UI**: Serves embedded HTML dashboard
 
-### Agent Engine (`krabbykrus-core`)
+### Agent Engine (`rockbot-core`)
 
 Executes agent logic:
 
@@ -57,7 +57,7 @@ Executes agent logic:
 - **Context Management**: Compacts history to fit context window
 - **Token Tracking**: Monitors usage for rate limiting
 
-### Credential Vault (`krabbykrus-credentials`)
+### Credential Vault (`rockbot-credentials`)
 
 Secure credential storage:
 
@@ -67,7 +67,7 @@ Secure credential storage:
 - **HIL System**: Human-in-loop approval workflow
 - **Permission Evaluation**: Glob-based access control
 
-### LLM Providers (`krabbykrus-llm`)
+### LLM Providers (`rockbot-llm`)
 
 Abstract interface to language models:
 
@@ -76,7 +76,7 @@ Abstract interface to language models:
 - **Streaming**: Token-by-token responses (planned)
 - **Retry Logic**: Exponential backoff (planned)
 
-### Tools (`krabbykrus-tools`)
+### Tools (`rockbot-tools`)
 
 Agent capabilities:
 
@@ -85,7 +85,7 @@ Agent capabilities:
 - **Built-in Tools**: read, write, edit, exec
 - **Credential Injection**: Automatic token insertion
 
-### Security (`krabbykrus-security`)
+### Security (`rockbot-security`)
 
 Capability and sandboxing:
 
@@ -93,7 +93,7 @@ Capability and sandboxing:
 - **Security Context**: Session-scoped restrictions
 - **Sandbox**: Process isolation (planned)
 
-### Memory (`krabbykrus-memory`)
+### Memory (`rockbot-memory`)
 
 Knowledge and context:
 
@@ -187,10 +187,10 @@ CredentialManager.check_permission(path)
 
 | Path | Purpose |
 |------|---------|
-| `~/.config/krabbykrus/krabbykrus.toml` | Configuration |
-| `~/.local/share/krabbykrus/sessions.db` | Session history |
-| `~/.local/share/krabbykrus/credentials/` | Encrypted vault |
-| `~/.local/share/krabbykrus/credentials/audit.log` | Audit trail |
+| `~/.config/rockbot/rockbot.toml` | Configuration |
+| `~/.local/share/rockbot/sessions.db` | Session history |
+| `~/.local/share/rockbot/credentials/` | Encrypted vault |
+| `~/.local/share/rockbot/credentials/audit.log` | Audit trail |
 
 ### Database Schema
 

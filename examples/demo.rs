@@ -1,4 +1,4 @@
-//! Demo: Minimal Krabbykrus usage example
+//! Demo: Minimal RockBot usage example
 //!
 //! This example shows how to create an agent and process a message.
 //!
@@ -6,14 +6,14 @@
 //!   ANTHROPIC_API_KEY=your_key cargo run --example demo
 
 use anyhow::Result;
-use krabbykrus_core::config::AgentInstance;
-use krabbykrus_core::message::{Message, MessageRole};
-use krabbykrus_core::session::SessionManager;
-use krabbykrus_core::Agent;
-use krabbykrus_llm::LlmProviderRegistry;
-use krabbykrus_memory::MemoryManager;
-use krabbykrus_security::{SecurityConfig, SecurityManager, SandboxConfig, CapabilityConfig};
-use krabbykrus_tools::{ToolConfig, ToolRegistry};
+use rockbot_core::config::AgentInstance;
+use rockbot_core::message::{Message, MessageRole};
+use rockbot_core::session::SessionManager;
+use rockbot_core::Agent;
+use rockbot_llm::LlmProviderRegistry;
+use rockbot_memory::MemoryManager;
+use rockbot_security::{SecurityConfig, SecurityManager, SandboxConfig, CapabilityConfig};
+use rockbot_tools::{ToolConfig, ToolRegistry};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -22,10 +22,10 @@ use tempfile::TempDir;
 async fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
-        .with_env_filter("krabbykrus=debug,info")
+        .with_env_filter("rockbot=debug,info")
         .init();
 
-    println!("🦀 Krabbykrus Demo\n");
+    println!("🦀 RockBot Demo\n");
 
     // Create temporary directories for this demo
     let temp_dir = TempDir::new()?;

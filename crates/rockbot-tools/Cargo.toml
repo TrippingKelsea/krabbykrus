@@ -1,0 +1,21 @@
+[package]
+name = "rockbot-tools"
+version = "0.1.0"
+edition = "2021"
+description = "Built-in tools for RockBot"
+license = "MIT"
+
+[dependencies]
+rockbot-security = { path = "../rockbot-security" }
+rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+regex = { workspace = true }
+glob = { workspace = true }

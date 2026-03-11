@@ -1,11 +1,11 @@
 # Terminal User Interface (TUI) Guide
 
-Krabbykrus includes a full-featured terminal UI for managing your AI agents, credentials, and sessions without leaving the command line.
+RockBot includes a full-featured terminal UI for managing your AI agents, credentials, and sessions without leaving the command line.
 
 ## Launching the TUI
 
 ```bash
-krabbykrus tui
+rockbot tui
 ```
 
 ## Navigation

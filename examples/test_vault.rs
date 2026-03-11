@@ -2,8 +2,8 @@
 fn main() {
     use std::path::PathBuf;
     
-    let vault_path = PathBuf::from("/home/kelsea/.config/krabbykrus/vault");
-    let keyfile_path = PathBuf::from("/home/kelsea/.config/krabbykrus/vault.key");
+    let vault_path = PathBuf::from("/home/kelsea/.config/rockbot/vault");
+    let keyfile_path = PathBuf::from("/home/kelsea/.config/rockbot/vault.key");
     
     println!("=== Vault Test ===");
     println!("Testing vault at: {:?}", vault_path);
@@ -12,7 +12,7 @@ fn main() {
     println!("Keyfile exists: {}", keyfile_path.exists());
     
     // Try to open and unlock
-    match krabbykrus_credentials::CredentialVault::open(&vault_path) {
+    match rockbot_credentials::CredentialVault::open(&vault_path) {
         Ok(mut vault) => {
             println!("Vault opened successfully");
             println!("Unlock method: {:?}", vault.unlock_method());

@@ -1,0 +1,14 @@
+[package]
+name = "rockbot-tools-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP server connection tool for RockBot"
+license = "MIT"
+
+[dependencies]
+rockbot-tools = { path = "../rockbot-tools" }
+rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
+rockbot-security = { path = "../rockbot-security" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }

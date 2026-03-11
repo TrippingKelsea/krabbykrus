@@ -1,0 +1,69 @@
+[package]
+name = "rockbot-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core RockBot framework components"
+license = "MIT"
+
+[features]
+default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "tools-mcp", "tools-markdown"]
+# LLM providers
+anthropic = ["rockbot-llm/anthropic"]
+openai = ["rockbot-llm/openai"]
+bedrock = ["rockbot-llm/bedrock"]
+# Channel providers
+discord = ["dep:rockbot-channels-discord"]
+telegram = ["dep:rockbot-channels-telegram"]
+signal = ["dep:rockbot-channels-signal"]
+# Tool providers
+tools-credentials = ["dep:rockbot-tools-credentials"]
+tools-mcp = ["dep:rockbot-tools-mcp"]
+tools-markdown = ["dep:rockbot-tools-markdown"]
+
+[dependencies]
+rockbot-tools = { path = "../rockbot-tools" }
+rockbot-memory = { path = "../rockbot-memory" }
+rockbot-llm = { path = "../rockbot-llm", default-features = false }
+rockbot-security = { path = "../rockbot-security" }
+rockbot-credentials = { path = "../rockbot-credentials" }
+rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
+rockbot-channels = { path = "../rockbot-channels" }
+
+# Per-channel crates (optional)
+rockbot-channels-discord = { path = "../rockbot-channels-discord", optional = true }
+rockbot-channels-telegram = { path = "../rockbot-channels-telegram", optional = true }
+rockbot-channels-signal = { path = "../rockbot-channels-signal", optional = true }
+
+# Per-tool crates (optional)
+rockbot-tools-credentials = { path = "../rockbot-tools-credentials", optional = true }
+rockbot-tools-mcp = { path = "../rockbot-tools-mcp", optional = true }
+rockbot-tools-markdown = { path = "../rockbot-tools-markdown", optional = true }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+tungstenite = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+notify = { workspace = true }
+rusqlite = { workspace = true }
+regex = { workspace = true }
+dirs = { workspace = true }
+rand = "0.8"
+which = "6"
+cron = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
