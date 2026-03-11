@@ -810,10 +810,10 @@ impl App {
 
     fn handle_test_action(&mut self) {
         if self.state.menu_item == MenuItem::Models {
-            let provider_names = ["Anthropic", "OpenAI", "Google AI", "AWS Bedrock", "Ollama"];
-            if let Some(name) = provider_names.get(self.state.selected_provider) {
-                self.state.status_message = Some((format!("Testing {name} connection..."), false));
-                self.spawn_model_test(self.state.selected_provider);
+            let idx = self.state.selected_provider.min(self.state.providers.len().saturating_sub(1));
+            if let Some(provider) = self.state.providers.get(idx) {
+                self.state.status_message = Some((format!("Testing {} connection...", provider.name), false));
+                self.spawn_model_test_via_gateway(&provider.id, &provider.name);
             }
         }
     }
@@ -866,88 +866,28 @@ impl App {
         // For now, just show the view modal with basic info
     }
 
-    fn spawn_model_test(&self, provider_index: usize) {
+    /// Test a provider via the gateway API (POST /api/providers/{id}/test)
+    fn spawn_model_test_via_gateway(&self, provider_id: &str, provider_name: &str) {
         let tx = self.state.tx.clone();
-
-        // Get API key for the provider (Anthropic uses OAuth, not API key)
-        let api_key: Option<String> = match provider_index {
-            0 => None, // Anthropic uses Claude Code OAuth - test differently
-            1 => self.get_provider_api_key("openai"),
-            2 => self.get_provider_api_key("google"),
-            // Bedrock uses AWS credentials, Ollama is local
-            _ => None,
-        };
-
-        // For Anthropic, check if Claude Code credentials exist
-        let has_anthropic_oauth = provider_index == 0 && has_claude_credentials();
-
-        let provider_name = ["Anthropic", "OpenAI", "Google AI", "AWS Bedrock", "Ollama"][provider_index];
+        let id = provider_id.to_string();
+        let name = provider_name.to_string();
 
         tokio::spawn(async move {
-            if provider_index == 0 {
-                // Anthropic - check Claude Code OAuth credentials
-                if has_anthropic_oauth {
+            match test_provider_via_gateway(&id).await {
+                Ok((models_found, _)) => {
                     let _ = tx.send(Message::SetStatus(
-                        "✅ Claude Code OAuth credentials found".to_string(),
-                        false
-                    ));
-                } else {
-                    let _ = tx.send(Message::SetStatus(
-                        "❌ Run 'claude' in terminal to authenticate".to_string(),
-                        true
+                        format!("✅ {name}: connection OK ({models_found} models)"),
+                        false,
                     ));
                 }
-            } else if provider_index == 4 {
-                // Ollama - test local connection
-                match test_ollama_connection().await {
-                    Ok(models) => {
-                        let _ = tx.send(Message::SetStatus(
-                            format!("✅ Ollama connected ({models} models)"),
-                            false
-                        ));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Message::SetStatus(format!("❌ Ollama: {e}"), true));
-                    }
+                Err(e) => {
+                    let _ = tx.send(Message::SetStatus(
+                        format!("❌ {name}: {e}"),
+                        true,
+                    ));
                 }
-            } else if let Some(key) = api_key {
-                match test_api_connection(provider_index, &key).await {
-                    Ok(()) => {
-                        let _ = tx.send(Message::SetStatus(
-                            format!("✅ {provider_name} API key valid"),
-                            false
-                        ));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Message::SetStatus(format!("❌ {provider_name}: {e}"), true));
-                    }
-                }
-            } else {
-                let _ = tx.send(Message::SetStatus(
-                    format!("❌ No API key found for {provider_name}"),
-                    true
-                ));
             }
         });
-    }
-
-    /// Get API key for a specific provider from vault
-    fn get_provider_api_key(&self, provider_name: &str) -> Option<String> {
-        let vault = self.vault.as_ref()?;
-
-        for endpoint in vault.list_endpoints() {
-            let matches = endpoint.name.to_lowercase().contains(provider_name)
-                || endpoint.base_url.to_lowercase().contains(provider_name);
-
-            if matches && endpoint.credential_id != uuid::Uuid::nil() {
-                if let Ok(secret_bytes) = vault.decrypt_credential_for_endpoint(endpoint.id) {
-                    if let Ok(api_key) = String::from_utf8(secret_bytes) {
-                        return Some(api_key);
-                    }
-                }
-            }
-        }
-        None
     }
 
     fn spawn_kill_session(&self, session_key: &str) {
@@ -2514,104 +2454,24 @@ async fn run_gateway_control(action: &str) -> Result<String> {
     }
 }
 
-/// Test Ollama local connection
-async fn test_ollama_connection() -> Result<usize> {
+/// Test a provider connection via the gateway API
+async fn test_provider_via_gateway(provider_id: &str) -> Result<(u64, String)> {
     let client = reqwest::Client::new();
     let response = client
-        .get("http://localhost:11434/api/tags")
-        .timeout(Duration::from_secs(5))
+        .post(format!("http://127.0.0.1:18080/api/providers/{provider_id}/test"))
+        .timeout(Duration::from_secs(10))
         .send()
         .await?;
 
-    if response.status().is_success() {
-        let json: serde_json::Value = response.json().await?;
-        let model_count = json
-            .get("models")
-            .and_then(|m| m.as_array())
-            .map_or(0, std::vec::Vec::len);
-        Ok(model_count)
+    let body: serde_json::Value = response.json().await?;
+
+    let status = body["status"].as_str().unwrap_or("error");
+    if status == "ok" {
+        let models = body["models_found"].as_u64().unwrap_or(0);
+        Ok((models, provider_id.to_string()))
     } else {
-        Err(anyhow::anyhow!("Ollama returned status {}", response.status()))
-    }
-}
-
-/// Test API connection for various providers
-async fn test_api_connection(provider_index: usize, api_key: &str) -> Result<()> {
-    let client = reqwest::Client::new();
-
-    match provider_index {
-        0 => {
-            // Anthropic - test with a minimal request
-            // Detect auth type: session key starts with "sk-ant-oat" (OAuth token)
-            let is_session_key = api_key.starts_with("sk-ant-oat");
-
-            let mut request = client
-                .post("https://api.anthropic.com/v1/messages")
-                .header("anthropic-version", "2023-06-01")
-                .header("content-type", "application/json");
-
-            // Use appropriate auth header
-            request = if is_session_key {
-                request.header("Authorization", format!("Bearer {api_key}"))
-            } else {
-                request.header("x-api-key", api_key)
-            };
-
-            let response = request
-                .json(&serde_json::json!({
-                    "model": "claude-3-5-haiku-latest",
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "Hi"}]
-                }))
-                .timeout(Duration::from_secs(10))
-                .send()
-                .await?;
-
-            if response.status().is_success() || response.status().as_u16() == 400 {
-                // 400 can mean invalid request format but valid API key
-                Ok(())
-            } else if response.status().as_u16() == 401 {
-                Err(anyhow::anyhow!("Invalid API key or session token"))
-            } else {
-                Err(anyhow::anyhow!("API returned status {}", response.status()))
-            }
-        }
-        1 => {
-            // OpenAI
-            let response = client
-                .get("https://api.openai.com/v1/models")
-                .header("Authorization", format!("Bearer {api_key}"))
-                .timeout(Duration::from_secs(10))
-                .send()
-                .await?;
-
-            if response.status().is_success() {
-                Ok(())
-            } else if response.status().as_u16() == 401 {
-                Err(anyhow::anyhow!("Invalid API key"))
-            } else {
-                Err(anyhow::anyhow!("API returned status {}", response.status()))
-            }
-        }
-        2 => {
-            // Google AI
-            let response = client
-                .get(format!(
-                    "https://generativelanguage.googleapis.com/v1/models?key={api_key}"
-                ))
-                .timeout(Duration::from_secs(10))
-                .send()
-                .await?;
-
-            if response.status().is_success() {
-                Ok(())
-            } else if response.status().as_u16() == 400 || response.status().as_u16() == 403 {
-                Err(anyhow::anyhow!("Invalid API key"))
-            } else {
-                Err(anyhow::anyhow!("API returned status {}", response.status()))
-            }
-        }
-        _ => Err(anyhow::anyhow!("Unknown provider")),
+        let error = body["error"].as_str().unwrap_or("Unknown error");
+        Err(anyhow::anyhow!("{error}"))
     }
 }
 

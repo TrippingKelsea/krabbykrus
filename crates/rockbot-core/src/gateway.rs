@@ -1298,24 +1298,17 @@ impl Gateway {
         };
 
         // Try to get the provider and list models as a connectivity test
-        let result = if reg.has_provider(provider_id) {
-            match reg.get_provider_for_model(&format!("{provider_id}/test")).await {
-                Ok(provider) => match provider.list_models().await {
-                    Ok(models) => serde_json::json!({
-                        "status": "ok",
-                        "provider": provider_id,
-                        "models_found": models.len(),
-                    }),
-                    Err(e) => serde_json::json!({
-                        "status": "error",
-                        "provider": provider_id,
-                        "error": format!("{}", e),
-                    }),
-                },
+        let result = if let Some(provider) = reg.get_provider(provider_id) {
+            match provider.list_models().await {
+                Ok(models) => serde_json::json!({
+                    "status": "ok",
+                    "provider": provider_id,
+                    "models_found": models.len(),
+                }),
                 Err(e) => serde_json::json!({
                     "status": "error",
                     "provider": provider_id,
-                    "error": format!("{}", e),
+                    "error": format!("{e}"),
                 }),
             }
         } else {
