@@ -46,6 +46,12 @@ pub enum EndpointType {
     GenericRest,
     /// Generic OAuth2 service.
     GenericOAuth2,
+    /// API key-based service.
+    ApiKeyService,
+    /// Basic auth service.
+    BasicAuthService,
+    /// Bearer token service.
+    BearerToken,
 }
 
 impl EndpointType {
@@ -57,6 +63,9 @@ impl EndpointType {
             EndpointType::Spotify => "spotify",
             EndpointType::GenericRest => "generic_rest",
             EndpointType::GenericOAuth2 => "generic_oauth2",
+            EndpointType::ApiKeyService => "api_key_service",
+            EndpointType::BasicAuthService => "basic_auth_service",
+            EndpointType::BearerToken => "bearer_token",
         }
     }
 }

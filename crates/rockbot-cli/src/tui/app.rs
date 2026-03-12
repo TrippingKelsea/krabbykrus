@@ -21,8 +21,9 @@ use super::components::{
 };
 use super::effects::EffectState;
 use super::state::{
-    AddCredentialState, AppState, ChatMessage, ConfirmAction, EditAgentState, EditCredentialState,
-    EditProviderState, EndpointInfo, InputMode, MenuItem, Message, PasswordAction, UnlockMethod,
+    AddCredentialState, AppState, ChatMessage, ConfirmAction, CreateSessionState, EditAgentState,
+    EditCredentialState, EditProviderState, EndpointInfo, InputMode, MenuItem, Message,
+    PasswordAction, SessionMode, UnlockMethod,
 };
 
 /// Check if Claude Code OAuth credentials are available
@@ -140,6 +141,7 @@ impl App {
         self.spawn_vault_check();
         self.spawn_providers_load();
         self.spawn_credential_schemas_load();
+        self.spawn_sessions_load();
         Ok(())
     }
 
@@ -218,6 +220,21 @@ impl App {
         });
     }
 
+    /// Spawn a task to load sessions from gateway
+    fn spawn_sessions_load(&self) {
+        let tx = self.state.tx.clone();
+        tokio::spawn(async move {
+            match load_sessions_from_gateway().await {
+                Ok(sessions) => {
+                    let _ = tx.send(Message::SessionsLoaded(sessions));
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::SessionsError(e.to_string()));
+                }
+            }
+        });
+    }
+
     /// Handle incoming messages from async tasks
     fn handle_message(&mut self, msg: Message) {
         // Check if this is a VaultStatus message with keyfile unlock
@@ -234,6 +251,14 @@ impl App {
         // ReloadAgents triggers a fresh load from gateway/config
         if matches!(msg, Message::ReloadAgents) {
             self.spawn_agents_load();
+        }
+        // ReloadSessions triggers a fresh load from gateway
+        if matches!(msg, Message::ReloadSessions) {
+            self.spawn_sessions_load();
+        }
+        // ReloadProviders triggers a fresh load of provider status
+        if matches!(msg, Message::ReloadProviders) {
+            self.spawn_providers_load();
         }
 
         self.state.update(msg);
@@ -321,6 +346,10 @@ impl App {
                 let state = state.clone();
                 self.handle_edit_agent(key, state)
             }
+            InputMode::CreateSession(state) => {
+                let state = state.clone();
+                self.handle_create_session(key, state)
+            }
             InputMode::Confirm { action, .. } => {
                 let action = action.clone();
                 self.handle_confirm(key, action)
@@ -370,9 +399,15 @@ impl App {
             }
             KeyCode::Up | KeyCode::Char('k') if !self.state.sidebar_focus => {
                 self.state.select_prev();
+                if self.state.menu_item == MenuItem::Sessions {
+                    self.on_session_selection_changed();
+                }
             }
             KeyCode::Down | KeyCode::Char('j') if !self.state.sidebar_focus => {
                 self.state.select_next();
+                if self.state.menu_item == MenuItem::Sessions {
+                    self.on_session_selection_changed();
+                }
             }
             // Left/Right to switch between panels in Credentials Providers tab
             KeyCode::Left | KeyCode::Char('h') if !self.state.sidebar_focus => {
@@ -445,6 +480,9 @@ impl App {
             KeyCode::Char('c') if !self.state.sidebar_focus => {
                 self.handle_chat_action();
             }
+            KeyCode::Char('n') if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions => {
+                self.handle_new_session_action();
+            }
             KeyCode::Char('e') if !self.state.sidebar_focus => {
                 self.handle_edit_action();
             }
@@ -477,7 +515,12 @@ impl App {
     fn handle_add_action(&mut self) {
         match self.state.menu_item {
             MenuItem::Agents => {
-                self.state.input_mode = InputMode::AddAgent(EditAgentState::new());
+                let mut agent_state = EditAgentState::new();
+                agent_state.populate_models(&self.state.providers);
+                self.state.input_mode = InputMode::AddAgent(agent_state);
+            }
+            MenuItem::Sessions => {
+                self.handle_new_session_action();
             }
             MenuItem::Credentials if self.state.vault.initialized && !self.state.vault.locked => {
                 // Context-aware add based on which tab and what's selected
@@ -550,12 +593,17 @@ impl App {
                 self.state.status_message = Some(("Reloading agents...".to_string(), false));
                 self.spawn_agents_load();
             }
+            MenuItem::Sessions if !self.state.sidebar_focus => {
+                self.state.status_message = Some(("Reloading sessions...".to_string(), false));
+                self.spawn_sessions_load();
+            }
             _ => {
                 // General refresh
                 self.state.status_message = Some(("Refreshing...".to_string(), false));
                 self.spawn_gateway_check();
                 self.spawn_agents_load();
                 self.spawn_vault_check();
+                self.spawn_sessions_load();
             }
         }
     }
@@ -686,28 +734,56 @@ impl App {
     }
 
     fn handle_chat_action(&mut self) {
-        // Can chat from Sessions page or anywhere with Claude Code authenticated
-        match self.state.menu_item {
-            MenuItem::Sessions | MenuItem::Dashboard => {
-                if has_claude_credentials() {
-                    self.state.input_mode = InputMode::ChatInput;
-                    self.state.input_buffer.clear();
-                } else {
-                    self.state.status_message = Some((
-                        "Run 'claude' in terminal to authenticate with Claude Code".to_string(),
-                        true
-                    ));
-                }
-            }
-            _ => {
-                // Navigate to Sessions and start chat
-                self.state.menu_item = MenuItem::Sessions;
-                if has_claude_credentials() {
-                    self.state.input_mode = InputMode::ChatInput;
-                    self.state.input_buffer.clear();
-                }
-            }
+        let has_provider = self.state.providers.iter().any(|p| p.available);
+
+        if !has_provider {
+            self.state.status_message = Some((
+                "No LLM providers available — configure one in Models or Credentials → Providers".to_string(),
+                true
+            ));
+            return;
         }
+
+        // Navigate to sessions if not there
+        if self.state.menu_item != MenuItem::Sessions {
+            self.state.menu_item = MenuItem::Sessions;
+        }
+
+        // If there's a selected session, set chat_model from it and open chat
+        if let Some(session) = self.state.sessions.get(self.state.selected_session) {
+            if let Some(ref model) = session.model {
+                self.state.chat_model = Some(model.clone());
+            } else if !session.agent_id.is_empty() {
+                // Fall back to agent's configured model
+                self.state.chat_model = self.state.agents.iter()
+                    .find(|a| a.id == session.agent_id)
+                    .and_then(|a| a.model.clone());
+            }
+            // Ensure session has a chat state entry
+            let key = session.key.clone();
+            self.state.session_chats.entry(key).or_default();
+            self.state.input_mode = InputMode::ChatInput;
+            self.state.input_buffer.clear();
+        } else {
+            // No sessions — create one
+            self.handle_new_session_action();
+        }
+    }
+
+    fn handle_new_session_action(&mut self) {
+        let has_provider = self.state.providers.iter().any(|p| p.available);
+        if !has_provider {
+            self.state.status_message = Some((
+                "No LLM providers available — configure one in Models or Credentials → Providers".to_string(),
+                true
+            ));
+            return;
+        }
+        let create_state = CreateSessionState::new(
+            &self.state.providers,
+            &self.state.agents,
+        );
+        self.state.input_mode = InputMode::CreateSession(create_state);
     }
 
     fn handle_edit_action(&mut self) {
@@ -758,7 +834,8 @@ impl App {
             }
             MenuItem::Agents => {
                 if let Some(agent) = self.state.agents.get(self.state.selected_agent) {
-                    let edit_state = EditAgentState::from_agent(agent);
+                    let mut edit_state = EditAgentState::from_agent(agent);
+                    edit_state.populate_models(&self.state.providers);
                     self.state.input_mode = InputMode::EditAgent(edit_state);
                 }
             }
@@ -890,16 +967,58 @@ impl App {
         });
     }
 
+    /// Load message history for a session from the gateway
+    fn spawn_load_session_messages(&self, session_key: &str) {
+        let tx = self.state.tx.clone();
+        let key = session_key.to_string();
+        tokio::spawn(async move {
+            match load_session_messages(&key).await {
+                Ok(messages) => {
+                    let _ = tx.send(Message::SessionMessagesLoaded(key, messages));
+                }
+                Err(_) => {
+                    // Silently fail — session might just have no messages yet
+                    let _ = tx.send(Message::SessionMessagesLoaded(key, vec![]));
+                }
+            }
+        });
+    }
+
+    /// Called when the selected session changes — loads messages if not yet loaded
+    fn on_session_selection_changed(&mut self) {
+        if let Some(session) = self.state.sessions.get(self.state.selected_session) {
+            let key = session.key.clone();
+            // Set chat_model from the selected session, falling back to agent's model
+            self.state.chat_model = session.model.clone().or_else(|| {
+                if session.agent_id.is_empty() {
+                    None
+                } else {
+                    self.state.agents.iter()
+                        .find(|a| a.id == session.agent_id)
+                        .and_then(|a| a.model.clone())
+                }
+            });
+            // Load messages if not already loaded
+            let already_loaded = self.state.session_chats
+                .get(&key)
+                .map_or(false, |c| c.loaded);
+            if !already_loaded {
+                self.spawn_load_session_messages(&key);
+            }
+        }
+    }
+
     fn spawn_kill_session(&self, session_key: &str) {
         let tx = self.state.tx.clone();
         let key = session_key.to_string();
         tokio::spawn(async move {
             match kill_session(&key).await {
                 Ok(()) => {
-                    let _ = tx.send(Message::SetStatus(format!("✅ Session killed: {key}"), false));
+                    let _ = tx.send(Message::SetStatus(format!("✅ Session archived: {key}"), false));
+                    let _ = tx.send(Message::ReloadSessions);
                 }
                 Err(e) => {
-                    let _ = tx.send(Message::SetStatus(format!("❌ Failed to kill session: {e}"), true));
+                    let _ = tx.send(Message::SetStatus(format!("❌ Failed to archive session: {e}"), true));
                 }
             }
         });
@@ -1210,7 +1329,7 @@ impl App {
         Ok(())
     }
 
-    /// Save provider configuration to config file
+    /// Save provider configuration — routes through gateway API
     fn save_provider_config(&mut self, state: &super::state::EditProviderState) {
         use super::state::ProviderAuthType;
 
@@ -1233,127 +1352,115 @@ impl App {
             return;
         }
 
-        // For API key auth, store in vault
-        let api_key = state.api_key();
-        if state.auth_type == ProviderAuthType::ApiKey && !api_key.is_empty() {
-            if let Some(ref mut vault) = self.vault {
-                // Create or update provider endpoint in vault
-                // Determine base URL based on provider
-                let base_url = if state.provider_id == "bedrock" {
-                    format!("bedrock.{}.amazonaws.com", state.aws_region())
-                } else {
-                    state.base_url()
-                };
-
-                // Check if endpoint already exists
-                let existing = vault.list_endpoints()
-                    .into_iter()
-                    .find(|e| e.name.to_lowercase() == state.provider_name.to_lowercase());
-
-                match existing {
-                    Some(endpoint) => {
-                        // Update existing endpoint's credential
-                        match vault.store_credential(
-                            endpoint.id,
-                            rockbot_credentials::CredentialType::BearerToken,
-                            api_key.as_bytes(),
-                        ) {
-                            Ok(_) => {
-                                self.state.status_message = Some((
-                                    format!("✅ {} API key updated", state.provider_name),
-                                    false
-                                ));
-                            }
-                            Err(e) => {
-                                self.state.status_message = Some((
-                                    format!("❌ Failed to store API key: {e}"),
-                                    true
-                                ));
-                            }
-                        }
-                    }
-                    None => {
-                        // Create new endpoint
-                        match vault.create_endpoint(
-                            state.provider_name.clone(),
-                            rockbot_credentials::EndpointType::GenericRest,
-                            base_url.clone(),
-                        ) {
-                            Ok(endpoint) => {
-                                // Store the credential
-                                match vault.store_credential(
-                                    endpoint.id,
-                                    rockbot_credentials::CredentialType::BearerToken,
-                                    api_key.as_bytes(),
-                                ) {
-                                    Ok(_) => {
-                                        // Refresh endpoints list
-                                        self.state.endpoints = vault.list_endpoints()
-                                            .into_iter()
-                                            .map(|e| EndpointInfo {
-                                                id: e.id.to_string(),
-                                                name: e.name.clone(),
-                                                endpoint_type: format!("{:?}", e.endpoint_type),
-                                                base_url: e.base_url.clone(),
-                                                has_credential: e.credential_id != uuid::Uuid::nil(),
-                                                expiration: None,
-                                            })
-                                            .collect();
-                                        self.state.vault.endpoint_count = self.state.endpoints.len();
-
-                                        self.state.status_message = Some((
-                                            format!("✅ {} configured with API key", state.provider_name),
-                                            false
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        self.state.status_message = Some((
-                                            format!("❌ Failed to store API key: {e}"),
-                                            true
-                                        ));
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                self.state.status_message = Some((
-                                    format!("❌ Failed to create endpoint: {e}"),
-                                    true
-                                ));
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Vault not unlocked - just show a message with env var hint
-                if let Some(env_var) = state.env_var_hint() {
-                    self.state.status_message = Some((
-                        format!("💡 Set {env_var} environment variable to persist API key"),
-                        false
-                    ));
-                }
-            }
+        if state.auth_type == ProviderAuthType::None {
+            self.state.status_message = Some((
+                format!("✅ {} - no authentication needed", state.provider_name),
+                false
+            ));
             return;
         }
 
-        // For other auth types
-        match state.auth_type {
-            ProviderAuthType::None => {
-                self.state.status_message = Some((
-                    format!("✅ {} - no authentication needed", state.provider_name),
-                    false
-                ));
+        // Collect the secret value from form fields
+        let secret_value = state.api_key(); // Checks api_key, bot_token, access_token, token, first secret field
+
+        // For AWS credentials, also check specific field IDs
+        let secret_value = if secret_value.is_empty() && state.auth_type == ProviderAuthType::AwsCredentials {
+            // For AWS, store all secret fields as a JSON object
+            let mut aws_creds = serde_json::Map::new();
+            for field_id in &["access_key_id", "secret_access_key", "session_token", "bearer_token"] {
+                if let Some(val) = state.get_field_value_by_id(field_id) {
+                    if !val.is_empty() {
+                        aws_creds.insert(field_id.to_string(), serde_json::Value::String(val.to_string()));
+                    }
+                }
             }
-            ProviderAuthType::AwsCredentials => {
+            if aws_creds.is_empty() {
                 self.state.status_message = Some((
                     format!("💡 Set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION={}", state.aws_region()),
                     false
                 ));
+                return;
             }
-            _ => {}
+            serde_json::to_string(&aws_creds).unwrap_or_default()
+        } else {
+            secret_value
+        };
+
+        if secret_value.is_empty() {
+            if let Some(env_var) = state.env_var_hint() {
+                self.state.status_message = Some((
+                    format!("💡 Set {env_var} environment variable to persist credentials"),
+                    false
+                ));
+            }
+            return;
         }
+
+        // Determine base URL
+        let base_url = if state.provider_id == "bedrock" {
+            state.get_field_value_by_id("endpoint_url")
+                .filter(|v| !v.is_empty())
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| format!("https://bedrock-runtime.{}.amazonaws.com", state.aws_region()))
+        } else {
+            let url = state.base_url();
+            if url.is_empty() {
+                format!("{}://configured", state.provider_id)
+            } else {
+                url
+            }
+        };
+
+        // Determine endpoint type
+        let endpoint_type = match state.auth_type {
+            ProviderAuthType::AwsCredentials => "api_key_service",
+            ProviderAuthType::ApiKey => "api_key_service",
+            _ => "api_key_service",
+        };
+
+        // Route through gateway API
+        self.spawn_save_provider_credentials(
+            state.provider_name.clone(),
+            endpoint_type.to_string(),
+            base_url,
+            secret_value,
+        );
+    }
+
+    /// Save provider credentials via gateway API (async)
+    fn spawn_save_provider_credentials(
+        &self,
+        provider_name: String,
+        endpoint_type: String,
+        base_url: String,
+        secret: String,
+    ) {
+        let tx = self.state.tx.clone();
+        tokio::spawn(async move {
+            match save_provider_via_gateway(&provider_name, &endpoint_type, &base_url, &secret).await {
+                Ok(()) => {
+                    let _ = tx.send(Message::SetStatus(
+                        format!("✅ {provider_name} credentials saved"),
+                        false
+                    ));
+                    // Reload providers to reflect updated availability
+                    let _ = tx.send(Message::ReloadProviders);
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::SetStatus(
+                        format!("❌ Failed to save {provider_name} credentials: {e}"),
+                        true
+                    ));
+                }
+            }
+        });
     }
 
     fn handle_edit_agent(&mut self, key: KeyEvent, mut state: EditAgentState) -> Result<()> {
+        let set_mode = |s: EditAgentState| -> InputMode {
+            if s.is_edit { InputMode::EditAgent(s) } else { InputMode::AddAgent(s) }
+        };
+
         match key.code {
             KeyCode::Esc => {
                 self.state.input_mode = InputMode::Normal;
@@ -1361,29 +1468,26 @@ impl App {
             }
             KeyCode::Tab | KeyCode::Down => {
                 state.next_field();
-                self.state.input_mode = if state.is_edit {
-                    InputMode::EditAgent(state)
-                } else {
-                    InputMode::AddAgent(state)
-                };
+                self.state.input_mode = set_mode(state);
             }
             KeyCode::BackTab | KeyCode::Up => {
                 state.prev_field();
-                self.state.input_mode = if state.is_edit {
-                    InputMode::EditAgent(state)
-                } else {
-                    InputMode::AddAgent(state)
-                };
+                self.state.input_mode = set_mode(state);
+            }
+            // Model picker: left/right to cycle models
+            KeyCode::Left if state.is_model_picker_active() => {
+                state.prev_model();
+                self.state.input_mode = set_mode(state);
+            }
+            KeyCode::Right if state.is_model_picker_active() => {
+                state.next_model();
+                self.state.input_mode = set_mode(state);
             }
             KeyCode::Enter => {
                 if state.is_last_field() {
                     if let Some(error) = state.validate() {
                         self.state.status_message = Some((error, true));
-                        self.state.input_mode = if state.is_edit {
-                            InputMode::EditAgent(state)
-                        } else {
-                            InputMode::AddAgent(state)
-                        };
+                        self.state.input_mode = set_mode(state);
                     } else {
                         // Check for duplicate ID when creating
                         if !state.is_edit && self.state.agents.iter().any(|a| a.id == state.id) {
@@ -1398,36 +1502,110 @@ impl App {
                     }
                 } else {
                     state.next_field();
-                    self.state.input_mode = if state.is_edit {
-                        InputMode::EditAgent(state)
-                    } else {
-                        InputMode::AddAgent(state)
-                    };
+                    self.state.input_mode = set_mode(state);
                 }
             }
             KeyCode::Char(c) => {
                 if let Some(value) = state.current_value_mut() {
                     value.push(c);
                 }
-                self.state.input_mode = if state.is_edit {
-                    InputMode::EditAgent(state)
-                } else {
-                    InputMode::AddAgent(state)
-                };
+                self.state.input_mode = set_mode(state);
             }
             KeyCode::Backspace => {
                 if let Some(value) = state.current_value_mut() {
                     value.pop();
                 }
-                self.state.input_mode = if state.is_edit {
-                    InputMode::EditAgent(state)
-                } else {
-                    InputMode::AddAgent(state)
-                };
+                self.state.input_mode = set_mode(state);
             }
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_create_session(&mut self, key: KeyEvent, mut state: CreateSessionState) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+                self.state.status_message = Some(("Cancelled".to_string(), false));
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                state.field_index = (state.field_index + 1) % state.total_fields();
+                self.state.input_mode = InputMode::CreateSession(state);
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                if state.field_index == 0 {
+                    state.field_index = state.total_fields() - 1;
+                } else {
+                    state.field_index -= 1;
+                }
+                self.state.input_mode = InputMode::CreateSession(state);
+            }
+            KeyCode::Left | KeyCode::Right => {
+                if state.field_index == 0 {
+                    // Toggle mode
+                    state.toggle_mode();
+                } else {
+                    // Cycle options
+                    if key.code == KeyCode::Right {
+                        state.next_option();
+                    } else {
+                        state.prev_option();
+                    }
+                }
+                self.state.input_mode = InputMode::CreateSession(state);
+            }
+            KeyCode::Enter => {
+                // Submit — create session and open chat
+                match state.mode {
+                    SessionMode::AdHoc => {
+                        if let Some(model) = state.selected_model() {
+                            let model = model.to_string();
+                            self.spawn_create_session(None, Some(model.clone()));
+                            self.state.chat_model = Some(model);
+                            self.state.chat_agent_id = None;
+                            self.state.input_mode = InputMode::ChatInput;
+                            self.state.input_buffer.clear();
+                        } else {
+                            self.state.status_message = Some(("No model available".to_string(), true));
+                            self.state.input_mode = InputMode::CreateSession(state);
+                        }
+                    }
+                    SessionMode::AgentBound => {
+                        if let Some(agent_id) = state.selected_agent_id() {
+                            let agent_id = agent_id.to_string();
+                            let agent_model = self.state.agents.iter()
+                                .find(|a| a.id == agent_id)
+                                .and_then(|a| a.model.clone());
+                            self.spawn_create_session(Some(agent_id.clone()), agent_model.clone());
+                            self.state.chat_model = agent_model;
+                            self.state.chat_agent_id = Some(agent_id);
+                            self.state.input_mode = InputMode::ChatInput;
+                            self.state.input_buffer.clear();
+                        } else {
+                            self.state.status_message = Some(("No agent available".to_string(), true));
+                            self.state.input_mode = InputMode::CreateSession(state);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn spawn_create_session(&self, agent_id: Option<String>, model: Option<String>) {
+        let tx = self.state.tx.clone();
+        tokio::spawn(async move {
+            match create_session_via_gateway(agent_id.as_deref(), model.as_deref()).await {
+                Ok(session_id) => {
+                    let _ = tx.send(Message::SessionCreated(session_id));
+                    let _ = tx.send(Message::ReloadSessions);
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::SessionCreateError(e.to_string()));
+                }
+            }
+        });
     }
 
     /// Save agent via gateway API, falling back to direct config file edit
@@ -1671,19 +1849,12 @@ impl App {
             KeyCode::Enter => {
                 let message = self.state.input_buffer.trim().to_string();
                 if !message.is_empty() {
-                    // Add user message to chat history
-                    self.state.chat_messages.push(ChatMessage::user(message.clone()));
-                    self.state.chat_loading = true;
-
-                    // Check for Claude Code OAuth credentials
-                    if has_claude_credentials() {
-                        self.spawn_chat_request(message);
-                    } else {
-                        self.state.chat_messages.push(ChatMessage::system(
-                            "Claude Code not authenticated. Run 'claude' in terminal to set up OAuth.".to_string()
-                        ));
-                        self.state.chat_loading = false;
+                    // Add user message to active session's chat history
+                    if let Some(chat) = self.state.active_chat_mut() {
+                        chat.messages.push(ChatMessage::user(message.clone()));
+                        chat.loading = true;
                     }
+                    self.spawn_chat_request(message);
                 }
                 self.state.input_buffer.clear();
             }
@@ -1773,7 +1944,9 @@ impl App {
     /// Spawn an async task to send a chat message via Claude Code SDK
     fn spawn_chat_request(&self, user_message: String) {
         let tx = self.state.tx.clone();
-        let chat_history: Vec<(bool, String)> = self.state.chat_messages
+        let model = self.state.chat_model.clone();
+        let session_key = self.state.active_session_key().unwrap_or("").to_string();
+        let chat_history: Vec<(bool, String)> = self.state.chat_messages()
             .iter()
             .filter_map(|m| match m.role {
                 super::state::ChatRole::User => Some((true, m.content.clone())),
@@ -1783,12 +1956,12 @@ impl App {
             .collect();
 
         tokio::spawn(async move {
-            match send_chat_message(&chat_history, &user_message).await {
+            match send_chat_message(&chat_history, &user_message, model.as_deref()).await {
                 Ok(response) => {
-                    let _ = tx.send(Message::ChatResponse(response));
+                    let _ = tx.send(Message::ChatResponse(session_key, response));
                 }
                 Err(e) => {
-                    let _ = tx.send(Message::ChatError(e.to_string()));
+                    let _ = tx.send(Message::ChatError(session_key, e.to_string()));
                 }
             }
         });
@@ -1850,6 +2023,9 @@ impl App {
             InputMode::AddAgent(state) | InputMode::EditAgent(state) => {
                 render_edit_agent_modal(frame, frame.area(), state, &self.state.agents);
             }
+            InputMode::CreateSession(state) => {
+                super::components::render_create_session_modal(frame, frame.area(), state);
+            }
             InputMode::Confirm { message, .. } => {
                 render_confirm_modal(frame, frame.area(), message);
             }
@@ -1880,7 +2056,7 @@ impl App {
                             "a:Add │ e:Edit │ d:Disable │ r:Reload │ Esc/Tab:←Sidebar".to_string()
                         }
                         MenuItem::Sessions => {
-                            "c:Chat │ k:Kill │ v:View │ Esc/Tab:←Sidebar".to_string()
+                            "n:New │ c:Chat │ k:Kill │ Esc/Tab:←Sidebar".to_string()
                         }
                         MenuItem::Models => {
                             "e:Edit │ t:Test │ Esc/Tab:←Sidebar".to_string()
@@ -1897,7 +2073,8 @@ impl App {
             InputMode::ChatInput => "Enter:Send │ Esc:Close".to_string(),
             InputMode::EditCredential(_) => "↑↓/Tab:Navigate │ Enter:Submit │ Esc:Cancel".to_string(),
             InputMode::EditProvider(_) => "↑↓/Tab:Navigate │ ←→:Auth Type │ Enter:Save │ Esc:Cancel".to_string(),
-            InputMode::AddAgent(_) | InputMode::EditAgent(_) => "↑↓/Tab:Navigate │ Enter:Submit │ Esc:Cancel".to_string(),
+            InputMode::AddAgent(_) | InputMode::EditAgent(_) => "↑↓/Tab:Navigate │ ←→:Cycle Model │ Enter:Submit │ Esc:Cancel".to_string(),
+            InputMode::CreateSession(_) => "↑↓/Tab:Navigate │ ←→:Cycle │ Enter:Create │ Esc:Cancel".to_string(),
             InputMode::ViewSession { .. } => "Esc/Enter:Close".to_string(),
         }
     }
@@ -2375,58 +2552,64 @@ async fn check_vault_status(vault_path: &PathBuf) -> Result<VaultStatus> {
 async fn send_chat_message(
     chat_history: &[(bool, String)], // (is_user, content)
     user_message: &str,
+    model: Option<&str>,
 ) -> Result<String> {
-    use rockbot_llm::{LlmProviderRegistry, ChatCompletionRequest, Message, MessageRole};
+    // Build messages array
+    let mut messages = Vec::new();
+    for (is_user, content) in chat_history {
+        messages.push(serde_json::json!({
+            "role": if *is_user { "user" } else { "assistant" },
+            "content": content,
+        }));
+    }
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": user_message,
+    }));
 
-    let registry = LlmProviderRegistry::new().await
-        .map_err(|e| anyhow::anyhow!("Failed to create provider registry: {e}"))?;
+    // Determine model: use explicit model, or let gateway pick
+    let model_id = model.unwrap_or("default");
 
-    // Use the first non-mock provider available
-    let providers = registry.list_providers();
-    let provider_id = providers.iter()
-        .find(|p| p.as_str() != "mock")
-        .or_else(|| providers.first())
-        .ok_or_else(|| anyhow::anyhow!("No LLM providers available"))?;
-
-    let provider = registry.get_provider_for_model(provider_id).await
-        .map_err(|e| anyhow::anyhow!("Failed to get provider: {e}"))?;
-
-    // Build messages from history
-    let mut messages: Vec<Message> = chat_history
-        .iter()
-        .map(|(is_user, content)| Message {
-            role: if *is_user { MessageRole::User } else { MessageRole::Assistant },
-            content: content.clone(),
-            tool_calls: None,
-        })
-        .collect();
-
-    // Add the current user message
-    messages.push(Message {
-        role: MessageRole::User,
-        content: user_message.to_string(),
-        tool_calls: None,
+    let request_body = serde_json::json!({
+        "model": model_id,
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": 4096,
+        "stream": false,
     });
 
-    let models = provider.list_models().await
-        .map_err(|e| anyhow::anyhow!("Failed to list models: {e}"))?;
-    let model_id = models.first().map_or_else(|| "mock-model".to_string(), |m| m.id.clone());
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()?;
 
-    let request = ChatCompletionRequest {
-        model: model_id,
-        messages,
-        temperature: Some(0.7),
-        max_tokens: Some(4096),
-        tools: None,
-        stream: false,
-    };
+    let response = client
+        .post("http://127.0.0.1:18080/api/chat")
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Gateway unreachable: {e}. Is the gateway running?"))?;
 
-    let response = provider.chat_completion(request).await
-        .map_err(|e| anyhow::anyhow!("Chat completion failed: {e}"))?;
+    if !response.status().is_success() {
+        let err_text = response.text().await.unwrap_or_default();
+        let err_json: serde_json::Value = serde_json::from_str(&err_text).unwrap_or_default();
+        let err_msg = err_json.get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&err_text);
+        return Err(anyhow::anyhow!("{err_msg}"));
+    }
 
-    // Extract the assistant's response
-    let content = response.choices
-        .first().map_or_else(|| "No response received".to_string(), |c| c.message.content.clone());
+    let json: serde_json::Value = response.json().await?;
+
+    // Extract the assistant's response from choices[0].message.content
+    let content = json
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|msg| msg.get("content"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("No response received")
+        .to_string();
 
     Ok(content)
 }
@@ -2490,6 +2673,136 @@ async fn kill_session(session_key: &str) -> Result<()> {
     } else {
         Err(anyhow::anyhow!("Failed to kill session: {}", response.status()))
     }
+}
+
+/// Load message history for a session from the gateway
+async fn load_session_messages(session_key: &str) -> Result<Vec<ChatMessage>> {
+    use tokio::time::timeout;
+
+    let client = reqwest::Client::new();
+    let result = timeout(
+        Duration::from_secs(3),
+        client.get(format!("http://127.0.0.1:18080/api/sessions/{session_key}/messages")).send(),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(response)) if response.status().is_success() => {
+            let json: serde_json::Value = response.json().await?;
+            let messages = json
+                .get("messages")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| {
+                            let msg = m.get("message")?;
+                            let content = msg.get("content")?;
+                            // Content can be a string or an object with "text" field
+                            let text = if let Some(s) = content.as_str() {
+                                s.to_string()
+                            } else if let Some(t) = content.get("text").and_then(|v| v.as_str()) {
+                                t.to_string()
+                            } else {
+                                return None;
+                            };
+                            let role_str = content.get("role")
+                                .or_else(|| msg.get("role"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("user");
+                            let role = match role_str {
+                                "assistant" => super::state::ChatRole::Assistant,
+                                "system" => super::state::ChatRole::System,
+                                _ => super::state::ChatRole::User,
+                            };
+                            let timestamp = msg.get("created_at")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            Some(ChatMessage { role, content: text, timestamp })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Ok(messages)
+        }
+        _ => Ok(vec![]),
+    }
+}
+
+/// Simple base64 encoding (standard alphabet)
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
+        out.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[(triple & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+/// Save provider credentials via gateway API
+async fn save_provider_via_gateway(
+    provider_name: &str,
+    endpoint_type: &str,
+    base_url: &str,
+    secret: &str,
+) -> Result<()> {
+    let client = reqwest::Client::new();
+
+    // Step 1: Create endpoint
+    let ep_response = client
+        .post("http://127.0.0.1:18080/api/credentials/endpoints")
+        .json(&serde_json::json!({
+            "name": provider_name,
+            "endpoint_type": endpoint_type,
+            "base_url": base_url,
+        }))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await?;
+
+    if !ep_response.status().is_success() {
+        let status = ep_response.status();
+        let body = ep_response.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("Failed to create endpoint ({status}): {body}"));
+    }
+
+    let ep: serde_json::Value = ep_response.json().await?;
+    let ep_id = ep["id"].as_str()
+        .ok_or_else(|| anyhow::anyhow!("No endpoint ID in response"))?;
+
+    // Step 2: Store credential (base64 encoded)
+    let encoded_secret = base64_encode(secret.as_bytes());
+    let cred_response = client
+        .post(format!("http://127.0.0.1:18080/api/credentials/endpoints/{ep_id}/credential"))
+        .json(&serde_json::json!({
+            "credential_type": "bearer_token",
+            "secret": encoded_secret,
+        }))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await?;
+
+    if !cred_response.status().is_success() {
+        let status = cred_response.status();
+        let body = cred_response.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("Failed to store credential ({status}): {body}"));
+    }
+
+    Ok(())
 }
 
 /// Load providers from the gateway API
@@ -2636,5 +2949,92 @@ async fn load_credential_schemas() -> Result<Vec<CredentialSchemaInfo>> {
             Ok(schemas)
         }
         _ => Ok(vec![]),
+    }
+}
+
+/// Load sessions from the gateway API
+async fn load_sessions_from_gateway() -> Result<Vec<super::state::SessionInfo>> {
+    use tokio::time::timeout;
+
+    let client = reqwest::Client::new();
+    let result = timeout(
+        Duration::from_secs(2),
+        client.get("http://127.0.0.1:18080/api/sessions").send(),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(response)) if response.status().is_success() => {
+            let json: serde_json::Value = response.json().await?;
+            let sessions = if let Some(arr) = json.as_array() {
+                arr.iter()
+                    .filter_map(|s| {
+                        let id = s.get("id")?.as_str()?.to_string();
+                        let agent_id = s.get("agent_id")?.as_str()?.to_string();
+                        let session_key = s.get("session_key")?.as_str()?.to_string();
+                        let created_at = s.get("created_at").and_then(|v| v.as_str()).map(String::from);
+                        let model = s.get("metadata")
+                            .and_then(|m| m.get("model"))
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let channel = if agent_id == "ad-hoc" {
+                            model.as_ref().map(|m| format!("model:{m}"))
+                        } else {
+                            Some(format!("agent:{agent_id}"))
+                        };
+
+                        Some(super::state::SessionInfo {
+                            key: id,
+                            agent_id: if agent_id == "ad-hoc" {
+                                format!("ad-hoc ({})", session_key.get(..8).unwrap_or(&session_key))
+                            } else {
+                                agent_id
+                            },
+                            channel,
+                            started_at: created_at,
+                            message_count: 0,
+                            model,
+                        })
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+            Ok(sessions)
+        }
+        _ => Ok(vec![]),
+    }
+}
+
+/// Create a session via the gateway API
+async fn create_session_via_gateway(agent_id: Option<&str>, model: Option<&str>) -> Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?;
+
+    let mut body = serde_json::Map::new();
+    if let Some(id) = agent_id {
+        body.insert("agent_id".to_string(), serde_json::Value::String(id.to_string()));
+    }
+    if let Some(m) = model {
+        body.insert("model".to_string(), serde_json::Value::String(m.to_string()));
+    }
+
+    let response = client
+        .post("http://127.0.0.1:18080/api/sessions")
+        .json(&serde_json::Value::Object(body))
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        let json: serde_json::Value = response.json().await?;
+        let session_id = json.get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        Ok(session_id)
+    } else {
+        let err_text = response.text().await.unwrap_or_default();
+        Err(anyhow::anyhow!("Gateway error: {err_text}"))
     }
 }

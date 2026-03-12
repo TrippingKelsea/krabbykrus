@@ -113,6 +113,8 @@ pub struct Gateway {
     credential_manager: Option<Arc<CredentialManager>>,
     /// LLM provider registry — single source of truth for provider state
     llm_registry: Arc<RwLock<Option<Arc<rockbot_llm::LlmProviderRegistry>>>>,
+    /// Cached provider availability (provider_id -> is_configured). Refreshed on registry set.
+    provider_configured: Arc<RwLock<HashMap<String, bool>>>,
     /// Channel registry — collects credential schemas from channel plugins
     channel_registry: Arc<rockbot_channels::ChannelRegistry>,
     /// Tool provider registry — collects credential schemas from tool plugins
@@ -288,6 +290,7 @@ impl Gateway {
             session_manager,
             credential_manager,
             llm_registry: Arc::new(RwLock::new(None)),
+            provider_configured: Arc::new(RwLock::new(HashMap::new())),
             channel_registry: Arc::new(channel_registry),
             tool_provider_registry: Arc::new(tool_provider_registry),
             ws_connections: Arc::new(RwLock::new(HashMap::new())),
@@ -359,10 +362,40 @@ impl Gateway {
         self.config_path = Some(path);
     }
 
-    /// Set the LLM provider registry (single source of truth for provider state)
+    /// Set the LLM provider registry (single source of truth for provider state).
+    /// Probes each provider's `is_configured()` and caches the result.
     pub async fn set_llm_registry(&self, registry: Arc<rockbot_llm::LlmProviderRegistry>) {
+        // Probe and cache availability for each provider
+        let mut cache = HashMap::new();
+        for provider_id in registry.list_providers() {
+            if let Some(provider) = registry.get_provider(&provider_id) {
+                let configured = provider.is_configured().await;
+                info!("Provider '{}': configured={}", provider_id, configured);
+                cache.insert(provider_id, configured);
+            }
+        }
+        {
+            let mut configured = self.provider_configured.write().await;
+            *configured = cache;
+        }
+
         let mut lock = self.llm_registry.write().await;
         *lock = Some(registry);
+    }
+
+    /// Refresh the cached provider availability status
+    pub async fn refresh_provider_status(&self) {
+        let registry = self.llm_registry.read().await;
+        if let Some(reg) = registry.as_ref() {
+            let mut cache = HashMap::new();
+            for provider_id in reg.list_providers() {
+                if let Some(provider) = reg.get_provider(&provider_id) {
+                    cache.insert(provider_id, provider.is_configured().await);
+                }
+            }
+            let mut configured = self.provider_configured.write().await;
+            *configured = cache;
+        }
     }
     
     /// Add a pending agent (couldn't be created, e.g., missing API key)
@@ -477,7 +510,14 @@ impl Gateway {
             .serve_connection(io, service)
             .await
         {
-            error!("Error serving connection: {:?}", err);
+            // IncompleteMessage is normal — client disconnected before sending a full request
+            // (e.g. TUI polling with short timeouts). Only log real errors.
+            let msg = format!("{err:?}");
+            if msg.contains("IncompleteMessage") {
+                debug!("Client disconnected early from {}: {}", addr, err);
+            } else {
+                error!("Error serving connection from {}: {:?}", addr, err);
+            }
         }
         
         Ok(())
@@ -587,6 +627,19 @@ impl Gateway {
             (&Method::GET, "/api/credentials/schemas") => {
                 self.handle_credential_schemas().await
             }
+            // Sessions API
+            (&Method::GET, "/api/sessions") => {
+                self.handle_list_sessions(req).await
+            }
+            (&Method::POST, "/api/sessions") => {
+                self.handle_create_session(req).await
+            }
+            (&Method::GET, p) if p.starts_with("/api/sessions/") && p.ends_with("/messages") => {
+                self.handle_get_session_messages(&path).await
+            }
+            (&Method::DELETE, p) if p.starts_with("/api/sessions/") => {
+                self.handle_delete_session(&path).await
+            }
             // Gateway management
             (&Method::POST, "/api/gateway/reload") => {
                 self.handle_reload_agents().await
@@ -663,6 +716,9 @@ impl Gateway {
             "spotify" => rockbot_credentials::EndpointType::Spotify,
             "generic_rest" => rockbot_credentials::EndpointType::GenericRest,
             "generic_oauth2" => rockbot_credentials::EndpointType::GenericOAuth2,
+            "api_key_service" => rockbot_credentials::EndpointType::ApiKeyService,
+            "basic_auth_service" => rockbot_credentials::EndpointType::BasicAuthService,
+            "bearer_token" => rockbot_credentials::EndpointType::BearerToken,
             _ => return Ok(Self::json_error("Invalid endpoint type", StatusCode::BAD_REQUEST)),
         };
 
@@ -732,6 +788,12 @@ impl Gateway {
 
         let credential_type = match request.credential_type.as_str() {
             "bearer_token" => rockbot_credentials::CredentialType::BearerToken,
+            "api_key" => rockbot_credentials::CredentialType::ApiKey {
+                header_name: "Authorization".to_string(),
+            },
+            "basic_auth" => rockbot_credentials::CredentialType::BasicAuth {
+                username: String::new(),
+            },
             _ => return Ok(Self::json_error("Invalid credential type", StatusCode::BAD_REQUEST)),
         };
 
@@ -741,7 +803,11 @@ impl Gateway {
         };
 
         match manager.store_credential(endpoint_uuid, credential_type, &secret).await {
-            Ok(()) => Ok(Self::json_response(r#"{"status":"ok"}"#, StatusCode::OK)),
+            Ok(()) => {
+                // Refresh provider availability cache after credential change
+                self.refresh_provider_status().await;
+                Ok(Self::json_response(r#"{"status":"ok"}"#, StatusCode::OK))
+            }
             Err(e) => Ok(Self::json_error(&e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)),
         }
     }
@@ -1297,19 +1363,33 @@ impl Gateway {
                 .unwrap());
         };
 
-        // Try to get the provider and list models as a connectivity test
+        // Test provider: check credentials and list models
         let result = if let Some(provider) = reg.get_provider(provider_id) {
-            match provider.list_models().await {
-                Ok(models) => serde_json::json!({
+            let configured = provider.is_configured().await;
+            let models = provider.list_models().await;
+            let model_count = models.as_ref().map_or(0, |m| m.len());
+
+            // Update the cached availability
+            {
+                let mut cache = self.provider_configured.write().await;
+                cache.insert(provider_id.to_string(), configured);
+            }
+
+            if configured {
+                serde_json::json!({
                     "status": "ok",
                     "provider": provider_id,
-                    "models_found": models.len(),
-                }),
-                Err(e) => serde_json::json!({
+                    "configured": true,
+                    "models_found": model_count,
+                })
+            } else {
+                serde_json::json!({
                     "status": "error",
                     "provider": provider_id,
-                    "error": format!("{e}"),
-                }),
+                    "configured": false,
+                    "models_found": model_count,
+                    "error": "Provider credentials not configured",
+                })
             }
         } else {
             serde_json::json!({
@@ -1332,7 +1412,7 @@ impl Gateway {
         req: Request<IncomingBody>,
     ) -> std::result::Result<Response<Full<hyper::body::Bytes>>, hyper::Error> {
         let body = req.collect().await.unwrap().to_bytes();
-        let chat_req: rockbot_llm::ChatCompletionRequest = match serde_json::from_slice(&body) {
+        let mut chat_req: rockbot_llm::ChatCompletionRequest = match serde_json::from_slice(&body) {
             Ok(r) => r,
             Err(e) => {
                 return Ok(Response::builder()
@@ -1356,6 +1436,25 @@ impl Gateway {
                 .unwrap());
         };
 
+        // Resolve "default" model to the first available provider's first model
+        // Resolve "default" model to the first configured provider's first model
+        if chat_req.model == "default" {
+            let configured_cache = self.provider_configured.read().await;
+            for provider_id in reg.list_providers() {
+                if provider_id == "mock" { continue; }
+                if !configured_cache.get(&provider_id).copied().unwrap_or(false) { continue; }
+                if let Some(provider) = reg.get_provider(&provider_id) {
+                    if let Ok(models) = provider.list_models().await {
+                        if let Some(first_model) = models.first() {
+                            chat_req.model = format!("{}/{}", provider_id, first_model.id);
+                            break;
+                        }
+                    }
+                }
+            }
+            drop(configured_cache);
+        }
+
         let provider = match reg.get_provider_for_model(&chat_req.model).await {
             Ok(p) => p,
             Err(e) => {
@@ -1371,21 +1470,26 @@ impl Gateway {
             }
         };
 
+        info!("Chat request: model={}, messages={}", chat_req.model, chat_req.messages.len());
+
         match provider.chat_completion(chat_req).await {
             Ok(response) => Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
                 .body(Full::new(serde_json::to_string(&response).unwrap().into()))
                 .unwrap()),
-            Err(e) => Ok(Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header("Content-Type", "application/json")
-                .body(Full::new(
-                    serde_json::json!({"error": format!("{}", e)})
-                        .to_string()
-                        .into(),
-                ))
-                .unwrap()),
+            Err(e) => {
+                error!("Chat completion error: {e}");
+                Ok(Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(
+                        serde_json::json!({"error": format!("{}", e)})
+                            .to_string()
+                            .into(),
+                    ))
+                    .unwrap())
+            }
         }
     }
 
@@ -1420,10 +1524,14 @@ impl Gateway {
                     .as_ref()
                     .and_then(|s| s.auth_methods.first()).map_or_else(|| "none".to_string(), |m| m.id.clone());
 
+                let configured_cache = self.provider_configured.read().await;
+                let available = configured_cache.get(&provider_id).copied().unwrap_or(false);
+                drop(configured_cache);
+
                 statuses.push(ProviderStatus {
                     id: provider_id,
                     name,
-                    available: true,
+                    available,
                     auth_type,
                     models,
                     supports_streaming: caps.supports_streaming,
@@ -1464,6 +1572,136 @@ impl Gateway {
     }
 
 
+
+    // ==================== Session API Handlers ====================
+
+    /// Handle list sessions (GET /api/sessions?agent_id=xxx)
+    async fn handle_list_sessions(
+        &self,
+        req: Request<IncomingBody>,
+    ) -> std::result::Result<Response<Full<hyper::body::Bytes>>, hyper::Error> {
+        // Parse optional query params
+        let uri = req.uri();
+        let query_string = uri.query().unwrap_or("");
+        let mut agent_id_filter: Option<String> = None;
+
+        for pair in query_string.split('&') {
+            if let Some(val) = pair.strip_prefix("agent_id=") {
+                if !val.is_empty() {
+                    agent_id_filter = Some(val.to_string());
+                }
+            }
+        }
+
+        let query = crate::session::SessionQuery {
+            agent_id: agent_id_filter,
+            exclude_archived: true,
+            limit: Some(100),
+            ..Default::default()
+        };
+
+        match self.session_manager.query_sessions(query).await {
+            Ok(sessions) => {
+                let json = serde_json::to_string(&sessions).unwrap_or_else(|_| "[]".to_string());
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(json.into()))
+                    .unwrap())
+            }
+            Err(e) => Ok(Self::json_error(&format!("Failed to query sessions: {e}"), StatusCode::INTERNAL_SERVER_ERROR)),
+        }
+    }
+
+    /// Handle create session (POST /api/sessions)
+    async fn handle_create_session(
+        &self,
+        req: Request<IncomingBody>,
+    ) -> std::result::Result<Response<Full<hyper::body::Bytes>>, hyper::Error> {
+        let body = req.collect().await.unwrap_or_default().to_bytes();
+        let body_str = String::from_utf8_lossy(&body);
+
+        #[derive(Deserialize)]
+        struct CreateSessionRequest {
+            agent_id: Option<String>,
+            model: Option<String>,
+        }
+
+        let parsed: CreateSessionRequest = match serde_json::from_str(&body_str) {
+            Ok(v) => v,
+            Err(e) => return Ok(Self::json_error(&format!("Invalid JSON: {e}"), StatusCode::BAD_REQUEST)),
+        };
+
+        // Use agent_id if provided, otherwise "ad-hoc"
+        let agent_id = parsed.agent_id.as_deref().unwrap_or("ad-hoc");
+        let session_key = uuid::Uuid::new_v4().to_string();
+
+        match self.session_manager.create_session(agent_id, &session_key).await {
+            Ok(mut session) => {
+                // Store model in metadata for ad-hoc sessions
+                if let Some(model) = parsed.model {
+                    session.set_metadata("model", &model);
+                    let _ = self.session_manager.update_session(&session).await;
+                }
+
+                let json = serde_json::to_string(&session).unwrap_or_else(|_| "{}".to_string());
+                Ok(Response::builder()
+                    .status(StatusCode::CREATED)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(json.into()))
+                    .unwrap())
+            }
+            Err(e) => Ok(Self::json_error(&format!("Failed to create session: {e}"), StatusCode::INTERNAL_SERVER_ERROR)),
+        }
+    }
+
+    /// Handle delete session (DELETE /api/sessions/{id})
+    async fn handle_delete_session(
+        &self,
+        path: &str,
+    ) -> std::result::Result<Response<Full<hyper::body::Bytes>>, hyper::Error> {
+        let session_id = path.strip_prefix("/api/sessions/").unwrap_or("");
+        if session_id.is_empty() {
+            return Ok(Self::json_error("Missing session ID", StatusCode::BAD_REQUEST));
+        }
+
+        match self.session_manager.archive_session(session_id).await {
+            Ok(()) => {
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new("{\"archived\":true}".into()))
+                    .unwrap())
+            }
+            Err(e) => Ok(Self::json_error(&format!("Failed to archive session: {e}"), StatusCode::NOT_FOUND)),
+        }
+    }
+
+    /// Handle get session messages (GET /api/sessions/{id}/messages)
+    async fn handle_get_session_messages(
+        &self,
+        path: &str,
+    ) -> std::result::Result<Response<Full<hyper::body::Bytes>>, hyper::Error> {
+        let session_id = path
+            .strip_prefix("/api/sessions/")
+            .and_then(|p| p.strip_suffix("/messages"))
+            .unwrap_or("");
+        if session_id.is_empty() {
+            return Ok(Self::json_error("Missing session ID", StatusCode::BAD_REQUEST));
+        }
+
+        match self.session_manager.get_message_history(session_id, Some(200), None).await {
+            Ok(history) => {
+                let json = serde_json::to_string(&history).unwrap_or_else(|_| r#"{"messages":[],"total_count":0}"#.to_string());
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(json.into()))
+                    .unwrap())
+            }
+            Err(e) => Ok(Self::json_error(&format!("Failed to get messages: {e}"), StatusCode::INTERNAL_SERVER_ERROR)),
+        }
+    }
 
     // ==================== Gateway Management Handlers ====================
 
@@ -1716,12 +1954,8 @@ impl Gateway {
             let session_count = self.session_manager
                 .query_sessions(crate::session::SessionQuery {
                     agent_id: Some(id.clone()),
-                    session_key: None,
-                    state: None,
-                    created_after: None,
-                    created_before: None,
-                    limit: None,
-                    offset: None,
+                    exclude_archived: true,
+                    ..Default::default()
                 })
                 .await
                 .map(|s| s.len())
@@ -2153,6 +2387,7 @@ impl Clone for Gateway {
             session_manager: Arc::clone(&self.session_manager),
             credential_manager: self.credential_manager.clone(),
             llm_registry: Arc::clone(&self.llm_registry),
+            provider_configured: Arc::clone(&self.provider_configured),
             channel_registry: Arc::clone(&self.channel_registry),
             tool_provider_registry: Arc::clone(&self.tool_provider_registry),
             ws_connections: Arc::clone(&self.ws_connections),

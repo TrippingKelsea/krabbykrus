@@ -47,6 +47,7 @@ use crate::{
     StreamingDelta, ToolCall, FunctionCall, ToolDefinition, Usage,
 };
 use async_trait::async_trait;
+use aws_sdk_bedrockruntime::config::ProvideCredentials;
 use aws_sdk_bedrockruntime::{
     Client,
     types::{
@@ -180,10 +181,14 @@ pub enum BedrockAuthMode {
 /// AWS Bedrock provider
 pub struct BedrockProvider {
     client: Client,
+    /// Control plane client for listing models
+    bedrock_client: aws_sdk_bedrock::Client,
     #[allow(dead_code)]
     region: String,
     #[allow(dead_code)]
     auth_mode: BedrockAuthMode,
+    /// Stored AWS SDK config for credential probing in is_configured()
+    sdk_config: aws_config::SdkConfig,
 }
 
 impl BedrockProvider {
@@ -196,12 +201,17 @@ impl BedrockProvider {
 
         Ok(Self {
             client: Client::new(&config),
+            bedrock_client: aws_sdk_bedrock::Client::new(&config),
             region: region.to_string(),
             auth_mode: BedrockAuthMode::AwsCredentials,
+            sdk_config: config,
         })
     }
 
-    /// Create a new Bedrock provider using default region from AWS config
+    /// Create a new Bedrock provider using default region from AWS config.
+    ///
+    /// Always succeeds — credential validation is deferred to `is_configured()`.
+    /// This ensures the provider's schema and auth forms are always visible in the UI.
     pub async fn from_env() -> Result<Self> {
         let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .load()
@@ -212,8 +222,10 @@ impl BedrockProvider {
 
         Ok(Self {
             client: Client::new(&config),
+            bedrock_client: aws_sdk_bedrock::Client::new(&config),
             region,
             auth_mode: BedrockAuthMode::AwsCredentials,
+            sdk_config: config,
         })
     }
 
@@ -239,8 +251,10 @@ impl BedrockProvider {
 
         Ok(Self {
             client: Client::new(&aws_config),
+            bedrock_client: aws_sdk_bedrock::Client::new(&aws_config),
             region: region.to_string(),
             auth_mode: BedrockAuthMode::AgentCoreOAuth2(config),
+            sdk_config: aws_config,
         })
     }
 
@@ -267,16 +281,144 @@ impl BedrockProvider {
 
         Ok(Self {
             client: Client::new(&aws_config),
+            bedrock_client: aws_sdk_bedrock::Client::new(&aws_config),
             region: region.to_string(),
             auth_mode: BedrockAuthMode::AgentCoreApiKey {
                 credential_provider_name: credential_provider_name.to_string(),
             },
+            sdk_config: aws_config,
         })
     }
 
     /// Get the current auth mode
     pub fn auth_mode(&self) -> &BedrockAuthMode {
         &self.auth_mode
+    }
+
+    /// List models from the Bedrock ListFoundationModels API.
+    ///
+    /// Filters to models that support the Converse API (ON_DEMAND inference)
+    /// and are actively available.
+    async fn list_models_from_api(&self) -> Result<Vec<ModelInfo>> {
+        use aws_sdk_bedrock::types::InferenceType;
+
+        let resp = self.bedrock_client
+            .list_foundation_models()
+            .by_inference_type(InferenceType::OnDemand)
+            .send()
+            .await
+            .map_err(|e| LlmError::ApiError {
+                message: format!("Failed to list Bedrock models: {e}"),
+            })?;
+
+        let mut models = Vec::new();
+        for summary in resp.model_summaries() {
+            let model_id: &str = summary.model_id();
+            let model_name = summary.model_name().unwrap_or(model_id);
+            let provider_name = summary.provider_name().unwrap_or("Unknown");
+
+            // Skip models that don't support streaming (basic filter for Converse-compatible)
+            let supports_streaming = summary.response_streaming_supported().unwrap_or(false);
+
+            // Extract capabilities from input modalities
+            let supports_vision = summary.input_modalities()
+                .iter()
+                .any(|m| m.as_str() == "IMAGE");
+
+            // Estimate context window and max output from known providers
+            let (context_window, max_output) = Self::estimate_model_limits(model_id);
+
+            models.push(ModelInfo {
+                id: model_id.to_string(),
+                name: format!("{model_name} ({provider_name})"),
+                description: format!("{provider_name} {model_name} via AWS Bedrock"),
+                context_window,
+                max_output_tokens: Some(max_output),
+                supports_tools: supports_streaming, // Converse-capable models generally support tools
+                supports_vision,
+            });
+        }
+
+        Ok(models)
+    }
+
+    /// Estimate context window and max output tokens for known model families.
+    /// The Bedrock ListFoundationModels API doesn't return these values directly.
+    fn estimate_model_limits(model_id: &str) -> (u32, u32) {
+        if model_id.contains("claude") {
+            (200_000, 8192)
+        } else if model_id.contains("nova-pro") {
+            (300_000, 5120)
+        } else if model_id.contains("nova-lite") {
+            (300_000, 5120)
+        } else if model_id.contains("nova-micro") {
+            (128_000, 5120)
+        } else if model_id.contains("llama") {
+            (128_000, 4096)
+        } else if model_id.contains("mistral-large") || model_id.contains("mixtral") {
+            (128_000, 4096)
+        } else if model_id.contains("mistral") {
+            (32_000, 4096)
+        } else if model_id.contains("titan") {
+            (32_000, 4096)
+        } else if model_id.contains("command") {
+            (128_000, 4096)
+        } else if model_id.contains("jamba") {
+            (256_000, 4096)
+        } else {
+            (32_000, 4096) // conservative default
+        }
+    }
+
+    /// Fallback model list when the API call fails (e.g. no credentials)
+    fn fallback_models() -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "anthropic.claude-sonnet-4-20250514-v1:0".to_string(),
+                name: "Claude Sonnet 4 (Bedrock)".to_string(),
+                description: "Claude Sonnet 4 via AWS Bedrock".to_string(),
+                context_window: 200_000,
+                max_output_tokens: Some(8192),
+                supports_tools: true,
+                supports_vision: true,
+            },
+            ModelInfo {
+                id: "anthropic.claude-opus-4-20250514-v1:0".to_string(),
+                name: "Claude Opus 4 (Bedrock)".to_string(),
+                description: "Claude Opus 4 via AWS Bedrock".to_string(),
+                context_window: 200_000,
+                max_output_tokens: Some(8192),
+                supports_tools: true,
+                supports_vision: true,
+            },
+            ModelInfo {
+                id: "anthropic.claude-3-5-haiku-20241022-v1:0".to_string(),
+                name: "Claude 3.5 Haiku (Bedrock)".to_string(),
+                description: "Claude 3.5 Haiku via AWS Bedrock".to_string(),
+                context_window: 200_000,
+                max_output_tokens: Some(8192),
+                supports_tools: true,
+                supports_vision: true,
+            },
+            ModelInfo {
+                id: "amazon.nova-pro-v1:0".to_string(),
+                name: "Amazon Nova Pro".to_string(),
+                description: "Amazon's Nova Pro model".to_string(),
+                context_window: 300_000,
+                max_output_tokens: Some(5120),
+                supports_tools: true,
+                supports_vision: true,
+            },
+            ModelInfo {
+                id: "amazon.nova-lite-v1:0".to_string(),
+                name: "Amazon Nova Lite".to_string(),
+                description: "Amazon's Nova Lite model".to_string(),
+                context_window: 300_000,
+                max_output_tokens: Some(5120),
+                supports_tools: true,
+                supports_vision: true,
+            },
+        ]
     }
 
     /// Normalize model ID (strip provider prefix)
@@ -644,6 +786,19 @@ impl LlmProvider for BedrockProvider {
         })
     }
 
+    async fn is_configured(&self) -> bool {
+        // Check bearer token env var first (alternative auth for any mode)
+        if std::env::var("AWS_BEARER_TOKEN_BEDROCK").is_ok() {
+            return true;
+        }
+        // Probe the credential chain using the same config the client was built with
+        if let Some(creds) = self.sdk_config.credentials_provider() {
+            creds.provide_credentials().await.is_ok()
+        } else {
+            false
+        }
+    }
+
     async fn chat_completion(
         &self,
         request: ChatCompletionRequest,
@@ -676,8 +831,15 @@ impl LlmProvider for BedrockProvider {
             );
         }
 
-        let response = req.send().await.map_err(|e| LlmError::ApiError {
-            message: format!("Bedrock API error: {e}"),
+        let response = req.send().await.map_err(|e| {
+            // Include full error chain for better diagnostics
+            let mut msg = format!("Bedrock API error: {e}");
+            let mut source = std::error::Error::source(&e);
+            while let Some(cause) = source {
+                msg.push_str(&format!(" — caused by: {cause}"));
+                source = std::error::Error::source(cause);
+            }
+            LlmError::ApiError { message: msg }
         })?;
 
         let mut content = String::new();
@@ -859,53 +1021,15 @@ impl LlmProvider for BedrockProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>> {
-        Ok(vec![
-            ModelInfo {
-                id: "anthropic.claude-sonnet-4-20250514-v1:0".to_string(),
-                name: "Claude Sonnet 4 (Bedrock)".to_string(),
-                description: "Claude Sonnet 4 via AWS Bedrock".to_string(),
-                context_window: 200000,
-                max_output_tokens: Some(8192),
-                supports_tools: true,
-                supports_vision: true,
-            },
-            ModelInfo {
-                id: "anthropic.claude-opus-4-20250514-v1:0".to_string(),
-                name: "Claude Opus 4 (Bedrock)".to_string(),
-                description: "Claude Opus 4 via AWS Bedrock".to_string(),
-                context_window: 200000,
-                max_output_tokens: Some(8192),
-                supports_tools: true,
-                supports_vision: true,
-            },
-            ModelInfo {
-                id: "anthropic.claude-3-5-haiku-20241022-v1:0".to_string(),
-                name: "Claude 3.5 Haiku (Bedrock)".to_string(),
-                description: "Claude 3.5 Haiku via AWS Bedrock".to_string(),
-                context_window: 200000,
-                max_output_tokens: Some(8192),
-                supports_tools: true,
-                supports_vision: true,
-            },
-            ModelInfo {
-                id: "amazon.nova-pro-v1:0".to_string(),
-                name: "Amazon Nova Pro".to_string(),
-                description: "Amazon's Nova Pro model".to_string(),
-                context_window: 300000,
-                max_output_tokens: Some(5120),
-                supports_tools: true,
-                supports_vision: true,
-            },
-            ModelInfo {
-                id: "amazon.nova-lite-v1:0".to_string(),
-                name: "Amazon Nova Lite".to_string(),
-                description: "Amazon's Nova Lite model".to_string(),
-                context_window: 300000,
-                max_output_tokens: Some(5120),
-                supports_tools: true,
-                supports_vision: true,
-            },
-        ])
+        // Try to list models from the Bedrock API
+        match self.list_models_from_api().await {
+            Ok(models) if !models.is_empty() => Ok(models),
+            Ok(_) | Err(_) => {
+                // Fallback to well-known models if API call fails
+                // (e.g., credentials not configured, permissions insufficient)
+                Ok(Self::fallback_models())
+            }
+        }
     }
 
     async fn get_model_info(&self, model_id: &str) -> Result<ModelInfo> {

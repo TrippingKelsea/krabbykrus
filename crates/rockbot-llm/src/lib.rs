@@ -146,6 +146,13 @@ pub trait LlmProvider: Send + Sync {
     fn credential_schema(&self) -> Option<CredentialSchema> {
         None
     }
+
+    /// Check if this provider has valid credentials configured and can make API calls.
+    /// Providers should override this to probe their specific auth requirements.
+    /// Default returns true (assumes no auth / always ready).
+    async fn is_configured(&self) -> bool {
+        true
+    }
 }
 
 /// Provider capabilities

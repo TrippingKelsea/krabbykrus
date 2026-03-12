@@ -71,24 +71,45 @@ fn render_provider_list(frame: &mut Frame, area: Rect, state: &AppState, effect_
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title("LLM Providers");
+        .title("Models");
 
-    let items: Vec<ListItem> = state
-        .providers
-        .iter()
-        .map(|provider| {
-            let (indicator, indicator_style) = if provider.available {
-                ("● ", Style::default().fg(palette::CONFIGURED))
-            } else {
-                ("○ ", Style::default().fg(palette::UNCONFIGURED))
-            };
+    // Build a tree view: provider header + indented models
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut tree_index_to_provider: Vec<usize> = Vec::new(); // maps list row -> provider index
 
-            ListItem::new(Line::from(vec![
-                Span::styled(indicator, indicator_style),
-                Span::raw(&provider.name),
-            ]))
-        })
-        .collect();
+    for (pi, provider) in state.providers.iter().enumerate() {
+        let (indicator, indicator_style) = if provider.available {
+            ("● ", Style::default().fg(palette::CONFIGURED))
+        } else {
+            ("○ ", Style::default().fg(palette::UNCONFIGURED))
+        };
+
+        // Provider header row
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(indicator, indicator_style),
+            Span::styled(
+                &provider.name,
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" ({})", provider.models.len()),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])));
+        tree_index_to_provider.push(pi);
+
+        // Model rows (indented)
+        for model in &provider.models {
+            let ctx = format!(" {}k", model.context_window / 1000);
+            items.push(ListItem::new(Line::from(vec![
+                Span::raw("    "),
+                Span::styled("• ", Style::default().fg(Color::DarkGray)),
+                Span::raw(&model.name),
+                Span::styled(ctx, Style::default().fg(Color::DarkGray)),
+            ])));
+            tree_index_to_provider.push(pi);
+        }
+    }
 
     let highlight_style = if !state.sidebar_focus {
         Style::default()
@@ -106,9 +127,14 @@ fn render_provider_list(frame: &mut Frame, area: Rect, state: &AppState, effect_
         .highlight_style(highlight_style)
         .highlight_symbol("▶ ");
 
+    // Find the row index for the selected provider
+    let selected_row = tree_index_to_provider
+        .iter()
+        .position(|&pi| pi == state.selected_provider)
+        .unwrap_or(0);
+
     let mut list_state = ListState::default();
-    let idx = state.selected_provider.min(state.providers.len().saturating_sub(1));
-    list_state.select(Some(idx));
+    list_state.select(Some(selected_row));
 
     frame.render_stateful_widget(list, area, &mut list_state);
 }

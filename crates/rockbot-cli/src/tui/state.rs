@@ -54,6 +54,9 @@ pub enum Message {
     // Sessions
     SessionsLoaded(Vec<SessionInfo>),
     SessionsError(String),
+    ReloadSessions,
+    SessionCreated(String),     // session id
+    SessionCreateError(String),
     
     // Vault/Credentials
     VaultStatus(VaultStatus),
@@ -66,14 +69,16 @@ pub enum Message {
     
     // Models
     ModelsLoaded(Vec<ModelProvider>),
+    ReloadProviders,
 
     // Credential schemas (from gateway)
     CredentialSchemasLoaded(Vec<CredentialSchemaInfo>),
     
     // Chat
-    ChatResponse(String),       // AI response text
-    ChatError(String),          // Chat error
-    ChatStreamChunk(String),    // Streaming chunk (for future use)
+    ChatResponse(String, String),       // (session_key, AI response text)
+    ChatError(String, String),          // (session_key, error text)
+    ChatStreamChunk(String),            // Streaming chunk (for future use)
+    SessionMessagesLoaded(String, Vec<ChatMessage>), // (session_key, messages)
     
     // UI feedback
     SetStatus(String, bool), // (message, is_error)
@@ -206,6 +211,16 @@ pub struct SessionInfo {
     pub channel: Option<String>,
     pub started_at: Option<String>,
     pub message_count: usize,
+    pub model: Option<String>,
+}
+
+/// Per-session chat state
+#[derive(Debug, Clone, Default)]
+pub struct SessionChatState {
+    pub messages: Vec<ChatMessage>,
+    pub scroll: usize,
+    pub loading: bool,
+    pub loaded: bool, // Whether history has been fetched from gateway
 }
 
 /// Chat message role
@@ -349,10 +364,10 @@ pub struct AppState {
     pub sessions_error: Option<String>,
     pub selected_session: usize,
     
-    // Chat state
-    pub chat_messages: Vec<ChatMessage>,
-    pub chat_loading: bool,
-    pub chat_scroll: usize,  // Scroll position in chat view
+    // Chat state — per-session
+    pub session_chats: std::collections::HashMap<String, SessionChatState>,
+    pub chat_model: Option<String>,    // Model ID for current chat
+    pub chat_agent_id: Option<String>, // Agent ID if agent-bound session
     
     // Vault/Credentials
     pub vault: VaultStatus,
@@ -401,6 +416,8 @@ pub enum InputMode {
     AddAgent(EditAgentState),
     /// Edit agent modal
     EditAgent(EditAgentState),
+    /// Create session modal
+    CreateSession(CreateSessionState),
     /// Confirmation dialog
     Confirm { message: String, action: ConfirmAction },
     /// Chat input
@@ -888,6 +905,17 @@ impl EditProviderState {
     }
 }
 
+/// A model option for the model picker dropdown
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelOption {
+    /// Display-friendly label (e.g., "Claude Sonnet 4")
+    pub label: String,
+    /// Value to store (e.g., "anthropic/claude-sonnet-4-20250514")
+    pub value: String,
+    /// Provider name for grouping
+    pub provider: String,
+}
+
 /// State for the "Add/Edit Agent" modal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditAgentState {
@@ -909,6 +937,10 @@ pub struct EditAgentState {
     pub system_prompt: String,
     /// Whether the agent is enabled
     pub enabled: bool,
+    /// Available models for picker (populated from providers)
+    pub available_models: Vec<ModelOption>,
+    /// Currently selected model index in the picker (-1 or None = custom text)
+    pub selected_model_index: Option<usize>,
 }
 
 impl Default for EditAgentState {
@@ -939,6 +971,8 @@ impl EditAgentState {
             max_tool_calls: "10".to_string(),
             system_prompt: String::new(),
             enabled: true,
+            available_models: Vec::new(),
+            selected_model_index: None,
         }
     }
 
@@ -953,6 +987,62 @@ impl EditAgentState {
             max_tool_calls: agent.max_tool_calls.map_or_else(|| "10".to_string(), |n| n.to_string()),
             system_prompt: agent.system_prompt.clone().unwrap_or_default(),
             enabled: agent.enabled,
+            available_models: Vec::new(),
+            selected_model_index: None,
+        }
+    }
+
+    /// Populate the model picker from available providers
+    pub fn populate_models(&mut self, providers: &[ModelProvider]) {
+        self.available_models.clear();
+        for provider in providers {
+            if !provider.available {
+                continue;
+            }
+            for model in &provider.models {
+                let value = format!("{}/{}", provider.id, model.id);
+                self.available_models.push(ModelOption {
+                    label: format!("{} ({})", model.name, provider.name),
+                    value: value.clone(),
+                    provider: provider.name.clone(),
+                });
+                // If current model matches, select it
+                if self.model == value {
+                    self.selected_model_index = Some(self.available_models.len() - 1);
+                }
+            }
+        }
+    }
+
+    /// Cycle to next model in the picker
+    pub fn next_model(&mut self) {
+        if self.available_models.is_empty() {
+            return;
+        }
+        let next = match self.selected_model_index {
+            Some(i) if i + 1 < self.available_models.len() => Some(i + 1),
+            Some(_) => None, // wrap to "custom" (no selection)
+            None => Some(0),
+        };
+        self.selected_model_index = next;
+        if let Some(idx) = next {
+            self.model = self.available_models[idx].value.clone();
+        }
+    }
+
+    /// Cycle to previous model in the picker
+    pub fn prev_model(&mut self) {
+        if self.available_models.is_empty() {
+            return;
+        }
+        let prev = match self.selected_model_index {
+            Some(0) => None, // wrap to "custom"
+            Some(i) => Some(i - 1),
+            None => Some(self.available_models.len() - 1),
+        };
+        self.selected_model_index = prev;
+        if let Some(idx) = prev {
+            self.model = self.available_models[idx].value.clone();
         }
     }
 
@@ -980,11 +1070,18 @@ impl EditAgentState {
         }
     }
 
+    /// Returns true if the model field is using the picker (has available models)
+    pub fn is_model_picker_active(&self) -> bool {
+        self.field_index == 1 && !self.available_models.is_empty()
+    }
+
     /// Get mutable reference to current field value
     pub fn current_value_mut(&mut self) -> Option<&mut String> {
         match self.field_index {
             0 => if !self.is_edit { Some(&mut self.id) } else { None },
-            1 => Some(&mut self.model),
+            // Model field: only allow text input if no models are available (fallback)
+            1 if self.available_models.is_empty() => Some(&mut self.model),
+            1 => None, // picker mode — use next_model/prev_model instead
             2 => Some(&mut self.parent_id),
             3 => Some(&mut self.workspace),
             4 => Some(&mut self.max_tool_calls),
@@ -1013,6 +1110,121 @@ impl EditAgentState {
                 return Some("Max tool calls must be a number".to_string());
             }
         None
+    }
+}
+
+/// Session creation mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionMode {
+    /// Ad-hoc: no agent, user picks model, not in agent memory
+    AdHoc,
+    /// Agent-bound: picks agent, model from agent config, goes to agent memory
+    AgentBound,
+}
+
+/// State for the "Create Session" modal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateSessionState {
+    /// Current mode
+    pub mode: SessionMode,
+    /// Current field index (0=mode, 1=model/agent picker)
+    pub field_index: usize,
+    /// Selected model for ad-hoc mode
+    pub available_models: Vec<ModelOption>,
+    pub selected_model_index: usize,
+    /// Selected agent for agent-bound mode
+    pub available_agents: Vec<(String, String)>, // (id, display_name)
+    pub selected_agent_index: usize,
+}
+
+impl CreateSessionState {
+    pub fn new(providers: &[ModelProvider], agents: &[AgentInfo]) -> Self {
+        let mut available_models = Vec::new();
+        for provider in providers {
+            if !provider.available {
+                continue;
+            }
+            for model in &provider.models {
+                available_models.push(ModelOption {
+                    label: format!("{} ({})", model.name, provider.name),
+                    value: format!("{}/{}", provider.id, model.id),
+                    provider: provider.name.clone(),
+                });
+            }
+        }
+
+        let available_agents: Vec<(String, String)> = agents.iter()
+            .filter(|a| a.enabled)
+            .map(|a| {
+                let display = if let Some(ref model) = a.model {
+                    format!("{} [{}]", a.id, model)
+                } else {
+                    a.id.clone()
+                };
+                (a.id.clone(), display)
+            })
+            .collect();
+
+        Self {
+            mode: SessionMode::AdHoc,
+            field_index: 1, // Start on the model/agent picker for quick selection
+            available_models,
+            selected_model_index: 0,
+            available_agents,
+            selected_agent_index: 0,
+        }
+    }
+
+    pub fn toggle_mode(&mut self) {
+        self.mode = match self.mode {
+            SessionMode::AdHoc => SessionMode::AgentBound,
+            SessionMode::AgentBound => SessionMode::AdHoc,
+        };
+        self.field_index = 0;
+    }
+
+    pub fn next_option(&mut self) {
+        match (self.mode, self.field_index) {
+            (SessionMode::AdHoc, 1) if !self.available_models.is_empty() => {
+                self.selected_model_index = (self.selected_model_index + 1) % self.available_models.len();
+            }
+            (SessionMode::AgentBound, 1) if !self.available_agents.is_empty() => {
+                self.selected_agent_index = (self.selected_agent_index + 1) % self.available_agents.len();
+            }
+            _ => {}
+        }
+    }
+
+    pub fn prev_option(&mut self) {
+        match (self.mode, self.field_index) {
+            (SessionMode::AdHoc, 1) if !self.available_models.is_empty() => {
+                if self.selected_model_index == 0 {
+                    self.selected_model_index = self.available_models.len() - 1;
+                } else {
+                    self.selected_model_index -= 1;
+                }
+            }
+            (SessionMode::AgentBound, 1) if !self.available_agents.is_empty() => {
+                if self.selected_agent_index == 0 {
+                    self.selected_agent_index = self.available_agents.len() - 1;
+                } else {
+                    self.selected_agent_index -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn selected_model(&self) -> Option<&str> {
+        self.available_models.get(self.selected_model_index).map(|m| m.value.as_str())
+    }
+
+    pub fn selected_agent_id(&self) -> Option<&str> {
+        self.available_agents.get(self.selected_agent_index).map(|(id, _)| id.as_str())
+    }
+
+    pub fn total_fields(&self) -> usize {
+        2 // mode selector + model/agent picker
     }
 }
 
@@ -1353,9 +1565,9 @@ impl AppState {
             sessions_error: None,
             selected_session: 0,
             
-            chat_messages: Vec::new(),
-            chat_loading: false,
-            chat_scroll: 0,
+            session_chats: std::collections::HashMap::new(),
+            chat_model: None,
+            chat_agent_id: None,
             
             vault: VaultStatus::default(),
             vault_loading: true,
@@ -1431,6 +1643,18 @@ impl AppState {
                 self.sessions_loading = false;
                 self.sessions_error = Some(err);
             }
+            Message::ReloadSessions => {
+                self.sessions_loading = true;
+            }
+            Message::ReloadProviders => {
+                // Handled in app.rs handle_message — no state change needed
+            }
+            Message::SessionCreated(id) => {
+                self.status_message = Some((format!("Session '{id}' created"), false));
+            }
+            Message::SessionCreateError(err) => {
+                self.status_message = Some((format!("Failed to create session: {err}"), true));
+            }
             
             Message::VaultStatus(status) => {
                 // Debug: log vault status
@@ -1470,16 +1694,23 @@ impl AppState {
                 self.credential_schemas = schemas;
             }
 
-            Message::ChatResponse(content) => {
-                self.chat_messages.push(ChatMessage::assistant(content));
-                self.chat_loading = false;
+            Message::ChatResponse(session_key, content) => {
+                let chat = self.session_chats.entry(session_key).or_default();
+                chat.messages.push(ChatMessage::assistant(content));
+                chat.loading = false;
             }
-            Message::ChatError(err) => {
-                self.chat_messages.push(ChatMessage::system(format!("Error: {err}")));
-                self.chat_loading = false;
+            Message::ChatError(session_key, err) => {
+                let chat = self.session_chats.entry(session_key).or_default();
+                chat.messages.push(ChatMessage::system(format!("Error: {err}")));
+                chat.loading = false;
             }
             Message::ChatStreamChunk(_chunk) => {
                 // TODO: Handle streaming chunks for incremental display
+            }
+            Message::SessionMessagesLoaded(session_key, messages) => {
+                let chat = self.session_chats.entry(session_key).or_default();
+                chat.messages = messages;
+                chat.loaded = true;
             }
             
             Message::SetStatus(msg, is_error) => {
@@ -1507,6 +1738,38 @@ impl AppState {
     /// Number of registered LLM providers (dynamic, loaded from gateway)
     pub fn model_provider_count(&self) -> usize {
         self.providers.len().max(1) // At least 1 to avoid div-by-zero
+    }
+
+    /// Get the currently selected session's key (ID)
+    pub fn active_session_key(&self) -> Option<&str> {
+        self.sessions.get(self.selected_session).map(|s| s.key.as_str())
+    }
+
+    /// Get the chat state for the currently selected session
+    pub fn active_chat(&self) -> Option<&SessionChatState> {
+        self.active_session_key()
+            .and_then(|key| self.session_chats.get(key))
+    }
+
+    /// Get mutable chat state for the currently selected session, creating if needed
+    pub fn active_chat_mut(&mut self) -> Option<&mut SessionChatState> {
+        let key = self.sessions.get(self.selected_session)?.key.clone();
+        Some(self.session_chats.entry(key).or_default())
+    }
+
+    /// Convenience: chat messages for active session
+    pub fn chat_messages(&self) -> &[ChatMessage] {
+        self.active_chat().map_or(&[], |c| &c.messages)
+    }
+
+    /// Convenience: is chat loading for active session
+    pub fn chat_loading(&self) -> bool {
+        self.active_chat().map_or(false, |c| c.loading)
+    }
+
+    /// Convenience: chat scroll for active session
+    pub fn chat_scroll(&self) -> usize {
+        self.active_chat().map_or(0, |c| c.scroll)
     }
     
     /// Number of credential categories (All, Model, Communication, Tool)

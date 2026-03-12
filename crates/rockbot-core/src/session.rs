@@ -83,6 +83,8 @@ pub struct SessionQuery {
     pub agent_id: Option<String>,
     pub session_key: Option<String>,
     pub state: Option<SessionState>,
+    /// If true, exclude archived sessions from results
+    pub exclude_archived: bool,
     pub created_after: Option<DateTime<Utc>>,
     pub created_before: Option<DateTime<Utc>>,
     pub limit: Option<usize>,
@@ -455,7 +457,19 @@ impl SessionManager {
             sql.push_str(" AND session_key = ?");
             params.push(Box::new(session_key.clone()));
         }
-        
+
+        if let Some(ref state) = query.state {
+            let state_json = serde_json::to_string(state).unwrap_or_else(|_| "\"active\"".to_string());
+            sql.push_str(" AND state = ?");
+            params.push(Box::new(state_json));
+        }
+
+        if query.exclude_archived {
+            let archived_json = serde_json::to_string(&SessionState::Archived).unwrap_or_else(|_| "\"archived\"".to_string());
+            sql.push_str(" AND state != ?");
+            params.push(Box::new(archived_json));
+        }
+
         if let Some(ref created_after) = query.created_after {
             sql.push_str(" AND created_at >= ?");
             params.push(Box::new(created_after.timestamp()));

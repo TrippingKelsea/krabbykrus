@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::state::{AddCredentialState, AgentInfo, EditAgentState, EditCredentialState, EditProviderState, SessionInfo, get_fields_for_endpoint_type};
+use crate::tui::state::{AddCredentialState, AgentInfo, CreateSessionState, EditAgentState, EditCredentialState, EditProviderState, SessionInfo, SessionMode, get_fields_for_endpoint_type};
 use super::centered_rect;
 
 /// Endpoint types for the add credential modal
@@ -697,11 +697,51 @@ pub fn render_edit_agent_modal(
         "e.g., my-agent", id_active, false, true,
     );
 
-    // Field 1: Model
-    render_input_field(
-        frame, chunks[1], "Model", &state.model,
-        "e.g., anthropic/claude-sonnet-4-20250514", state.field_index == 1, false, false,
-    );
+    // Field 1: Model (picker or text input)
+    if state.available_models.is_empty() {
+        render_input_field(
+            frame, chunks[1], "Model", &state.model,
+            "e.g., anthropic/claude-sonnet-4-20250514", state.field_index == 1, false, false,
+        );
+    } else {
+        let is_active = state.field_index == 1;
+        let display = if let Some(idx) = state.selected_model_index {
+            let model = &state.available_models[idx];
+            format!("◀ {} ▶", model.label)
+        } else if state.model.is_empty() {
+            "◀ (none selected) ▶".to_string()
+        } else {
+            format!("◀ {} (custom) ▶", state.model)
+        };
+        let hint = format!("{}/{} models available — ←→ to cycle",
+            state.selected_model_index.map_or(0, |i| i + 1),
+            state.available_models.len()
+        );
+        let border_style = if is_active {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title("Model");
+        let text_style = if is_active {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let content = if is_active {
+            vec![
+                Line::from(Span::styled(&display, text_style)),
+                Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))),
+            ]
+        } else {
+            vec![Line::from(Span::styled(&display, text_style))]
+        };
+        let paragraph = Paragraph::new(content).block(block);
+        frame.render_widget(paragraph, chunks[1]);
+    }
 
     // Field 2: Parent Agent (subagent)
     let parent_hint = if !state.parent_id.is_empty() {
@@ -749,4 +789,128 @@ pub fn render_edit_agent_modal(
     let help = Paragraph::new(help_text)
         .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(help, chunks[6]);
+}
+
+/// Render the create session modal
+pub fn render_create_session_modal(
+    frame: &mut Frame,
+    area: Rect,
+    state: &CreateSessionState,
+) {
+    let modal_area = centered_rect(55, 40, area);
+    frame.render_widget(Clear, modal_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title("Create Session");
+
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3), // Mode selector
+            Constraint::Length(4), // Model/Agent picker
+            Constraint::Length(2), // Help text
+            Constraint::Min(0),   // Spacer
+        ])
+        .split(inner);
+
+    // Field 0: Mode selector
+    let mode_active = state.field_index == 0;
+    let mode_border = if mode_active {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let mode_text = match state.mode {
+        SessionMode::AdHoc => "◀ Ad-Hoc (no agent) ▶",
+        SessionMode::AgentBound => "◀ Agent-Bound ▶",
+    };
+    let mode_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(mode_border)
+        .title("Session Type");
+    let mode_style = if mode_active {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+    let mode_para = Paragraph::new(Span::styled(mode_text, mode_style)).block(mode_block);
+    frame.render_widget(mode_para, chunks[0]);
+
+    // Field 1: Model or Agent picker
+    let picker_active = state.field_index == 1;
+    let picker_border = if picker_active {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let picker_style = if picker_active {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+
+    match state.mode {
+        SessionMode::AdHoc => {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(picker_border)
+                .title("Model");
+
+            let (display, hint) = if state.available_models.is_empty() {
+                ("(no models available)".to_string(), "Start gateway and configure providers".to_string())
+            } else {
+                let model = &state.available_models[state.selected_model_index];
+                (
+                    format!("◀ {} ▶", model.label),
+                    format!("{}/{} — ←→ to cycle", state.selected_model_index + 1, state.available_models.len()),
+                )
+            };
+
+            let content = vec![
+                Line::from(Span::styled(display, picker_style)),
+                Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))),
+            ];
+            let para = Paragraph::new(content).block(block);
+            frame.render_widget(para, chunks[1]);
+        }
+        SessionMode::AgentBound => {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(picker_border)
+                .title("Agent");
+
+            let (display, hint) = if state.available_agents.is_empty() {
+                ("(no agents available)".to_string(), "Create an agent first".to_string())
+            } else {
+                let (_, ref name) = state.available_agents[state.selected_agent_index];
+                (
+                    format!("◀ {} ▶", name),
+                    format!("{}/{} — ←→ to cycle", state.selected_agent_index + 1, state.available_agents.len()),
+                )
+            };
+
+            let content = vec![
+                Line::from(Span::styled(display, picker_style)),
+                Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))),
+            ];
+            let para = Paragraph::new(content).block(block);
+            frame.render_widget(para, chunks[1]);
+        }
+    }
+
+    // Help
+    let help_lines = vec![
+        Line::from(Span::styled(
+            "←→:Cycle │ Tab/↑↓:Navigate │ Enter:Create │ Esc:Cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    let help = Paragraph::new(help_lines);
+    frame.render_widget(help, chunks[2]);
 }

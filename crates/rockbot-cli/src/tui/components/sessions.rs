@@ -24,25 +24,24 @@ pub fn render_sessions(frame: &mut Frame, area: Rect, state: &AppState, effect_s
 }
 
 fn render_session_list(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
-    // Use animated border when content pane is focused
     let border_style = if !state.sidebar_focus {
         effects::active_border_style(effect_state.elapsed_secs())
     } else {
         effects::inactive_border_style()
     };
-    
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title("Active Sessions");
-    
+        .title("Sessions");
+
     if state.sessions_loading {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         render_spinner(frame, inner, "Loading...", state.tick_count);
         return;
     }
-    
+
     let items: Vec<ListItem> = if state.sessions.is_empty() {
         vec![
             ListItem::new(Span::styled(
@@ -52,18 +51,30 @@ fn render_session_list(frame: &mut Frame, area: Rect, state: &AppState, effect_s
         ]
     } else {
         state.sessions.iter().map(|session| {
-            let channel_indicator = session.channel.as_ref()
-                .map(|c| format!("[{c}] "))
+            let model_hint = session.model.as_ref()
+                .and_then(|m| m.split('/').last())
+                .map(|m| {
+                    // Shorten model IDs for display
+                    let short = if m.len() > 25 { &m[..25] } else { m };
+                    format!(" [{short}]")
+                })
                 .unwrap_or_default();
-            
+
+            let msg_count = state.session_chats
+                .get(&session.key)
+                .map_or(session.message_count, |c| c.messages.len());
+
             ListItem::new(Line::from(vec![
-                Span::styled(channel_indicator, Style::default().fg(Color::Cyan)),
-                Span::raw(&session.agent_id),
+                Span::styled(&session.agent_id, Style::default().fg(Color::White)),
+                Span::styled(model_hint, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" ({msg_count})"),
+                    Style::default().fg(Color::Cyan),
+                ),
             ]))
         }).collect()
     };
 
-    // Use active highlight only when content is focused
     let highlight_style = if !state.sidebar_focus {
         Style::default()
             .bg(palette::ACTIVE_PRIMARY)
@@ -84,85 +95,72 @@ fn render_session_list(frame: &mut Frame, area: Rect, state: &AppState, effect_s
     if !state.sessions.is_empty() {
         list_state.select(Some(state.selected_session));
     }
-    
+
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
 fn render_session_details(frame: &mut Frame, area: Rect, state: &AppState) {
-    // Check if we're in chat mode
     let is_chat_mode = matches!(state.input_mode, InputMode::ChatInput);
-    
+
+    // Build title from selected session
+    let chat_title = if let Some(session) = state.sessions.get(state.selected_session) {
+        let model_part = session.model.as_ref()
+            .and_then(|m| m.split('/').last())
+            .unwrap_or("default");
+        format!("{} — {model_part}", session.agent_id)
+    } else {
+        "Chat".to_string()
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(if is_chat_mode { "Chat" } else { "Session Details" });
+        .title(chat_title);
 
-    if is_chat_mode || !state.chat_messages.is_empty() {
-        // Chat mode - show messages and input
+    let messages = state.chat_messages();
+    let chat_loading = state.chat_loading();
+    let chat_scroll = state.chat_scroll();
+
+    if !messages.is_empty() || is_chat_mode || chat_loading {
+        // Chat view — messages + input
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(3)])
             .split(inner);
-        
-        render_chat_messages(frame, chunks[0], state);
+
+        render_chat_messages(frame, chunks[0], messages, chat_loading, chat_scroll);
         render_chat_input(frame, chunks[1], state, is_chat_mode);
-    } else if let Some(session) = state.sessions.get(state.selected_session) {
+    } else if state.sessions.is_empty() {
+        // No sessions at all
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(8), Constraint::Min(0)])
-            .split(block.inner(area));
-        
-        frame.render_widget(block, area);
-        
-        // Session info
-        let info = vec![
-            Line::from(vec![
-                Span::styled("Key: ", Style::default().fg(Color::Cyan)),
-                Span::raw(&session.key),
-            ]),
-            Line::from(vec![
-                Span::styled("Agent: ", Style::default().fg(Color::Cyan)),
-                Span::raw(&session.agent_id),
-            ]),
-            Line::from(vec![
-                Span::styled("Channel: ", Style::default().fg(Color::Cyan)),
-                Span::raw(session.channel.as_deref().unwrap_or("-")),
-            ]),
-            Line::from(vec![
-                Span::styled("Started: ", Style::default().fg(Color::Cyan)),
-                Span::raw(session.started_at.as_deref().unwrap_or("-")),
-            ]),
-            Line::from(vec![
-                Span::styled("Messages: ", Style::default().fg(Color::Cyan)),
-                Span::raw(format!("{}", session.message_count)),
-            ]),
+            .constraints([Constraint::Min(0), Constraint::Length(3)])
+            .split(inner);
+
+        let content = vec![
             Line::from(""),
             Line::from(Span::styled(
-                "[c]hat  [k]ill  [v]iew history",
+                "Press 'n' to create a new session",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Sessions let you pick a model (ad-hoc) or agent",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "and keep conversation history",
                 Style::default().fg(Color::DarkGray),
             )),
         ];
-        
-        let info_para = Paragraph::new(info);
-        frame.render_widget(info_para, chunks[0]);
-        
-        // Chat preview area
-        let chat_block = Block::default()
-            .borders(Borders::ALL)
-            .title("Recent Messages");
-        
-        let chat_content = Paragraph::new(vec![
-            Line::from(Span::styled(
-                "Press 'c' to open chat",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ])
-        .block(chat_block)
-        .alignment(Alignment::Center);
-        
-        frame.render_widget(chat_content, chunks[1]);
+        let paragraph = Paragraph::new(content).alignment(Alignment::Center);
+        frame.render_widget(paragraph, chunks[0]);
+        render_chat_input(frame, chunks[1], state, false);
     } else if let Some(err) = &state.sessions_error {
         let content = vec![
             Line::from(""),
@@ -176,50 +174,43 @@ fn render_session_details(frame: &mut Frame, area: Rect, state: &AppState) {
             .alignment(Alignment::Center);
         frame.render_widget(paragraph, area);
     } else {
-        // No session selected - show chat interface with hint
+        // Session selected but no messages yet — show empty chat with hint
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(3)])
             .split(inner);
-        
-        if state.chat_messages.is_empty() {
-            let content = vec![
-                Line::from(""),
-                Line::from(Span::styled(
-                    "Press 'c' to start chatting",
-                    Style::default().fg(Color::DarkGray),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "Make sure you have an Anthropic API key",
-                    Style::default().fg(Color::DarkGray),
-                )),
-                Line::from(Span::styled(
-                    "configured in Credentials → Providers",
-                    Style::default().fg(Color::DarkGray),
-                )),
-            ];
-            let paragraph = Paragraph::new(content).alignment(Alignment::Center);
-            frame.render_widget(paragraph, chunks[0]);
-        } else {
-            render_chat_messages(frame, chunks[0], state);
-        }
-        render_chat_input(frame, chunks[1], state, is_chat_mode);
+
+        let content = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "No messages yet. Press 'c' to start chatting.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        let paragraph = Paragraph::new(content).alignment(Alignment::Center);
+        frame.render_widget(paragraph, chunks[0]);
+        render_chat_input(frame, chunks[1], state, false);
     }
 }
 
-fn render_chat_messages(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_chat_messages(
+    frame: &mut Frame,
+    area: Rect,
+    messages: &[crate::tui::state::ChatMessage],
+    loading: bool,
+    scroll: usize,
+) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!("Messages ({})", state.chat_messages.len()));
-    
+        .title(format!("Messages ({})", messages.len()));
+
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    
-    if state.chat_messages.is_empty() {
+
+    if messages.is_empty() && !loading {
         let empty = Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -231,48 +222,43 @@ fn render_chat_messages(frame: &mut Frame, area: Rect, state: &AppState) {
         frame.render_widget(empty, inner);
         return;
     }
-    
-    // Build message lines
+
     let mut lines: Vec<Line> = Vec::new();
-    
-    for msg in &state.chat_messages {
+
+    for msg in messages {
         let (prefix, style) = match msg.role {
             ChatRole::User => ("You: ", Style::default().fg(Color::Cyan)),
             ChatRole::Assistant => ("AI: ", Style::default().fg(Color::Green)),
-            ChatRole::System => ("⚠ ", Style::default().fg(Color::Yellow)),
+            ChatRole::System => ("sys: ", Style::default().fg(Color::Yellow)),
         };
-        
-        // Add timestamp if available
+
         let timestamp = msg.timestamp.as_ref()
             .map(|t| format!("[{t}] "))
             .unwrap_or_default();
-        
-        // First line with prefix
+
         let first_line = Line::from(vec![
             Span::styled(timestamp, Style::default().fg(Color::DarkGray)),
             Span::styled(prefix.to_string(), style.add_modifier(Modifier::BOLD)),
         ]);
         lines.push(first_line);
-        
-        // Wrap message content
+
         for line in msg.content.lines() {
             lines.push(Line::from(Span::styled(format!("  {line}"), style)));
         }
-        lines.push(Line::from("")); // Spacing between messages
+        lines.push(Line::from(""));
     }
-    
-    // Show loading indicator
-    if state.chat_loading {
+
+    if loading {
         lines.push(Line::from(vec![
             Span::styled("AI: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::styled("thinking...", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
         ]));
     }
-    
+
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .scroll((state.chat_scroll as u16, 0));
-    
+        .scroll((scroll as u16, 0));
+
     frame.render_widget(paragraph, inner);
 }
 
@@ -282,27 +268,27 @@ fn render_chat_input(frame: &mut Frame, area: Rect, state: &AppState, is_active:
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    
+
     let title = if is_active {
         "Type message (Enter to send, Esc to cancel)"
     } else {
         "Press 'c' to chat"
     };
-    
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(title);
-    
+
     let input_text = if is_active {
-        format!("{}_", &state.input_buffer) // Show cursor
+        format!("{}_", &state.input_buffer)
     } else {
         state.input_buffer.clone()
     };
-    
+
     let paragraph = Paragraph::new(input_text)
         .block(block)
         .style(Style::default().fg(Color::White));
-    
+
     frame.render_widget(paragraph, area);
 }
