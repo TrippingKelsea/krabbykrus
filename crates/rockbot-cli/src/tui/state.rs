@@ -383,6 +383,11 @@ pub struct AppState {
     pub providers: Vec<ModelProvider>,
     pub selected_provider: usize,
 
+    // Dashboard card selection (Gateway=0, Agents=1, Sessions=2, Vault=3)
+    pub selected_dashboard_card: usize,
+    // Settings card selection (General=0, Paths=1, About=2)
+    pub selected_settings_card: usize,
+
     // Credential schemas (from gateway — drives Credentials->Providers forms)
     pub credential_schemas: Vec<CredentialSchemaInfo>,
     
@@ -1580,6 +1585,8 @@ impl AppState {
             
             providers: Vec::new(),
             selected_provider: 0,
+            selected_dashboard_card: 0,
+            selected_settings_card: 0,
             credential_schemas: Vec::new(),
             
             status_message: None,
@@ -1884,7 +1891,9 @@ impl AppState {
     /// Move selection up in current list
     pub fn select_prev(&mut self) {
         match self.menu_item {
-            MenuItem::Dashboard => {}
+            MenuItem::Dashboard => {
+                self.selected_dashboard_card = if self.selected_dashboard_card == 0 { 3 } else { self.selected_dashboard_card - 1 };
+            }
             MenuItem::Credentials => {
                 // Navigate based on which tab is active
                 if self.credentials_tab == 1 {
@@ -1944,14 +1953,18 @@ impl AppState {
                     self.selected_provider - 1
                 };
             }
-            MenuItem::Settings => {}
+            MenuItem::Settings => {
+                self.selected_settings_card = if self.selected_settings_card == 0 { 2 } else { self.selected_settings_card - 1 };
+            }
         }
     }
-    
+
     /// Move selection down in current list
     pub fn select_next(&mut self) {
         match self.menu_item {
-            MenuItem::Dashboard => {}
+            MenuItem::Dashboard => {
+                self.selected_dashboard_card = (self.selected_dashboard_card + 1) % 4;
+            }
             MenuItem::Credentials => {
                 // Navigate based on which tab is active
                 if self.credentials_tab == 1 {
@@ -1987,10 +2000,12 @@ impl AppState {
                 let count = self.model_provider_count();
                 self.selected_provider = (self.selected_provider + 1) % count;
             }
-            MenuItem::Settings => {}
+            MenuItem::Settings => {
+                self.selected_settings_card = (self.selected_settings_card + 1) % 3;
+            }
         }
     }
-    
+
     /// Navigate to previous menu item
     pub fn menu_prev(&mut self) {
         self.menu_index = if self.menu_index == 0 { 5 } else { self.menu_index - 1 };

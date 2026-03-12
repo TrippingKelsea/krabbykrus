@@ -2006,7 +2006,7 @@ impl App {
 
         // Content area - pass effect state for active border animation
         match self.state.menu_item {
-            MenuItem::Dashboard => render_dashboard(frame, main_chunks[0], &self.state),
+            MenuItem::Dashboard => render_dashboard(frame, main_chunks[0], &self.state, &self.effect_state),
             MenuItem::Credentials => render_credentials(frame, main_chunks[0], &self.state, self.state.credentials_tab, &self.effect_state),
             MenuItem::Agents => render_agents(frame, main_chunks[0], &self.state, &self.effect_state),
             MenuItem::Sessions => render_sessions(frame, main_chunks[0], &self.state, &self.effect_state),
@@ -2066,7 +2066,7 @@ impl App {
                 } else {
                     match self.state.menu_item {
                         MenuItem::Dashboard => {
-                            "r:Refresh │ Esc/Tab:←Sidebar │ 1-6:Quick nav".to_string()
+                            "←→:Select │ r:Refresh │ Esc/Tab:←Sidebar".to_string()
                         }
                         MenuItem::Credentials => {
                             format!(
@@ -2084,7 +2084,7 @@ impl App {
                             "←→:Select │ e:Edit │ t:Test │ Esc:←".to_string()
                         }
                         MenuItem::Settings => {
-                            "s:Start │ S:Stop │ r:Restart │ Esc/Tab:←Sidebar".to_string()
+                            "←→:Select │ s:Start │ S:Stop │ r:Restart │ Esc:←".to_string()
                         }
                     }
                 }
