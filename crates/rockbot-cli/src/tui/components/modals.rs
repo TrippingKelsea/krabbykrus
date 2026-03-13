@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::state::{AddCredentialState, AgentInfo, CreateSessionState, EditAgentState, EditCredentialState, EditProviderState, SessionInfo, SessionMode, get_fields_for_endpoint_type};
+use crate::tui::state::{AddCredentialState, AgentInfo, CredentialSchemaInfo, CreateSessionState, EditAgentState, EditCredentialState, EditPermissionState, EditProviderState, EndpointInfo, ModelProvider, PermissionRule, SessionInfo, SessionMode, get_fields_for_endpoint_type};
 use super::centered_rect;
 
 /// Endpoint types for the add credential modal
@@ -655,7 +655,24 @@ pub fn render_edit_agent_modal(
     state: &EditAgentState,
     agents: &[AgentInfo],
 ) {
-    let modal_area = centered_rect(65, 70, area);
+    // System prompt height accounting for both explicit newlines and visual wrapping
+    // Modal is 65% width, minus borders/margin, estimate inner width
+    let modal_inner_width = ((area.width as f32) * 0.65) as usize;
+    let field_inner_width = modal_inner_width.saturating_sub(4).max(1); // borders + margin
+    let prompt_line_count = {
+        state.system_prompt.split('\n').map(|line| {
+            let char_count = line.len().max(1);
+            (char_count + field_inner_width - 1) / field_inner_width
+        }).sum::<usize>().clamp(1, 10)
+    };
+    let prompt_height = (prompt_line_count as u16) + 2;
+
+    // Modal needs to be taller to accommodate the growing prompt
+    let base_percent = 70u16;
+    let extra = prompt_height.saturating_sub(3); // 3 is the default single-line height
+    let modal_percent = (base_percent + extra * 2).min(90);
+
+    let modal_area = centered_rect(65, modal_percent, area);
     frame.render_widget(Clear, modal_area);
 
     let title = if state.is_edit {
@@ -673,14 +690,14 @@ pub fn render_edit_agent_modal(
     frame.render_widget(block, modal_area);
 
     let constraints = vec![
-        Constraint::Length(3), // Agent ID
-        Constraint::Length(3), // Model
-        Constraint::Length(3), // Parent Agent
-        Constraint::Length(3), // Workspace
-        Constraint::Length(3), // Max Tool Calls
-        Constraint::Length(3), // System Prompt
-        Constraint::Length(2), // Help/subagent info
-        Constraint::Min(0),   // Spacer
+        Constraint::Length(3),             // Agent ID
+        Constraint::Length(3),             // Model
+        Constraint::Length(3),             // Parent Agent
+        Constraint::Length(3),             // Workspace
+        Constraint::Length(3),             // Max Tool Calls
+        Constraint::Length(prompt_height), // System Prompt (grows up to 12)
+        Constraint::Length(2),             // Help/subagent info
+        Constraint::Min(0),               // Spacer
     ];
 
     let chunks = Layout::default()
@@ -768,11 +785,49 @@ pub fn render_edit_agent_modal(
         "10", state.field_index == 4, false, false,
     );
 
-    // Field 5: System Prompt
-    render_input_field(
-        frame, chunks[5], "System Prompt", &state.system_prompt,
-        "optional override", state.field_index == 5, false, false,
-    );
+    // Field 5: System Prompt (multi-line textarea)
+    {
+        let prompt_active = state.field_index == 5;
+        let border_style = if prompt_active {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let label = "System Prompt";
+        let prompt_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(Span::styled(
+                label,
+                if prompt_active {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::White)
+                },
+            ));
+
+        let display_text = if state.system_prompt.is_empty() && !prompt_active {
+            "optional override".to_string()
+        } else if prompt_active {
+            format!("{}█", &state.system_prompt)
+        } else {
+            state.system_prompt.clone()
+        };
+
+        let text_style = if state.system_prompt.is_empty() && !prompt_active {
+            Style::default().fg(Color::DarkGray)
+        } else if prompt_active {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let paragraph = Paragraph::new(display_text)
+            .block(prompt_block)
+            .style(text_style)
+            .wrap(ratatui::widgets::Wrap { trim: false });
+        frame.render_widget(paragraph, chunks[5]);
+    }
 
     // Subagent info / help line
     let subagents: Vec<&str> = agents.iter()
@@ -781,9 +836,9 @@ pub fn render_edit_agent_modal(
         .collect();
 
     let help_text = if !subagents.is_empty() {
-        format!("Subagents: {} | Tab:Nav | Enter:Save | Esc:Cancel", subagents.join(", "))
+        format!("Subagents: {} | Tab:Nav | Ctrl+S:Save | Esc:Cancel", subagents.join(", "))
     } else {
-        "Tab/Up/Down:Navigate | Enter:Save | Esc:Cancel".to_string()
+        "Tab/Up/Down:Navigate | Ctrl+S:Save | Esc:Cancel".to_string()
     };
 
     let help = Paragraph::new(help_text)
@@ -913,4 +968,504 @@ pub fn render_create_session_modal(
     ];
     let help = Paragraph::new(help_lines);
     frame.render_widget(help, chunks[2]);
+}
+
+/// Render a read-only view of an endpoint
+pub fn render_view_endpoint_modal(
+    frame: &mut Frame,
+    area: Rect,
+    endpoint_index: usize,
+    endpoints: &[EndpointInfo],
+) {
+    let modal_area = centered_rect(60, 45, area);
+    frame.render_widget(Clear, modal_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title("Endpoint Details");
+
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    let content = if let Some(ep) = endpoints.get(endpoint_index) {
+        let (cred_text, cred_color) = if ep.has_credential {
+            ("Stored", Color::Green)
+        } else {
+            ("Missing", Color::Red)
+        };
+
+        vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("ID: ", Style::default().fg(Color::Cyan)),
+                Span::raw(&ep.id),
+            ]),
+            Line::from(vec![
+                Span::styled("Name: ", Style::default().fg(Color::Cyan)),
+                Span::styled(&ep.name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("Type: ", Style::default().fg(Color::Cyan)),
+                Span::raw(&ep.endpoint_type),
+            ]),
+            Line::from(vec![
+                Span::styled("URL: ", Style::default().fg(Color::Cyan)),
+                Span::raw(&ep.base_url),
+            ]),
+            Line::from(vec![
+                Span::styled("Credential: ", Style::default().fg(Color::Cyan)),
+                Span::styled(cred_text, Style::default().fg(cred_color)),
+            ]),
+            Line::from(vec![
+                Span::styled("Expires: ", Style::default().fg(Color::Cyan)),
+                Span::raw(ep.expiration.as_deref().unwrap_or("Never")),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "e:Edit │ Esc:Close",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]
+    } else {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled("Endpoint not found", Style::default().fg(Color::Red))),
+            Line::from(""),
+            Line::from(Span::styled("Esc:Close", Style::default().fg(Color::DarkGray))),
+        ]
+    };
+
+    let paragraph = Paragraph::new(content).alignment(Alignment::Left);
+
+    let inner_margin = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([Constraint::Min(0)])
+        .split(inner);
+
+    frame.render_widget(paragraph, inner_margin[0]);
+}
+
+/// Render a read-only view of a provider schema
+pub fn render_view_provider_modal(
+    frame: &mut Frame,
+    area: Rect,
+    provider_index: usize,
+    schemas: &[CredentialSchemaInfo],
+    endpoints: &[EndpointInfo],
+) {
+    let modal_area = centered_rect(60, 50, area);
+    frame.render_widget(Clear, modal_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title("Provider Details");
+
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    let content = if let Some(schema) = schemas.get(provider_index) {
+        let configured = endpoints.iter().any(|e| {
+            e.id.to_lowercase().contains(&schema.provider_id)
+                || e.name.to_lowercase().contains(&schema.provider_id)
+        });
+        let (status_text, status_color) = if configured {
+            ("Configured", Color::Green)
+        } else {
+            ("Not configured", Color::Yellow)
+        };
+
+        let cat_label = match schema.category.as_str() {
+            "model" => "Model Provider (LLM)",
+            "communication" => "Communication Channel",
+            "tool" => "Tool Integration",
+            _ => &schema.category,
+        };
+
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Provider: ", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    &schema.provider_name,
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("ID: ", Style::default().fg(Color::Cyan)),
+                Span::raw(&schema.provider_id),
+            ]),
+            Line::from(vec![
+                Span::styled("Category: ", Style::default().fg(Color::Cyan)),
+                Span::raw(cat_label),
+            ]),
+            Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(Color::Cyan)),
+                Span::styled(status_text, Style::default().fg(status_color)),
+            ]),
+        ];
+
+        // Show auth methods
+        if !schema.auth_methods.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("Auth Methods: ", Style::default().fg(Color::Cyan)),
+                Span::raw(format!("{}", schema.auth_methods.len())),
+            ]));
+            for method in &schema.auth_methods {
+                let field_count = method.fields.len();
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(&method.label, Style::default().fg(Color::White)),
+                    Span::styled(format!(" ({field_count} fields)"), Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "e:Configure │ Esc:Close",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        lines
+    } else {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled("Provider not found", Style::default().fg(Color::Red))),
+            Line::from(""),
+            Line::from(Span::styled("Esc:Close", Style::default().fg(Color::DarkGray))),
+        ]
+    };
+
+    let paragraph = Paragraph::new(content).alignment(Alignment::Left);
+
+    let provider_inner = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([Constraint::Min(0)])
+        .split(inner);
+
+    frame.render_widget(paragraph, provider_inner[0]);
+}
+
+/// Render a scrollable model list modal for a provider
+pub fn render_view_model_list_modal(
+    frame: &mut Frame,
+    area: Rect,
+    provider_index: usize,
+    scroll: usize,
+    providers: &[ModelProvider],
+) {
+    let modal_area = centered_rect(70, 70, area);
+    frame.render_widget(Clear, modal_area);
+
+    let provider = providers.get(provider_index);
+    let title = provider.map_or_else(
+        || "Models".to_string(),
+        |p| format!("{} — {} models", p.name, p.models.len()),
+    );
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(title);
+
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    let Some(provider) = provider else {
+        let msg = Paragraph::new("Provider not found")
+            .style(Style::default().fg(Color::Red));
+        frame.render_widget(msg, inner);
+        return;
+    };
+
+    if provider.models.is_empty() {
+        let msg = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled("No models available", Style::default().fg(Color::DarkGray))),
+        ])
+        .alignment(Alignment::Center);
+        frame.render_widget(msg, inner);
+        return;
+    }
+
+    let usable_height = inner.height.saturating_sub(2) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Header
+    lines.push(Line::from(Span::styled(
+        "  Model ID",
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    for (i, model) in provider.models.iter().enumerate() {
+        let is_highlighted = i == scroll;
+
+        let tokens_info = model.max_output_tokens.map_or_else(
+            || format!("{}k ctx", model.context_window / 1000),
+            |t| format!("{}k ctx, {}k out", model.context_window / 1000, t / 1000),
+        );
+
+        let prefix = if is_highlighted { "▶ " } else { "  " };
+        let name_style = if is_highlighted {
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let prefix_style = if is_highlighted {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(prefix, prefix_style),
+            Span::styled(&model.name, name_style),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(&model.id, Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("  ({tokens_info})"), Style::default().fg(Color::Cyan)),
+        ]));
+
+        if !model.description.is_empty() {
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(&model.description, Style::default().fg(Color::Gray)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Footer
+    lines.push(Line::from(Span::styled(
+        format!("↑↓:Scroll ({}/{}) │ Esc:Close", scroll + 1, provider.models.len()),
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    // Calculate scroll offset to keep the highlighted model visible
+    let mut target_line = 2; // skip header
+    for i in 0..scroll {
+        target_line += 3;
+        if !provider.models[i].description.is_empty() {
+            target_line += 1;
+        }
+    }
+    let line_scroll = if target_line + 4 > usable_height {
+        target_line.saturating_sub(2)
+    } else {
+        0
+    };
+
+    let paragraph = Paragraph::new(lines)
+        .scroll((line_scroll as u16, 0));
+
+    let model_list_inner = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([Constraint::Min(0)])
+        .split(inner);
+
+    frame.render_widget(paragraph, model_list_inner[0]);
+}
+
+/// Render the permission editor modal
+pub fn render_edit_permission_modal(
+    frame: &mut Frame,
+    area: Rect,
+    state: &EditPermissionState,
+) {
+    let modal_area = centered_rect(55, 45, area);
+    frame.render_widget(Clear, modal_area);
+
+    let title = if state.is_edit {
+        "Edit Permission".to_string()
+    } else {
+        "Add Permission".to_string()
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(title);
+
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3), // Endpoint selector
+            Constraint::Length(3), // Source selector
+            Constraint::Length(3), // Access level selector
+            Constraint::Length(2), // Help
+            Constraint::Min(0),   // Spacer
+        ])
+        .split(inner);
+
+    // Field 0: Endpoint (credential)
+    let ep_active = state.field_index == 0;
+    let ep_border = if ep_active {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let ep_label = state.selected_endpoint_name();
+    let ep_display = format!("◀ {ep_label} ▶");
+    let ep_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(ep_border)
+        .title("Credential");
+    let ep_style = if ep_active {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+    let ep_hint = format!("{}/{} — ←→ to cycle", state.selected_endpoint + 1, state.endpoints.len());
+    let ep_content = if ep_active {
+        vec![
+            Line::from(Span::styled(ep_display, ep_style)),
+            Line::from(Span::styled(ep_hint, Style::default().fg(Color::DarkGray))),
+        ]
+    } else {
+        vec![Line::from(Span::styled(ep_display, ep_style))]
+    };
+    let ep_para = Paragraph::new(ep_content).block(ep_block);
+    frame.render_widget(ep_para, chunks[0]);
+
+    // Field 1: Source
+    let source_active = state.field_index == 1;
+    let source_border = if source_active {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let source_label = state.sources.get(state.selected_source)
+        .map_or_else(|| "(none)".to_string(), crate::tui::state::PermissionSource::label);
+    let source_display = format!("◀ {source_label} ▶");
+    let source_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(source_border)
+        .title("Source");
+    let source_style = if source_active {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+    let source_hint = format!("{}/{} — ←→ to cycle", state.selected_source + 1, state.sources.len());
+    let source_content = if source_active {
+        vec![
+            Line::from(Span::styled(source_display, source_style)),
+            Line::from(Span::styled(source_hint, Style::default().fg(Color::DarkGray))),
+        ]
+    } else {
+        vec![Line::from(Span::styled(source_display, source_style))]
+    };
+    let source_para = Paragraph::new(source_content).block(source_block);
+    frame.render_widget(source_para, chunks[1]);
+
+    // Field 2: Access Level
+    let access_active = state.field_index == 2;
+    let access_border = if access_active {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let access_color = state.access.color();
+    let access_display = format!("◀ {} ▶", state.access.label());
+    let access_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(access_border)
+        .title("Access Level");
+    let access_style = if access_active {
+        Style::default().fg(access_color).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(access_color)
+    };
+    let access_para = Paragraph::new(Span::styled(access_display, access_style)).block(access_block);
+    frame.render_widget(access_para, chunks[2]);
+
+    // Help
+    let help = Paragraph::new(Span::styled(
+        "↑↓:Field │ ←→:Cycle │ Enter/Ctrl+S:Save │ Esc:Cancel",
+        Style::default().fg(Color::DarkGray),
+    ));
+    frame.render_widget(help, chunks[3]);
+}
+
+/// Render read-only view of a permission rule
+pub fn render_view_permission_modal(
+    frame: &mut Frame,
+    area: Rect,
+    permission_index: usize,
+    permissions: &[PermissionRule],
+) {
+    let modal_area = centered_rect(55, 40, area);
+    frame.render_widget(Clear, modal_area);
+
+    let Some(rule) = permissions.get(permission_index) else {
+        return;
+    };
+
+    let title = format!("Permission Rule #{}", permission_index + 1);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(title);
+
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    let access_color = rule.access.color();
+
+    let content = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Credential:  ", Style::default().fg(Color::Cyan)),
+            Span::styled(&rule.endpoint_name, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Endpoint ID: ", Style::default().fg(Color::Cyan)),
+            Span::styled(&rule.endpoint_id, Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Source:      ", Style::default().fg(Color::Cyan)),
+            Span::styled(rule.source.label(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Access:      ", Style::default().fg(Color::Cyan)),
+            Span::styled(rule.access.label(), Style::default().fg(access_color).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Priority:    ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("#{} of {}", permission_index + 1, permissions.len()),
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Rules evaluate top-to-bottom. First match wins.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  Implicit DENY ALL follows all explicit rules.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  e:Edit │ +/-:Reorder │ d:Delete │ Esc:Close",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(content);
+    frame.render_widget(paragraph, inner);
 }

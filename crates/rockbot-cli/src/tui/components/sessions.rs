@@ -190,8 +190,7 @@ fn render_session_card(
 
     // Line 3: provider:model short code
     let model_line = session.model.as_ref()
-        .map(|m| format_model_short(m))
-        .unwrap_or_else(|| "no model".to_string());
+        .map_or_else(|| "no model".to_string(), |m| format_model_short(m));
     let model_display: String = if model_line.len() > max_name {
         model_line[..max_name].to_string()
     } else {
@@ -252,15 +251,25 @@ fn render_chat_area(frame: &mut Frame, area: Rect, state: &AppState, _effect_sta
     let messages = state.chat_messages();
     let chat_loading = state.chat_loading();
     let chat_scroll = state.chat_scroll();
+    let auto_scroll = state.chat_auto_scroll();
+
+    // Calculate input height accounting for both explicit newlines and visual line wrapping
+    let inner_width = area.width.saturating_sub(2).max(1) as usize; // subtract borders
+    let visual_lines: usize = state.input_buffer.split('\n').map(|line| {
+        let char_count = line.len().max(1); // at least 1 line per segment
+        (char_count + inner_width - 1) / inner_width // ceiling division
+    }).sum();
+    let input_line_count = visual_lines.clamp(1, 10);
+    let input_height = (input_line_count as u16) + 2; // +2 for borders
 
     // Split into messages area + input bar
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .constraints([Constraint::Min(0), Constraint::Length(input_height)])
         .split(area);
 
     if !messages.is_empty() || chat_loading {
-        render_chat_messages(frame, chunks[0], messages, chat_loading, chat_scroll);
+        render_chat_messages(frame, chunks[0], state, messages, chat_loading, chat_scroll, auto_scroll);
     } else if state.sessions.is_empty() {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -309,9 +318,11 @@ fn render_chat_area(frame: &mut Frame, area: Rect, state: &AppState, _effect_sta
 fn render_chat_messages(
     frame: &mut Frame,
     area: Rect,
+    state: &AppState,
     messages: &[crate::tui::state::ChatMessage],
     loading: bool,
     scroll: usize,
+    auto_scroll: bool,
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -352,6 +363,44 @@ fn render_chat_messages(
         ]);
         lines.push(first_line);
 
+        // Render tool calls before the final content (like Claude Code)
+        for tc in &msg.tool_calls {
+            let status_icon = if tc.success { "+" } else { "x" };
+            let status_color = if tc.success { Color::Green } else { Color::Red };
+            let duration = if tc.duration_ms > 0 {
+                format!(" ({:.1}s)", tc.duration_ms as f64 / 1000.0)
+            } else {
+                String::new()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("[{status_icon}]"),
+                    Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" {}", tc.tool_name),
+                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(duration, Style::default().fg(Color::DarkGray)),
+            ]));
+            if !tc.result.is_empty() {
+                for result_line in tc.result.lines().take(4) {
+                    lines.push(Line::from(Span::styled(
+                        format!("    {result_line}"),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                let line_count = tc.result.lines().count();
+                if line_count > 4 {
+                    lines.push(Line::from(Span::styled(
+                        format!("    ... ({} more lines)", line_count - 4),
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                    )));
+                }
+            }
+        }
+
         for line in msg.content.lines() {
             lines.push(Line::from(Span::styled(format!("  {line}"), style)));
         }
@@ -365,9 +414,49 @@ fn render_chat_messages(
         ]));
     }
 
+    // Estimate total visual lines (accounting for line wrapping)
+    let view_width = inner.width.max(1) as usize;
+    let total_visual_lines: usize = lines.iter().map(|line| {
+        let line_width: usize = line.spans.iter().map(|s| s.content.len()).sum();
+        if line_width == 0 { 1 } else { (line_width + view_width - 1) / view_width }
+    }).sum();
+    let view_height = inner.height as usize;
+
+    let max_scroll = total_visual_lines.saturating_sub(view_height);
+
+    // Store max_scroll for key handler to use when transitioning from auto_scroll
+    if let Some(chat) = state.active_chat() {
+        chat.max_scroll.set(max_scroll);
+    }
+
+    let effective_scroll = if auto_scroll {
+        max_scroll
+    } else {
+        scroll.min(max_scroll)
+    };
+
+    let scroll_indicator = if total_visual_lines > view_height && effective_scroll < total_visual_lines.saturating_sub(view_height) {
+        " ↑↓:Scroll  End:Bottom"
+    } else {
+        ""
+    };
+
+    // Re-render block with scroll indicator if needed
+    if !scroll_indicator.is_empty() {
+        let block_with_hint = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(palette::INACTIVE_BORDER))
+            .title_bottom(Line::from(Span::styled(
+                scroll_indicator,
+                Style::default().fg(Color::DarkGray),
+            )));
+        // We need to re-render the block area; render over existing
+        frame.render_widget(block_with_hint, area);
+    }
+
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .scroll((scroll as u16, 0));
+        .scroll((effective_scroll as u16, 0));
 
     frame.render_widget(paragraph, inner);
 }
@@ -380,7 +469,7 @@ fn render_chat_input(frame: &mut Frame, area: Rect, state: &AppState, is_active:
     };
 
     let title = if is_active {
-        "Enter to send, Esc to cancel"
+        "Enter:Send │ Shift+Enter:Newline │ Esc:Cancel"
     } else {
         "Press 'c' to chat"
     };
@@ -391,14 +480,15 @@ fn render_chat_input(frame: &mut Frame, area: Rect, state: &AppState, is_active:
         .title(title);
 
     let input_text = if is_active {
-        format!("{}_", &state.input_buffer)
+        format!("{}█", &state.input_buffer)
     } else {
         state.input_buffer.clone()
     };
 
     let paragraph = Paragraph::new(input_text)
         .block(block)
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(Color::White))
+        .wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);
 }

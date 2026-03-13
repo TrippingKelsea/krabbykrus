@@ -23,6 +23,9 @@ pub use modals::{
     render_password_modal, render_confirm_modal, render_add_credential_modal,
     render_edit_credential_modal, render_edit_provider_modal, render_view_session_modal,
     render_edit_agent_modal, render_create_session_modal,
+    render_view_endpoint_modal, render_view_provider_modal,
+    render_view_model_list_modal, render_edit_permission_modal,
+    render_view_permission_modal,
 };
 
 use ratatui::{

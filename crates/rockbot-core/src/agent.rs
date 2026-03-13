@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
-use uuid::Uuid;
+
 
 /// Agent execution engine
 pub struct Agent {
@@ -192,53 +192,56 @@ impl Agent {
         message: Message,
     ) -> Result<AgentResponse> {
         let start_time = std::time::Instant::now();
-        
+
         debug!("Processing message {} in session {}", message.id, session_id);
-        
-        // Get or create session
+
+        // Get or create session — use the session's actual DB ID for all operations
+        // (the passed-in session_id may be a compound key like "agent:session_key",
+        // but the DB session has its own UUID-based id)
         let session = self.get_or_create_session(&session_id, &message).await?;
-        
+        let db_session_id = session.id.clone();
+
         // Store incoming message
-        self.session_manager.add_message(&session_id, message.clone()).await?;
-        
+        self.session_manager.add_message(&db_session_id, message.clone()).await?;
+
         // Update processing context
         let available_tools = self.get_available_tools(&session).await?;
-        let mut context = self.update_processing_context(session_id.clone(), message, available_tools).await?;
-        
+        let mut context = self.update_processing_context(db_session_id.clone(), message, available_tools).await?;
+
         // Generate LLM request
         let llm_request = self.build_llm_request(&mut context).await?;
-        
+
         // Call LLM with retry logic
         let llm_response = self.call_llm_with_retry(llm_request).await?;
-        
+
         // Process LLM response and handle tool calls
         let (response_message, tool_results, token_usage) = self.process_llm_response(
-            &session_id,
+            &db_session_id,
             &mut context,
             llm_response,
         ).await?;
-        
+
         // Store response message
-        self.session_manager.add_message(&session_id, response_message.clone()).await?;
-        
+        self.session_manager.add_message(&db_session_id, response_message.clone()).await?;
+
         // Update session token stats
-        let mut session = self.session_manager.get_session(&session_id).await?
-            .ok_or_else(|| AgentError::ExecutionFailed { 
-                message: "Session disappeared during processing".to_string() 
+        let mut session = self.session_manager.get_session(&db_session_id).await?
+            .ok_or_else(|| AgentError::ExecutionFailed {
+                message: "Session disappeared during processing".to_string()
             })?;
         session.add_tokens(token_usage.prompt_tokens, token_usage.completion_tokens);
         self.session_manager.update_session(&session).await?;
-        
+
         // Update agent statistics
         let processing_time_ms = start_time.elapsed().as_millis() as u64;
         self.update_stats(token_usage.total_tokens, processing_time_ms).await;
-        
+
         // Clean up processing context
         {
             let mut state = self.state.write().await;
-            state.active_contexts.remove(&session_id);
+            state.active_contexts.remove(&db_session_id);
         }
-        
+
         Ok(AgentResponse {
             message: response_message,
             tool_results,
@@ -248,17 +251,26 @@ impl Agent {
     }
     
     /// Get or create a session for the given session ID
+    ///
+    /// The `session_id` may be a compound key like "agent_id:session_key" from the gateway.
+    /// We first try exact ID lookup, then try finding by session_key, before creating a new one.
     async fn get_or_create_session(&self, session_id: &str, message: &Message) -> Result<Session> {
+        // Try exact ID match first
         if let Some(session) = self.session_manager.get_session(session_id).await? {
-            Ok(session)
-        } else {
-            // Create new session using message metadata if available
-            let default_session_key = format!("session-{}", Uuid::new_v4());
-            let session_key = message.metadata.source.as_ref()
-                .unwrap_or(&default_session_key);
-            
-            self.session_manager.create_session(&self.config.id, session_key).await
+            return Ok(session);
         }
+
+        // Try looking up by session_key (handles compound keys like "agent:session_key")
+        let session_key = session_id.split_once(':')
+            .map_or(session_id, |(_, key)| key);
+        if let Some(session) = self.session_manager.find_by_session_key(session_key).await? {
+            return Ok(session);
+        }
+
+        // Create new session
+        let key = message.metadata.source.as_deref()
+            .unwrap_or(session_key);
+        self.session_manager.create_session(&self.config.id, key).await
     }
     
     /// Get available tools for the current session

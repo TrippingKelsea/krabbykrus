@@ -18,12 +18,15 @@ use super::components::{
     render_edit_agent_modal,
     render_models, render_password_modal, render_sessions, render_settings, render_sidebar,
     render_status_bar, render_view_session_modal,
+    render_view_endpoint_modal, render_view_provider_modal,
+    render_view_model_list_modal, render_edit_permission_modal,
+    render_view_permission_modal,
 };
 use super::effects::EffectState;
 use super::state::{
     AddCredentialState, AppState, ChatMessage, ConfirmAction, CreateSessionState, EditAgentState,
     EditCredentialState, EditProviderState, EndpointInfo, InputMode, MenuItem, Message,
-    PasswordAction, SessionMode, UnlockMethod,
+    PasswordAction, SessionMode, ToolCallInfo, UnlockMethod,
 };
 
 /// Check if Claude Code OAuth credentials are available
@@ -356,6 +359,27 @@ impl App {
             }
             InputMode::ChatInput => self.handle_chat_input(key),
             InputMode::ViewSession { .. } => self.handle_view_session(key),
+            InputMode::ViewEndpoint { endpoint_index } => {
+                let idx = *endpoint_index;
+                self.handle_view_endpoint(key, idx)
+            }
+            InputMode::ViewProvider { provider_index } => {
+                let idx = *provider_index;
+                self.handle_view_provider(key, idx)
+            }
+            InputMode::ViewModelList { provider_index, scroll } => {
+                let idx = *provider_index;
+                let s = *scroll;
+                self.handle_view_model_list(key, idx, s)
+            }
+            InputMode::ViewPermission { permission_index } => {
+                let idx = *permission_index;
+                self.handle_view_permission(key, idx)
+            }
+            InputMode::EditPermission(state) => {
+                let state = state.clone();
+                self.handle_edit_permission(key, state)
+            }
         }
     }
 
@@ -385,62 +409,114 @@ impl App {
 
             // Content navigation (only when content focused)
             KeyCode::Esc if !self.state.sidebar_focus => {
-                // On Credentials Providers tab, Esc first goes back to category list
-                if self.state.menu_item == MenuItem::Credentials
-                   && self.state.credentials_tab == 1
-                   && self.state.provider_list_focus
-                {
-                    self.state.provider_list_focus = false;
-                } else {
-                    // Esc returns to sidebar
-                    self.state.sidebar_focus = true;
-                    self.effect_state.set_active(false);
-                }
+                self.state.sidebar_focus = true;
+                self.effect_state.set_active(false);
             }
             // Left/Right for horizontal card navigation in content panes
             KeyCode::Left | KeyCode::Char('h') if !self.state.sidebar_focus => {
-                // Credentials Providers tab: Up/Down for category, Left/Right for sub-focus
-                if self.state.menu_item == MenuItem::Credentials && self.state.credentials_tab == 1 && self.state.provider_list_focus {
-                    self.state.provider_list_focus = false;
-                } else {
-                    self.state.select_prev();
-                    if self.state.menu_item == MenuItem::Sessions {
-                        self.on_session_selection_changed();
-                    }
+                self.state.select_prev();
+                if self.state.menu_item == MenuItem::Sessions {
+                    self.on_session_selection_changed();
                 }
             }
             KeyCode::Right | KeyCode::Char('l') if !self.state.sidebar_focus => {
-                if self.state.menu_item == MenuItem::Credentials && self.state.credentials_tab == 1 && !self.state.provider_list_focus {
-                    if self.state.provider_count_for_category() > 0 {
-                        self.state.provider_list_focus = true;
-                    }
-                } else {
-                    self.state.select_next();
-                    if self.state.menu_item == MenuItem::Sessions {
-                        self.on_session_selection_changed();
-                    }
+                self.state.select_next();
+                if self.state.menu_item == MenuItem::Sessions {
+                    self.on_session_selection_changed();
                 }
             }
-            // Up/Down for vertical sub-navigation (credential categories, provider sub-list)
+            // Up/Down for list navigation within credential tabs / chat scroll
             KeyCode::Up | KeyCode::Char('k') if !self.state.sidebar_focus => {
-                if self.state.menu_item == MenuItem::Credentials {
-                    self.state.select_prev();
+                match self.state.menu_item {
+                    MenuItem::Credentials => self.state.credential_list_prev(),
+                    MenuItem::Sessions => {
+                        if let Some(chat) = self.state.active_chat_mut() {
+                            if chat.auto_scroll {
+                                // Transition: start from bottom
+                                chat.scroll = chat.max_scroll.get();
+                                chat.auto_scroll = false;
+                            }
+                            chat.scroll = chat.scroll.saturating_sub(1);
+                        }
+                    }
+                    _ => {}
                 }
             }
             KeyCode::Down | KeyCode::Char('j') if !self.state.sidebar_focus => {
-                if self.state.menu_item == MenuItem::Credentials {
-                    self.state.select_next();
+                match self.state.menu_item {
+                    MenuItem::Credentials => self.state.credential_list_next(),
+                    MenuItem::Sessions => {
+                        if let Some(chat) = self.state.active_chat_mut() {
+                            if chat.auto_scroll {
+                                // Already at bottom in auto-scroll
+                                return Ok(());
+                            }
+                            chat.scroll = chat.scroll.saturating_add(1);
+                            // If we've scrolled to the bottom, re-enable auto-scroll
+                            if chat.scroll >= chat.max_scroll.get() {
+                                chat.auto_scroll = true;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
-            // Enter to select/enter provider list
+            // Page Up/Down for faster scrolling
+            KeyCode::PageUp if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions => {
+                if let Some(chat) = self.state.active_chat_mut() {
+                    if chat.auto_scroll {
+                        chat.scroll = chat.max_scroll.get();
+                        chat.auto_scroll = false;
+                    }
+                    chat.scroll = chat.scroll.saturating_sub(10);
+                }
+            }
+            KeyCode::PageDown if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions => {
+                if let Some(chat) = self.state.active_chat_mut() {
+                    if !chat.auto_scroll {
+                        chat.scroll = chat.scroll.saturating_add(10);
+                        if chat.scroll >= chat.max_scroll.get() {
+                            chat.auto_scroll = true;
+                        }
+                    }
+                }
+            }
+            // End key re-enables auto-scroll for chat
+            KeyCode::End if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions => {
+                if let Some(chat) = self.state.active_chat_mut() {
+                    chat.auto_scroll = true;
+                }
+            }
+            // Enter to view details
             KeyCode::Enter if !self.state.sidebar_focus => {
-                if self.state.menu_item == MenuItem::Credentials
-                   && self.state.credentials_tab == 1
-                   && !self.state.provider_list_focus
-                   && self.state.provider_count_for_category() > 0
-                {
-                    self.state.provider_list_focus = true;
-                    self.state.selected_provider_index = 0;
+                match self.state.menu_item {
+                    MenuItem::Credentials => {
+                        match self.state.credentials_tab {
+                            0 if !self.state.endpoints.is_empty() => {
+                                self.state.input_mode = InputMode::ViewEndpoint {
+                                    endpoint_index: self.state.selected_endpoint,
+                                };
+                            }
+                            1 => {
+                                self.state.input_mode = InputMode::ViewProvider {
+                                    provider_index: self.state.selected_provider_index,
+                                };
+                            }
+                            2 if !self.state.permissions.is_empty() => {
+                                self.state.input_mode = InputMode::ViewPermission {
+                                    permission_index: self.state.selected_permission,
+                                };
+                            }
+                            _ => {}
+                        }
+                    }
+                    MenuItem::Models if !self.state.providers.is_empty() => {
+                        self.state.input_mode = InputMode::ViewModelList {
+                            provider_index: self.state.selected_provider,
+                            scroll: 0,
+                        };
+                    }
+                    _ => {}
                 }
             }
 
@@ -495,6 +571,9 @@ impl App {
             KeyCode::Char('e') if !self.state.sidebar_focus => {
                 self.handle_edit_action();
             }
+            KeyCode::Char('p') if !self.state.sidebar_focus => {
+                self.handle_permission_action();
+            }
             KeyCode::Char('k') if !self.state.sidebar_focus => {
                 self.handle_kill_action();
             }
@@ -532,35 +611,19 @@ impl App {
                 self.handle_new_session_action();
             }
             MenuItem::Credentials if self.state.vault.initialized && !self.state.vault.locked => {
-                // Context-aware add based on which tab and what's selected
                 if self.state.credentials_tab == 1 {
-                    // Providers tab — always use schema-driven form (same as models→edit)
-                    if self.state.provider_list_focus {
-                        if let Some(schema) = self.state.get_selected_credential_schema().cloned() {
-                            let idx = self.state.selected_provider_index;
-                            self.state.input_mode = InputMode::EditProvider(
-                                EditProviderState::from_schema(&schema, idx)
-                            );
-                            return;
-                        }
-                    } else {
-                        // In category list - check if category has providers
-                        let provider_count = self.state.provider_count_for_category();
-                        if provider_count > 0 {
-                            // Navigate to provider list so user can select which provider
-                            self.state.provider_list_focus = true;
-                            self.state.selected_provider_index = 0;
-                            self.state.status_message = Some((
-                                "Select a provider with ↑↓, then press 'a' to configure".to_string(),
-                                false
-                            ));
-                            return;
-                        }
+                    // Providers tab — open schema-driven configure form for selected provider
+                    if let Some(schema) = self.state.credential_schemas.get(self.state.selected_provider_index).cloned() {
+                        let idx = self.state.selected_provider_index;
+                        self.state.input_mode = InputMode::EditProvider(
+                            EditProviderState::from_schema(&schema, idx)
+                        );
+                        return;
                     }
                 }
-                // Default: show generic add form for endpoints tab
+                // Endpoints tab or fallback: show generic add form
                 let mut default_state = AddCredentialState::new();
-                default_state.endpoint_type = 3; // API Key Service instead of Home Assistant
+                default_state.endpoint_type = 3; // API Key Service
                 default_state.reset_fields_for_type();
                 self.state.input_mode = InputMode::AddCredential(default_state);
             }
@@ -795,52 +858,58 @@ impl App {
         self.state.input_mode = InputMode::CreateSession(create_state);
     }
 
-    fn handle_edit_action(&mut self) {
+    /// Open the edit credential modal for the given endpoint index (used from view modals)
+    fn edit_endpoint_at(&mut self, endpoint_index: usize) {
         use super::state::EditCredentialState;
 
-        match self.state.menu_item {
-            MenuItem::Credentials if self.state.vault.initialized && !self.state.vault.locked => {
-                // Edit selected endpoint
-                if let Some(endpoint) = self.state.endpoints.get(self.state.selected_endpoint) {
-                    // Determine endpoint type from the stored string
-                    let endpoint_type = match endpoint.endpoint_type.as_str() {
-                        "HomeAssistant" => 0,
-                        "GenericRest" => 1,
-                        "GenericOAuth2" => 2,
-                        _ => 3, // Default to API Key Service
-                    };
+        if let Some(endpoint) = self.state.endpoints.get(endpoint_index) {
+            let endpoint_type = match endpoint.endpoint_type.as_str() {
+                "HomeAssistant" => 0,
+                "GenericRest" => 1,
+                "GenericOAuth2" => 2,
+                _ => 3,
+            };
 
-                    let mut edit_state = EditCredentialState::from_endpoint(
-                        &endpoint.id,
-                        &endpoint.name,
-                        endpoint_type,
-                        &endpoint.base_url,
-                        if endpoint.has_credential { Some(&endpoint.id) } else { None },
-                    );
+            let mut edit_state = EditCredentialState::from_endpoint(
+                &endpoint.id,
+                &endpoint.name,
+                endpoint_type,
+                &endpoint.base_url,
+                if endpoint.has_credential { Some(&endpoint.id) } else { None },
+            );
 
-                    // Try to pre-fill secret if vault is unlocked
-                    if let Some(ref vault) = self.vault {
-                        if let Ok(uuid) = uuid::Uuid::parse_str(&endpoint.id) {
-                            if let Ok(secret_bytes) = vault.decrypt_credential_for_endpoint(uuid) {
-                                if let Ok(secret_str) = String::from_utf8(secret_bytes) {
-                                    // Set the appropriate secret field based on endpoint type
-                                    match endpoint_type {
-                                        0 | 1 | 5 => edit_state.set_secret("token", &secret_str),
-                                        3 => edit_state.set_secret("api_key", &secret_str),
-                                        4 => edit_state.set_secret("password", &secret_str),
-                                        2 => edit_state.set_secret("client_secret", &secret_str),
-                                        _ => {}
-                                    }
-                                }
+            if let Some(ref vault) = self.vault {
+                if let Ok(uuid) = uuid::Uuid::parse_str(&endpoint.id) {
+                    if let Ok(secret_bytes) = vault.decrypt_credential_for_endpoint(uuid) {
+                        if let Ok(secret_str) = String::from_utf8(secret_bytes) {
+                            match endpoint_type {
+                                0 | 1 | 5 => edit_state.set_secret("token", &secret_str),
+                                3 => edit_state.set_secret("api_key", &secret_str),
+                                4 => edit_state.set_secret("password", &secret_str),
+                                2 => edit_state.set_secret("client_secret", &secret_str),
+                                _ => {}
                             }
                         }
                     }
-
-                    self.state.input_mode = InputMode::EditCredential(edit_state);
-                } else {
-                    self.state.status_message = Some(("No endpoint selected".to_string(), true));
                 }
             }
+
+            self.state.input_mode = InputMode::EditCredential(edit_state);
+        }
+    }
+
+    /// Open the edit permission modal for the given permission index (used from view modals)
+    fn edit_permission_at(&mut self, permission_index: usize) {
+        use super::state::EditPermissionState;
+        if let Some(rule) = self.state.permissions.get(permission_index) {
+            let edit_state = EditPermissionState::from_rule(rule, &self.state.endpoints, &self.state.agents);
+            self.state.input_mode = InputMode::EditPermission(edit_state);
+        }
+    }
+
+    fn handle_edit_action(&mut self) {
+        match self.state.menu_item {
+            // 'e' is NOT available from the credentials list view — edit through info modals
             MenuItem::Agents => {
                 if let Some(agent) = self.state.agents.get(self.state.selected_agent) {
                     let mut edit_state = EditAgentState::from_agent(agent);
@@ -891,6 +960,119 @@ impl App {
             } else {
                 self.state.status_message = Some(("No session selected".to_string(), true));
             }
+        }
+    }
+
+    fn handle_permission_action(&mut self) {
+        use super::state::EditPermissionState;
+
+        if self.state.menu_item != MenuItem::Credentials || self.state.endpoints.is_empty() {
+            return;
+        }
+
+        if self.state.credentials_tab == 2 && !self.state.permissions.is_empty() {
+            // On permissions tab with a selected permission — edit it
+            if let Some(rule) = self.state.permissions.get(self.state.selected_permission) {
+                let edit_state = EditPermissionState::from_rule(rule, &self.state.endpoints, &self.state.agents);
+                self.state.input_mode = InputMode::EditPermission(edit_state);
+            }
+        } else {
+            // New permission — preselect endpoint if on endpoints tab
+            let preselect = if self.state.credentials_tab == 0 {
+                Some(self.state.selected_endpoint)
+            } else {
+                None
+            };
+            let edit_state = EditPermissionState::new(&self.state.endpoints, &self.state.agents, preselect);
+            self.state.input_mode = InputMode::EditPermission(edit_state);
+        }
+    }
+
+    fn handle_edit_permission(&mut self, key: KeyEvent, mut state: super::state::EditPermissionState) -> Result<()> {
+        let field_count: usize = 3; // endpoint, source, access
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                state.field_index = (state.field_index + 1) % field_count;
+                self.state.input_mode = InputMode::EditPermission(state);
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                state.field_index = if state.field_index == 0 { field_count - 1 } else { state.field_index - 1 };
+                self.state.input_mode = InputMode::EditPermission(state);
+            }
+            KeyCode::Left => {
+                match state.field_index {
+                    0 => state.cycle_endpoint(false),
+                    1 => state.cycle_source(false),
+                    _ => state.cycle_access(false),
+                }
+                self.state.input_mode = InputMode::EditPermission(state);
+            }
+            KeyCode::Right => {
+                match state.field_index {
+                    0 => state.cycle_endpoint(true),
+                    1 => state.cycle_source(true),
+                    _ => state.cycle_access(true),
+                }
+                self.state.input_mode = InputMode::EditPermission(state);
+            }
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.save_permission(state);
+            }
+            KeyCode::Enter => {
+                self.save_permission(state);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn save_permission(&mut self, state: super::state::EditPermissionState) {
+        if state.is_edit {
+            // Update existing rule: find by endpoint+source combo and update access
+            if let Some(rule) = self.state.permissions.iter_mut().find(|r| {
+                r.endpoint_id == state.selected_endpoint_id() && r.source == state.sources[state.selected_source]
+            }) {
+                rule.access = state.access;
+            } else {
+                // Source changed — remove old, add new
+                let next_priority = self.state.permissions.iter().map(|r| r.priority).max().unwrap_or(0) + 1;
+                self.state.permissions.push(state.to_rule(next_priority));
+            }
+        } else {
+            // New rule — remove existing rule for same endpoint+source combo
+            self.state.permissions.retain(|r| {
+                !(r.endpoint_id == state.selected_endpoint_id() && r.source == state.sources[state.selected_source])
+            });
+            let next_priority = self.state.permissions.iter().map(|r| r.priority).max().unwrap_or(0) + 1;
+            self.state.permissions.push(state.to_rule(next_priority));
+        }
+        // Re-sort by priority
+        self.state.permissions.sort_by_key(|r| r.priority);
+        self.state.status_message = Some((
+            format!("Permission set for '{}'", state.selected_endpoint_name()),
+            false
+        ));
+        self.state.input_mode = InputMode::Normal;
+    }
+
+    fn move_permission(&mut self, up: bool) {
+        let idx = self.state.selected_permission;
+        let len = self.state.permissions.len();
+        if len < 2 { return; }
+        if up && idx > 0 {
+            self.state.permissions.swap(idx, idx - 1);
+            // Update priorities
+            self.state.permissions[idx - 1].priority = idx; // 1-based
+            self.state.permissions[idx].priority = idx + 1;
+            self.state.selected_permission = idx - 1;
+        } else if !up && idx + 1 < len {
+            self.state.permissions.swap(idx, idx + 1);
+            self.state.permissions[idx].priority = idx + 1;
+            self.state.permissions[idx + 1].priority = idx + 2;
+            self.state.selected_permission = idx + 1;
         }
     }
 
@@ -1144,40 +1326,13 @@ impl App {
                 state.prev_field();
                 self.state.input_mode = InputMode::AddCredential(state);
             }
+            // Ctrl+S saves from any field
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.submit_add_credential(state);
+            }
             KeyCode::Enter => {
                 if state.is_last_field() {
-                    // Submit - validate all required fields
-                    if let Some(error) = state.validate() {
-                        self.state.status_message = Some((error, true));
-                    } else {
-                        // Actually add credential to vault
-                        if let Some(ref mut vault) = self.vault {
-                            match add_credential_to_vault(vault, &state) {
-                                Ok(endpoint_name) => {
-                                    // Refresh endpoints list
-                                    self.state.endpoints = vault.list_endpoints()
-                                        .into_iter()
-                                        .map(|e| EndpointInfo {
-                                            id: e.id.to_string(),
-                                            name: e.name.clone(),
-                                            endpoint_type: format!("{:?}", e.endpoint_type),
-                                            base_url: e.base_url.clone(),
-                                            has_credential: e.credential_id != uuid::Uuid::nil(),
-                                            expiration: None,
-                                        })
-                                        .collect();
-                                    self.state.vault.endpoint_count = self.state.endpoints.len();
-                                    self.state.status_message = Some((format!("✅ Added: {endpoint_name}"), false));
-                                    self.state.input_mode = InputMode::Normal;
-                                }
-                                Err(e) => {
-                                    self.state.status_message = Some((format!("❌ Failed: {e}"), true));
-                                }
-                            }
-                        } else {
-                            self.state.status_message = Some(("❌ Vault not unlocked".to_string(), true));
-                        }
-                    }
+                    self.submit_add_credential(state);
                 } else {
                     state.next_field();
                     self.state.input_mode = InputMode::AddCredential(state);
@@ -1221,6 +1376,51 @@ impl App {
         Ok(())
     }
 
+    fn submit_add_credential(&mut self, state: AddCredentialState) {
+        if let Some(error) = state.validate() {
+            self.state.status_message = Some((error, true));
+            self.state.input_mode = InputMode::AddCredential(state);
+        } else if let Some(ref mut vault) = self.vault {
+            match add_credential_to_vault(vault, &state) {
+                Ok(endpoint_name) => {
+                    self.state.endpoints = vault.list_endpoints()
+                        .into_iter()
+                        .map(|e| EndpointInfo {
+                            id: e.id.to_string(),
+                            name: e.name.clone(),
+                            endpoint_type: format!("{:?}", e.endpoint_type),
+                            base_url: e.base_url.clone(),
+                            has_credential: e.credential_id != uuid::Uuid::nil(),
+                            expiration: None,
+                        })
+                        .collect();
+                    self.state.vault.endpoint_count = self.state.endpoints.len();
+                    // Create default permission: Any Source with HIL access
+                    if let Some(ep) = self.state.endpoints.iter().find(|e| e.name == endpoint_name) {
+                        use super::state::{PermissionRule, PermissionSource, AccessLevel};
+                        let next_priority = self.state.permissions.len() + 1;
+                        self.state.permissions.push(PermissionRule {
+                            endpoint_id: ep.id.clone(),
+                            endpoint_name: ep.name.clone(),
+                            source: PermissionSource::Any,
+                            access: AccessLevel::AllowHil,
+                            priority: next_priority,
+                        });
+                    }
+                    self.state.status_message = Some((format!("Added: {endpoint_name}"), false));
+                    self.state.input_mode = InputMode::Normal;
+                }
+                Err(e) => {
+                    self.state.status_message = Some((format!("Failed: {e}"), true));
+                    self.state.input_mode = InputMode::AddCredential(state);
+                }
+            }
+        } else {
+            self.state.status_message = Some(("Vault not unlocked".to_string(), true));
+            self.state.input_mode = InputMode::AddCredential(state);
+        }
+    }
+
     fn handle_edit_credential(&mut self, key: KeyEvent, mut state: EditCredentialState) -> Result<()> {
         match key.code {
             KeyCode::Esc => {
@@ -1235,40 +1435,12 @@ impl App {
                 state.prev_field();
                 self.state.input_mode = InputMode::EditCredential(state);
             }
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.submit_edit_credential(state);
+            }
             KeyCode::Enter => {
                 if state.is_last_field() {
-                    // Submit - validate all required fields
-                    if let Some(error) = state.validate() {
-                        self.state.status_message = Some((error, true));
-                    } else {
-                        // Update the endpoint in vault
-                        if let Some(ref mut vault) = self.vault {
-                            match update_credential_in_vault(vault, &state) {
-                                Ok(endpoint_name) => {
-                                    // Refresh endpoints list
-                                    self.state.endpoints = vault.list_endpoints()
-                                        .into_iter()
-                                        .map(|e| EndpointInfo {
-                                            id: e.id.to_string(),
-                                            name: e.name.clone(),
-                                            endpoint_type: format!("{:?}", e.endpoint_type),
-                                            base_url: e.base_url.clone(),
-                                            has_credential: e.credential_id != uuid::Uuid::nil(),
-                                            expiration: None,
-                                        })
-                                        .collect();
-                                    self.state.vault.endpoint_count = self.state.endpoints.len();
-                                    self.state.status_message = Some((format!("✅ Updated: {endpoint_name}"), false));
-                                    self.state.input_mode = InputMode::Normal;
-                                }
-                                Err(e) => {
-                                    self.state.status_message = Some((format!("❌ Failed: {e}"), true));
-                                }
-                            }
-                        } else {
-                            self.state.status_message = Some(("❌ Vault not unlocked".to_string(), true));
-                        }
-                    }
+                    self.submit_edit_credential(state);
                 } else {
                     state.next_field();
                     self.state.input_mode = InputMode::EditCredential(state);
@@ -1291,6 +1463,39 @@ impl App {
         Ok(())
     }
 
+    fn submit_edit_credential(&mut self, state: EditCredentialState) {
+        if let Some(error) = state.validate() {
+            self.state.status_message = Some((error, true));
+            self.state.input_mode = InputMode::EditCredential(state);
+        } else if let Some(ref mut vault) = self.vault {
+            match update_credential_in_vault(vault, &state) {
+                Ok(endpoint_name) => {
+                    self.state.endpoints = vault.list_endpoints()
+                        .into_iter()
+                        .map(|e| EndpointInfo {
+                            id: e.id.to_string(),
+                            name: e.name.clone(),
+                            endpoint_type: format!("{:?}", e.endpoint_type),
+                            base_url: e.base_url.clone(),
+                            has_credential: e.credential_id != uuid::Uuid::nil(),
+                            expiration: None,
+                        })
+                        .collect();
+                    self.state.vault.endpoint_count = self.state.endpoints.len();
+                    self.state.status_message = Some((format!("Updated: {endpoint_name}"), false));
+                    self.state.input_mode = InputMode::Normal;
+                }
+                Err(e) => {
+                    self.state.status_message = Some((format!("Failed: {e}"), true));
+                    self.state.input_mode = InputMode::EditCredential(state);
+                }
+            }
+        } else {
+            self.state.status_message = Some(("Vault not unlocked".to_string(), true));
+            self.state.input_mode = InputMode::EditCredential(state);
+        }
+    }
+
     fn handle_edit_provider(&mut self, key: KeyEvent, mut state: super::state::EditProviderState) -> Result<()> {
         match key.code {
             KeyCode::Esc => {
@@ -1309,14 +1514,21 @@ impl App {
                 state.cycle_auth_type(key.code == KeyCode::Right);
                 self.state.input_mode = InputMode::EditProvider(state);
             }
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(error) = state.validate() {
+                    self.state.status_message = Some((error, true));
+                    self.state.input_mode = InputMode::EditProvider(state);
+                } else {
+                    self.save_provider_config(&state);
+                    self.state.input_mode = InputMode::Normal;
+                }
+            }
             KeyCode::Enter => {
-                // Check if on last field - submit
                 if state.field_index == state.total_fields() - 1 {
                     if let Some(error) = state.validate() {
                         self.state.status_message = Some((error, true));
                         self.state.input_mode = InputMode::EditProvider(state);
                     } else {
-                        // Save provider configuration
                         self.save_provider_config(&state);
                         self.state.input_mode = InputMode::Normal;
                     }
@@ -1498,22 +1710,41 @@ impl App {
                 state.next_model();
                 self.state.input_mode = set_mode(state);
             }
+            // Ctrl+S saves the form from any field
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(error) = state.validate() {
+                    self.state.status_message = Some((error, true));
+                    self.state.input_mode = set_mode(state);
+                } else if !state.is_edit && self.state.agents.iter().any(|a| a.id == state.id) {
+                    self.state.status_message = Some((
+                        format!("Agent '{}' already exists", state.id), true
+                    ));
+                    self.state.input_mode = InputMode::AddAgent(state);
+                } else {
+                    self.save_agent_to_config(&state);
+                    self.state.input_mode = InputMode::Normal;
+                }
+            }
             KeyCode::Enter => {
-                if state.is_last_field() {
+                // System prompt field (5): Enter inserts a newline
+                if state.field_index == 5 {
+                    let newline_count = state.system_prompt.chars().filter(|&c| c == '\n').count();
+                    if newline_count < 9 {
+                        state.system_prompt.push('\n');
+                    }
+                    self.state.input_mode = set_mode(state);
+                } else if state.is_last_field() {
                     if let Some(error) = state.validate() {
                         self.state.status_message = Some((error, true));
                         self.state.input_mode = set_mode(state);
+                    } else if !state.is_edit && self.state.agents.iter().any(|a| a.id == state.id) {
+                        self.state.status_message = Some((
+                            format!("Agent '{}' already exists", state.id), true
+                        ));
+                        self.state.input_mode = InputMode::AddAgent(state);
                     } else {
-                        // Check for duplicate ID when creating
-                        if !state.is_edit && self.state.agents.iter().any(|a| a.id == state.id) {
-                            self.state.status_message = Some((
-                                format!("Agent '{}' already exists", state.id), true
-                            ));
-                            self.state.input_mode = InputMode::AddAgent(state);
-                        } else {
-                            self.save_agent_to_config(&state);
-                            self.state.input_mode = InputMode::Normal;
-                        }
+                        self.save_agent_to_config(&state);
+                        self.state.input_mode = InputMode::Normal;
                     }
                 } else {
                     state.next_field();
@@ -1781,6 +2012,104 @@ impl App {
         Ok(())
     }
 
+    fn handle_view_endpoint(&mut self, key: KeyEvent, endpoint_index: usize) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('e') => {
+                self.edit_endpoint_at(endpoint_index);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_view_permission(&mut self, key: KeyEvent, permission_index: usize) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('e') => {
+                self.edit_permission_at(permission_index);
+            }
+            KeyCode::Char('+') | KeyCode::Char('K') => {
+                // Move rule up in priority
+                self.state.selected_permission = permission_index;
+                self.move_permission(true);
+                let new_idx = self.state.selected_permission;
+                self.state.input_mode = InputMode::ViewPermission { permission_index: new_idx };
+            }
+            KeyCode::Char('-') | KeyCode::Char('J') => {
+                // Move rule down in priority
+                self.state.selected_permission = permission_index;
+                self.move_permission(false);
+                let new_idx = self.state.selected_permission;
+                self.state.input_mode = InputMode::ViewPermission { permission_index: new_idx };
+            }
+            KeyCode::Char('d') => {
+                if permission_index < self.state.permissions.len() {
+                    let rule_name = self.state.permissions[permission_index].endpoint_name.clone();
+                    self.state.permissions.remove(permission_index);
+                    // Renumber priorities
+                    for (i, rule) in self.state.permissions.iter_mut().enumerate() {
+                        rule.priority = i + 1;
+                    }
+                    self.state.status_message = Some((format!("Removed rule for '{rule_name}'"), false));
+                    self.state.input_mode = InputMode::Normal;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_view_provider(&mut self, key: KeyEvent, provider_index: usize) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('e') => {
+                // Switch to edit/configure modal for this provider
+                self.state.input_mode = InputMode::Normal;
+                if let Some(schema) = self.state.credential_schemas.get(provider_index) {
+                    let edit_state = EditProviderState::from_schema(schema, provider_index);
+                    self.state.input_mode = InputMode::EditProvider(edit_state);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_view_model_list(&mut self, key: KeyEvent, provider_index: usize, scroll: usize) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let model_count = self.state.providers.get(provider_index)
+                    .map_or(0, |p| p.models.len());
+                if scroll + 1 < model_count {
+                    self.state.input_mode = InputMode::ViewModelList {
+                        provider_index,
+                        scroll: scroll + 1,
+                    };
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if scroll > 0 {
+                    self.state.input_mode = InputMode::ViewModelList {
+                        provider_index,
+                        scroll: scroll - 1,
+                    };
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn handle_confirm(&mut self, key: KeyEvent, action: ConfirmAction) -> Result<()> {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -1861,17 +2190,16 @@ impl App {
             KeyCode::Esc => {
                 self.state.input_mode = InputMode::Normal;
             }
-            KeyCode::Enter => {
-                let message = self.state.input_buffer.trim().to_string();
-                if !message.is_empty() {
-                    // Add user message to active session's chat history
-                    if let Some(chat) = self.state.active_chat_mut() {
-                        chat.messages.push(ChatMessage::user(message.clone()));
-                        chat.loading = true;
-                    }
-                    self.spawn_chat_request(message);
+            // Shift+Enter inserts a newline (up to 10 lines)
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                let newline_count = self.state.input_buffer.chars().filter(|&c| c == '\n').count();
+                if newline_count < 9 {
+                    self.state.input_buffer.push('\n');
                 }
-                self.state.input_buffer.clear();
+            }
+            // Plain Enter sends the message
+            KeyCode::Enter => {
+                self.send_chat_buffer();
             }
             KeyCode::Char(c) => {
                 self.state.input_buffer.push(c);
@@ -1882,6 +2210,19 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn send_chat_buffer(&mut self) {
+        let message = self.state.input_buffer.trim().to_string();
+        if !message.is_empty() {
+            if let Some(chat) = self.state.active_chat_mut() {
+                chat.messages.push(ChatMessage::user(message.clone()));
+                chat.loading = true;
+                chat.auto_scroll = true;
+            }
+            self.spawn_chat_request(message);
+        }
+        self.state.input_buffer.clear();
     }
 
     /// Save provider auth mode preference to config file
@@ -1978,12 +2319,29 @@ impl App {
             .collect();
 
         tokio::spawn(async move {
-            match send_chat_message(&chat_history, &user_message, model.as_deref(), agent_id.as_deref()).await {
-                Ok(response) => {
-                    let _ = tx.send(Message::ChatResponse(session_key, response));
+            // Use agent message endpoint when an agent is available (full tool loop)
+            if let Some(ref agent) = agent_id {
+                match send_agent_message(agent, &session_key, &user_message).await {
+                    Ok((content, tool_calls)) => {
+                        if tool_calls.is_empty() {
+                            let _ = tx.send(Message::ChatResponse(session_key, content));
+                        } else {
+                            let _ = tx.send(Message::ChatAgentResponse(session_key, content, tool_calls));
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Message::ChatError(session_key, e.to_string()));
+                    }
                 }
-                Err(e) => {
-                    let _ = tx.send(Message::ChatError(session_key, e.to_string()));
+            } else {
+                // Fallback to raw chat endpoint for ad-hoc sessions without an agent
+                match send_chat_message(&chat_history, &user_message, model.as_deref(), None).await {
+                    Ok(response) => {
+                        let _ = tx.send(Message::ChatResponse(session_key, response));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Message::ChatError(session_key, e.to_string()));
+                    }
                 }
             }
         });
@@ -2054,6 +2412,21 @@ impl App {
             InputMode::ViewSession { session_key } => {
                 render_view_session_modal(frame, frame.area(), session_key, &self.state.sessions);
             }
+            InputMode::ViewEndpoint { endpoint_index } => {
+                render_view_endpoint_modal(frame, frame.area(), *endpoint_index, &self.state.endpoints);
+            }
+            InputMode::ViewProvider { provider_index } => {
+                render_view_provider_modal(frame, frame.area(), *provider_index, &self.state.credential_schemas, &self.state.endpoints);
+            }
+            InputMode::ViewModelList { provider_index, scroll } => {
+                render_view_model_list_modal(frame, frame.area(), *provider_index, *scroll, &self.state.providers);
+            }
+            InputMode::ViewPermission { permission_index } => {
+                render_view_permission_modal(frame, frame.area(), *permission_index, &self.state.permissions);
+            }
+            InputMode::EditPermission(state) => {
+                render_edit_permission_modal(frame, frame.area(), state);
+            }
             _ => {}
         }
     }
@@ -2069,10 +2442,13 @@ impl App {
                             "←→:Select │ r:Refresh │ Esc/Tab:←Sidebar".to_string()
                         }
                         MenuItem::Credentials => {
-                            format!(
-                                "a:Add │ e:Edit │ d:Delete │ u:Unlock │ l:Lock │ {{}}:Tabs ({}) │ Esc:←",
-                                self.credentials_tab().label()
-                            )
+                            let tab_help = match self.state.credentials_tab {
+                                0 => "Enter:View │ a:Add │ d:Delete │ p:Permission",
+                                1 => "Enter:View │ a:Configure",
+                                2 => "Enter:View │ p:Add Rule │ ↑↓:Navigate",
+                                _ => "Enter:View",
+                            };
+                            format!("←→:Tab │ {tab_help} │ Esc:← ({})", self.credentials_tab().label())
                         }
                         MenuItem::Agents => {
                             "←→:Select │ a:Add │ e:Edit │ d:Disable │ r:Reload │ Esc:←".to_string()
@@ -2081,7 +2457,7 @@ impl App {
                             "←→:Select │ n:New │ c:Chat │ k:Kill │ Esc:←".to_string()
                         }
                         MenuItem::Models => {
-                            "←→:Select │ e:Edit │ t:Test │ Esc:←".to_string()
+                            "←→:Select │ Enter:Models │ e:Edit │ t:Test │ Esc:←".to_string()
                         }
                         MenuItem::Settings => {
                             "←→:Select │ s:Start │ S:Stop │ r:Restart │ Esc:←".to_string()
@@ -2092,12 +2468,17 @@ impl App {
             InputMode::PasswordInput { .. } => "Enter:Submit │ Esc:Cancel".to_string(),
             InputMode::AddCredential(_) => "↑↓/Tab:Navigate │ ←→:Type │ Enter:Submit │ Esc:Cancel".to_string(),
             InputMode::Confirm { .. } => "y:Yes │ n:No │ Esc:Cancel".to_string(),
-            InputMode::ChatInput => "Enter:Send │ Esc:Close".to_string(),
+            InputMode::ChatInput => "Enter:Send │ Shift+Enter:Newline │ Esc:Close".to_string(),
             InputMode::EditCredential(_) => "↑↓/Tab:Navigate │ Enter:Submit │ Esc:Cancel".to_string(),
             InputMode::EditProvider(_) => "↑↓/Tab:Navigate │ ←→:Auth Type │ Enter:Save │ Esc:Cancel".to_string(),
-            InputMode::AddAgent(_) | InputMode::EditAgent(_) => "↑↓/Tab:Navigate │ ←→:Cycle Model │ Enter:Submit │ Esc:Cancel".to_string(),
+            InputMode::AddAgent(_) | InputMode::EditAgent(_) => "↑↓/Tab:Navigate │ ←→:Cycle Model │ Ctrl+S:Save │ Esc:Cancel".to_string(),
             InputMode::CreateSession(_) => "↑↓/Tab:Navigate │ ←→:Cycle │ Enter:Create │ Esc:Cancel".to_string(),
             InputMode::ViewSession { .. } => "Esc/Enter:Close".to_string(),
+            InputMode::ViewEndpoint { .. } => "e:Edit │ Esc:Close".to_string(),
+            InputMode::ViewProvider { .. } => "e:Configure │ Esc:Close".to_string(),
+            InputMode::ViewModelList { .. } => "↑↓:Scroll │ Esc:Close".to_string(),
+            InputMode::ViewPermission { .. } => "e:Edit │ +/-:Reorder │ d:Delete │ Esc:Close".to_string(),
+            InputMode::EditPermission(_) => "↑↓:Field │ ←→:Cycle │ Enter/Ctrl+S:Save │ Esc:Cancel".to_string(),
         }
     }
 }
@@ -2640,6 +3021,103 @@ async fn send_chat_message(
     Ok(content)
 }
 
+/// Send a message to an agent via the gateway agent message endpoint (full tool loop)
+async fn send_agent_message(
+    agent_id: &str,
+    session_key: &str,
+    user_message: &str,
+) -> Result<(String, Vec<ToolCallInfo>)> {
+    let request_body = serde_json::json!({
+        "session_key": session_key,
+        "message": user_message,
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120)) // Agent tool loops can take longer
+        .build()?;
+
+    let url = format!("http://127.0.0.1:18080/api/agents/{agent_id}/message");
+    let response = client
+        .post(&url)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Gateway unreachable: {e}. Is the gateway running?"))?;
+
+    if !response.status().is_success() {
+        let err_text = response.text().await.unwrap_or_default();
+        let err_json: serde_json::Value = serde_json::from_str(&err_text).unwrap_or_default();
+        let err_msg = err_json.get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&err_text);
+        return Err(anyhow::anyhow!("{err_msg}"));
+    }
+
+    let json: serde_json::Value = response.json().await?;
+
+    // Extract content from AgentResponse.message.content
+    let content = json.get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| {
+            // MessageContent can be Text { text } or other variants
+            c.get("text").and_then(|t| t.as_str())
+                .or_else(|| c.as_str())
+        })
+        .unwrap_or("No response received")
+        .to_string();
+
+    // Extract tool results from AgentResponse.tool_results
+    let tool_calls: Vec<ToolCallInfo> = json.get("tool_results")
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter().filter_map(|tr| {
+                let tool_name = tr.get("tool_name")?.as_str()?.to_string();
+                let execution_time_ms = tr.get("execution_time_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let success = tr.get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+
+                // Extract result summary from ToolResult variants
+                let result_val = tr.get("result")?;
+                let result = if let Some(text) = result_val.get("content").and_then(|c| c.as_str()) {
+                    truncate_tool_result(text, 200)
+                } else if let Some(err) = result_val.get("message").and_then(|m| m.as_str()) {
+                    format!("Error: {err}")
+                } else if let Some(data) = result_val.get("data") {
+                    let s = serde_json::to_string_pretty(data).unwrap_or_default();
+                    truncate_tool_result(&s, 200)
+                } else if let Some(path) = result_val.get("path").and_then(|p| p.as_str()) {
+                    format!("[File: {path}]")
+                } else {
+                    String::new()
+                };
+
+                Some(ToolCallInfo {
+                    tool_name,
+                    arguments: String::new(), // Not exposed in AgentResponse.tool_results
+                    result,
+                    success,
+                    duration_ms: execution_time_ms,
+                    expanded: false,
+                })
+            }).collect()
+        })
+        .unwrap_or_default();
+
+    Ok((content, tool_calls))
+}
+
+/// Truncate a tool result string for display
+fn truncate_tool_result(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len])
+    }
+}
+
 /// Run gateway control command (start/stop/restart)
 async fn run_gateway_control(action: &str) -> Result<String> {
     use tokio::process::Command;
@@ -2743,7 +3221,7 @@ async fn load_session_messages(session_key: &str) -> Result<Vec<ChatMessage>> {
                             let timestamp = msg.get("created_at")
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string());
-                            Some(ChatMessage { role, content: text, timestamp })
+                            Some(ChatMessage { role, content: text, timestamp, tool_calls: Vec::new() })
                         })
                         .collect()
                 })

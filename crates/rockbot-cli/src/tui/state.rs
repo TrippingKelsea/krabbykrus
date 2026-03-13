@@ -76,6 +76,7 @@ pub enum Message {
     
     // Chat
     ChatResponse(String, String),       // (session_key, AI response text)
+    ChatAgentResponse(String, String, Vec<ToolCallInfo>), // (session_key, content, tool_calls)
     ChatError(String, String),          // (session_key, error text)
     ChatStreamChunk(String),            // Streaming chunk (for future use)
     SessionMessagesLoaded(String, Vec<ChatMessage>), // (session_key, messages)
@@ -215,12 +216,27 @@ pub struct SessionInfo {
 }
 
 /// Per-session chat state
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SessionChatState {
     pub messages: Vec<ChatMessage>,
     pub scroll: usize,
     pub loading: bool,
     pub loaded: bool, // Whether history has been fetched from gateway
+    pub auto_scroll: bool, // When true, scroll follows latest content
+    pub max_scroll: std::cell::Cell<usize>, // Last computed max scroll value (updated during render)
+}
+
+impl Default for SessionChatState {
+    fn default() -> Self {
+        Self {
+            messages: Vec::new(),
+            scroll: 0,
+            loading: false,
+            loaded: false,
+            auto_scroll: true,
+            max_scroll: std::cell::Cell::new(0),
+        }
+    }
 }
 
 /// Chat message role
@@ -231,12 +247,24 @@ pub enum ChatRole {
     System,
 }
 
+/// Tool call information for display
+#[derive(Debug, Clone)]
+pub struct ToolCallInfo {
+    pub tool_name: String,
+    pub arguments: String,
+    pub result: String,
+    pub success: bool,
+    pub duration_ms: u64,
+    pub expanded: bool,
+}
+
 /// A message in a chat session
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
     pub timestamp: Option<String>,
+    pub tool_calls: Vec<ToolCallInfo>,
 }
 
 impl ChatMessage {
@@ -245,6 +273,7 @@ impl ChatMessage {
             role: ChatRole::User,
             content,
             timestamp: Some(chrono::Local::now().format("%H:%M:%S").to_string()),
+            tool_calls: Vec::new(),
         }
     }
 
@@ -253,6 +282,16 @@ impl ChatMessage {
             role: ChatRole::Assistant,
             content,
             timestamp: Some(chrono::Local::now().format("%H:%M:%S").to_string()),
+            tool_calls: Vec::new(),
+        }
+    }
+
+    pub fn assistant_with_tools(content: String, tool_calls: Vec<ToolCallInfo>) -> Self {
+        Self {
+            role: ChatRole::Assistant,
+            content,
+            timestamp: Some(chrono::Local::now().format("%H:%M:%S").to_string()),
+            tool_calls,
         }
     }
 
@@ -261,6 +300,7 @@ impl ChatMessage {
             role: ChatRole::System,
             content,
             timestamp: None,
+            tool_calls: Vec::new(),
         }
     }
 }
@@ -311,6 +351,92 @@ pub struct EndpointInfo {
     pub base_url: String,
     pub has_credential: bool,
     pub expiration: Option<String>,
+}
+
+/// Access level for a credential permission rule.
+/// Matches `PermissionLevel` from rockbot-credentials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccessLevel {
+    /// Execute immediately without human involvement
+    Allow,
+    /// Human-in-the-loop: requires approval before each access
+    #[default]
+    AllowHil,
+    /// Human-in-the-loop with YubiKey/2FA verification
+    AllowHil2fa,
+    /// Reject request and log attempt
+    Deny,
+}
+
+impl AccessLevel {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Allow => "Allow",
+            Self::AllowHil => "Allow HIL",
+            Self::AllowHil2fa => "Allow HIL+2FA",
+            Self::Deny => "Deny",
+        }
+    }
+
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            Self::Allow => "ALLOW",
+            Self::AllowHil => "HIL",
+            Self::AllowHil2fa => "2FA",
+            Self::Deny => "DENY",
+        }
+    }
+
+    pub fn color(&self) -> ratatui::style::Color {
+        use ratatui::style::Color;
+        match self {
+            Self::Allow => Color::Green,
+            Self::AllowHil => Color::Yellow,
+            Self::AllowHil2fa => Color::Magenta,
+            Self::Deny => Color::Red,
+        }
+    }
+}
+
+/// Source that can access a credential
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionSource {
+    /// Any source (wildcard)
+    Any,
+    /// The gateway/system itself (e.g., for provider credentials)
+    System,
+    /// A specific agent
+    Agent(String),
+}
+
+impl PermissionSource {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Any => "Any Source".to_string(),
+            Self::System => "System / Gateway".to_string(),
+            Self::Agent(id) => format!("Agent: {id}"),
+        }
+    }
+
+    pub fn short_label(&self) -> String {
+        match self {
+            Self::Any => "*".to_string(),
+            Self::System => "system".to_string(),
+            Self::Agent(id) => id.clone(),
+        }
+    }
+}
+
+/// A permission rule granting a source access to a credential endpoint.
+/// Rules are evaluated in order (lowest priority number first).
+/// An implicit Deny-all rule exists at the end (not stored).
+#[derive(Debug, Clone)]
+pub struct PermissionRule {
+    pub endpoint_id: String,
+    pub endpoint_name: String,
+    pub source: PermissionSource,
+    pub access: AccessLevel,
+    pub priority: usize, // rule evaluation order (1-based)
 }
 
 /// Model provider information (populated from gateway API)
@@ -378,6 +504,8 @@ pub struct AppState {
     pub selected_provider_index: usize, // For Providers tab - which provider within category
     pub provider_list_focus: bool,     // true = right panel (provider list), false = left panel (categories)
     pub credentials_tab: usize,        // Which tab is active (0=Endpoints, 1=Providers, etc.)
+    pub permissions: Vec<PermissionRule>,
+    pub selected_permission: usize,
     
     // Models (dynamically loaded from gateway)
     pub providers: Vec<ModelProvider>,
@@ -429,6 +557,16 @@ pub enum InputMode {
     ChatInput,
     /// View session details
     ViewSession { session_key: String },
+    /// View endpoint details (read-only modal, 'e' to edit)
+    ViewEndpoint { endpoint_index: usize },
+    /// View provider details (read-only modal, 'e' to edit)
+    ViewProvider { provider_index: usize },
+    /// View full model list for a provider
+    ViewModelList { provider_index: usize, scroll: usize },
+    /// View permission rule details (read-only, 'e' to edit, +/- to reorder)
+    ViewPermission { permission_index: usize },
+    /// Edit permission for a credential endpoint
+    EditPermission(EditPermissionState),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1233,6 +1371,129 @@ impl CreateSessionState {
     }
 }
 
+/// State for the permission editor modal
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditPermissionState {
+    /// Available endpoints to assign permissions to: (id, name)
+    pub endpoints: Vec<(String, String)>,
+    /// Selected endpoint index
+    pub selected_endpoint: usize,
+    /// Available sources: Any, System, then each agent
+    pub sources: Vec<PermissionSource>,
+    /// Selected source index
+    pub selected_source: usize,
+    /// Access level for the selected source
+    pub access: AccessLevel,
+    /// Field index: 0=endpoint, 1=source, 2=access
+    pub field_index: usize,
+    /// Whether editing an existing rule (vs creating new)
+    pub is_edit: bool,
+}
+
+impl EditPermissionState {
+    pub fn new(endpoints: &[EndpointInfo], agents: &[AgentInfo], preselect_endpoint: Option<usize>) -> Self {
+        let ep_list: Vec<(String, String)> = endpoints.iter()
+            .map(|ep| (ep.id.clone(), ep.name.clone()))
+            .collect();
+        let mut sources = vec![
+            PermissionSource::Any,
+            PermissionSource::System,
+        ];
+        for agent in agents {
+            sources.push(PermissionSource::Agent(agent.id.clone()));
+        }
+        Self {
+            endpoints: ep_list,
+            selected_endpoint: preselect_endpoint.unwrap_or(0),
+            sources,
+            selected_source: 0,
+            access: AccessLevel::AllowHil,
+            field_index: 0,
+            is_edit: false,
+        }
+    }
+
+    pub fn from_rule(rule: &PermissionRule, endpoints: &[EndpointInfo], agents: &[AgentInfo]) -> Self {
+        let ep_index = endpoints.iter().position(|ep| ep.id == rule.endpoint_id).unwrap_or(0);
+        let mut state = Self::new(endpoints, agents, Some(ep_index));
+        state.access = rule.access;
+        state.is_edit = true;
+        // Find matching source
+        for (i, src) in state.sources.iter().enumerate() {
+            if *src == rule.source {
+                state.selected_source = i;
+                break;
+            }
+        }
+        state
+    }
+
+    pub fn cycle_endpoint(&mut self, forward: bool) {
+        if self.endpoints.is_empty() {
+            return;
+        }
+        if forward {
+            self.selected_endpoint = (self.selected_endpoint + 1) % self.endpoints.len();
+        } else {
+            self.selected_endpoint = if self.selected_endpoint == 0 {
+                self.endpoints.len() - 1
+            } else {
+                self.selected_endpoint - 1
+            };
+        }
+    }
+
+    pub fn cycle_source(&mut self, forward: bool) {
+        if self.sources.is_empty() {
+            return;
+        }
+        if forward {
+            self.selected_source = (self.selected_source + 1) % self.sources.len();
+        } else {
+            self.selected_source = if self.selected_source == 0 {
+                self.sources.len() - 1
+            } else {
+                self.selected_source - 1
+            };
+        }
+    }
+
+    pub fn cycle_access(&mut self, forward: bool) {
+        self.access = match (self.access, forward) {
+            (AccessLevel::Allow, true) => AccessLevel::AllowHil,
+            (AccessLevel::AllowHil, true) => AccessLevel::AllowHil2fa,
+            (AccessLevel::AllowHil2fa, true) => AccessLevel::Deny,
+            (AccessLevel::Deny, true) => AccessLevel::Allow,
+            (AccessLevel::Allow, false) => AccessLevel::Deny,
+            (AccessLevel::AllowHil, false) => AccessLevel::Allow,
+            (AccessLevel::AllowHil2fa, false) => AccessLevel::AllowHil,
+            (AccessLevel::Deny, false) => AccessLevel::AllowHil2fa,
+        };
+    }
+
+    pub fn selected_endpoint_id(&self) -> &str {
+        self.endpoints.get(self.selected_endpoint)
+            .map(|(id, _)| id.as_str())
+            .unwrap_or("")
+    }
+
+    pub fn selected_endpoint_name(&self) -> &str {
+        self.endpoints.get(self.selected_endpoint)
+            .map(|(_, name)| name.as_str())
+            .unwrap_or("")
+    }
+
+    pub fn to_rule(&self, priority: usize) -> PermissionRule {
+        PermissionRule {
+            endpoint_id: self.selected_endpoint_id().to_string(),
+            endpoint_name: self.selected_endpoint_name().to_string(),
+            source: self.sources[self.selected_source].clone(),
+            access: self.access,
+            priority,
+        }
+    }
+}
+
 /// Definition of a form field for dynamic credential forms.
 ///
 /// Different endpoint types require different fields. This struct defines
@@ -1582,6 +1843,8 @@ impl AppState {
             selected_provider_index: 0,
             provider_list_focus: false,
             credentials_tab: 0,
+            permissions: Vec::new(),
+            selected_permission: 0,
             
             providers: Vec::new(),
             selected_provider: 0,
@@ -1706,6 +1969,11 @@ impl AppState {
                 chat.messages.push(ChatMessage::assistant(content));
                 chat.loading = false;
             }
+            Message::ChatAgentResponse(session_key, content, tool_calls) => {
+                let chat = self.session_chats.entry(session_key).or_default();
+                chat.messages.push(ChatMessage::assistant_with_tools(content, tool_calls));
+                chat.loading = false;
+            }
             Message::ChatError(session_key, err) => {
                 let chat = self.session_chats.entry(session_key).or_default();
                 chat.messages.push(ChatMessage::system(format!("Error: {err}")));
@@ -1777,6 +2045,11 @@ impl AppState {
     /// Convenience: chat scroll for active session
     pub fn chat_scroll(&self) -> usize {
         self.active_chat().map_or(0, |c| c.scroll)
+    }
+
+    /// Convenience: chat auto-scroll for active session
+    pub fn chat_auto_scroll(&self) -> bool {
+        self.active_chat().map_or(true, |c| c.auto_scroll)
     }
     
     /// Number of credential categories (All, Model, Communication, Tool)
@@ -1895,37 +2168,8 @@ impl AppState {
                 self.selected_dashboard_card = if self.selected_dashboard_card == 0 { 3 } else { self.selected_dashboard_card - 1 };
             }
             MenuItem::Credentials => {
-                // Navigate based on which tab is active
-                if self.credentials_tab == 1 {
-                    // Providers tab
-                    if self.provider_list_focus {
-                        // Navigate providers within category
-                        let count = self.provider_count_for_category();
-                        if count > 0 {
-                            self.selected_provider_index = if self.selected_provider_index == 0 {
-                                count - 1
-                            } else {
-                                self.selected_provider_index - 1
-                            };
-                        }
-                    } else {
-                        // Navigate categories
-                        self.selected_category = if self.selected_category == 0 {
-                            Self::CREDENTIAL_CATEGORY_COUNT - 1
-                        } else {
-                            self.selected_category - 1
-                        };
-                        // Reset provider selection when category changes
-                        self.selected_provider_index = 0;
-                    }
-                } else if self.credentials_tab == 0 && !self.endpoints.is_empty() {
-                    // Endpoints tab
-                    self.selected_endpoint = if self.selected_endpoint == 0 {
-                        self.endpoints.len() - 1
-                    } else {
-                        self.selected_endpoint - 1
-                    };
-                }
+                // Left/Right navigates the tab cards
+                self.credentials_tab = if self.credentials_tab == 0 { 3 } else { self.credentials_tab - 1 };
             }
             MenuItem::Agents => {
                 if !self.agents.is_empty() {
@@ -1966,25 +2210,8 @@ impl AppState {
                 self.selected_dashboard_card = (self.selected_dashboard_card + 1) % 4;
             }
             MenuItem::Credentials => {
-                // Navigate based on which tab is active
-                if self.credentials_tab == 1 {
-                    // Providers tab
-                    if self.provider_list_focus {
-                        // Navigate providers within category
-                        let count = self.provider_count_for_category();
-                        if count > 0 {
-                            self.selected_provider_index = (self.selected_provider_index + 1) % count;
-                        }
-                    } else {
-                        // Navigate categories
-                        self.selected_category = (self.selected_category + 1) % Self::CREDENTIAL_CATEGORY_COUNT;
-                        // Reset provider selection when category changes
-                        self.selected_provider_index = 0;
-                    }
-                } else if self.credentials_tab == 0 && !self.endpoints.is_empty() {
-                    // Endpoints tab
-                    self.selected_endpoint = (self.selected_endpoint + 1) % self.endpoints.len();
-                }
+                // Left/Right navigates the tab cards
+                self.credentials_tab = (self.credentials_tab + 1) % 4;
             }
             MenuItem::Agents => {
                 if !self.agents.is_empty() {
@@ -2003,6 +2230,64 @@ impl AppState {
             MenuItem::Settings => {
                 self.selected_settings_card = (self.selected_settings_card + 1) % 3;
             }
+        }
+    }
+
+    /// Move selection up in credential list (Up/Down within selected tab)
+    pub fn credential_list_prev(&mut self) {
+        match self.credentials_tab {
+            0 => {
+                if !self.endpoints.is_empty() {
+                    self.selected_endpoint = if self.selected_endpoint == 0 {
+                        self.endpoints.len() - 1
+                    } else {
+                        self.selected_endpoint - 1
+                    };
+                }
+            }
+            1 => {
+                let count = self.provider_count_for_category();
+                if count > 0 {
+                    self.selected_provider_index = if self.selected_provider_index == 0 {
+                        count - 1
+                    } else {
+                        self.selected_provider_index - 1
+                    };
+                }
+            }
+            2 => {
+                if !self.permissions.is_empty() {
+                    self.selected_permission = if self.selected_permission == 0 {
+                        self.permissions.len() - 1
+                    } else {
+                        self.selected_permission - 1
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Move selection down in credential list
+    pub fn credential_list_next(&mut self) {
+        match self.credentials_tab {
+            0 => {
+                if !self.endpoints.is_empty() {
+                    self.selected_endpoint = (self.selected_endpoint + 1) % self.endpoints.len();
+                }
+            }
+            1 => {
+                let count = self.provider_count_for_category();
+                if count > 0 {
+                    self.selected_provider_index = (self.selected_provider_index + 1) % count;
+                }
+            }
+            2 => {
+                if !self.permissions.is_empty() {
+                    self.selected_permission = (self.selected_permission + 1) % self.permissions.len();
+                }
+            }
+            _ => {}
         }
     }
 

@@ -47,7 +47,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, RwLock};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Pending agent info (for agents that couldn't be created due to missing credentials)
 #[derive(Debug, Clone)]
@@ -2240,9 +2240,26 @@ impl Gateway {
         }
 
         // Persist all configs to file
+        // Grab the updated config for potential agent recreation
+        let updated_config = configs.iter().find(|c| c.id == agent_id).cloned();
         let configs_snapshot: Vec<_> = configs.iter().cloned().collect();
         drop(configs);
         self.persist_all_agents_to_config(&configs_snapshot).await;
+
+        // Recreate the running agent instance so it picks up config changes (e.g. model)
+        if let (Some(ref factory), Some(cfg)) = (&self.agent_factory, updated_config) {
+            match factory(cfg).await {
+                Ok(new_agent) => {
+                    let mut agents = self.agents.write().await;
+                    agents.insert(agent_id.clone(), new_agent);
+                    info!("Recreated agent '{}' with updated config", agent_id);
+                }
+                Err(e) => {
+                    warn!("Could not recreate agent '{}' after config update: {}", agent_id, e);
+                    // Config is still persisted; agent will pick up changes on restart
+                }
+            }
+        }
 
         let body = serde_json::json!({ "status": "updated", "id": agent_id });
         Ok(Self::json_response(&body.to_string(), StatusCode::OK))
