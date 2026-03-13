@@ -414,13 +414,15 @@ fn render_chat_messages(
         ]));
     }
 
-    // Estimate total visual lines (accounting for line wrapping)
-    let view_width = inner.width.max(1) as usize;
-    let total_visual_lines: usize = lines.iter().map(|line| {
-        let line_width: usize = line.spans.iter().map(|s| s.content.len()).sum();
-        if line_width == 0 { 1 } else { (line_width + view_width - 1) / view_width }
-    }).sum();
+    // Compute actual wrapped line count by rendering to a scratch buffer.
+    // Paragraph::line_count gives the exact post-wrap count so our scroll
+    // offset matches what ratatui will render.
+    let view_width = inner.width.max(1);
     let view_height = inner.height as usize;
+
+    let scratch = Paragraph::new(lines.clone())
+        .wrap(Wrap { trim: false });
+    let total_visual_lines = scratch.line_count(view_width) as usize;
 
     let max_scroll = total_visual_lines.saturating_sub(view_height);
 
@@ -435,7 +437,9 @@ fn render_chat_messages(
         scroll.min(max_scroll)
     };
 
-    let scroll_indicator = if total_visual_lines > view_height && effective_scroll < total_visual_lines.saturating_sub(view_height) {
+    let not_at_bottom = total_visual_lines > view_height && effective_scroll < max_scroll;
+
+    let scroll_indicator = if not_at_bottom {
         " ↑↓:Scroll  End:Bottom"
     } else {
         ""
@@ -450,7 +454,6 @@ fn render_chat_messages(
                 scroll_indicator,
                 Style::default().fg(Color::DarkGray),
             )));
-        // We need to re-render the block area; render over existing
         frame.render_widget(block_with_hint, area);
     }
 

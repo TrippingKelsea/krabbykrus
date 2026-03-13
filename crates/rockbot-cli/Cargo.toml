@@ -52,6 +52,6 @@ getrandom = "0.2"
 atty = "0.2"
 
 # TUI
-ratatui = "0.29"
+ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 crossterm = "0.28"
 tachyonfx = "0.7"
