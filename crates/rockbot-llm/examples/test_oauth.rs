@@ -63,6 +63,7 @@ async fn _main() -> Result<(), Box<dyn std::error::Error>> {
             role: MessageRole::User,
             content: "Say 'Hello from rockbot!' and nothing else.".to_string(),
             tool_calls: None,
+            tool_call_id: None,
         }],
         tools: None,
         temperature: Some(0.0),

@@ -51,6 +51,7 @@
 //!             role: MessageRole::User,
 //!             content: "Hello!".to_string(),
 //!             tool_calls: None,
+//!             tool_call_id: None,
 //!         }],
 //!         tools: None,
 //!         temperature: Some(0.7),
@@ -194,6 +195,9 @@ pub struct Message {
     pub role: MessageRole,
     pub content: String,
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// For Tool role messages: the tool_use_id this result corresponds to
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 /// Message role
@@ -476,6 +480,7 @@ impl LlmProvider for MockLlmProvider {
                     role: MessageRole::Assistant,
                     content: response_content,
                     tool_calls: None,
+                    tool_call_id: None,
                 },
                 finish_reason: "stop".to_string(),
             }],
@@ -578,6 +583,7 @@ mod tests {
                 role: MessageRole::User,
                 content: "Hello, world!".to_string(),
                 tool_calls: None,
+                tool_call_id: None,
             }],
             tools: None,
             temperature: Some(0.7),

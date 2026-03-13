@@ -562,7 +562,15 @@ pub fn get_dashboard_html() -> &'static str {
             </div>
             <div class="form-group">
                 <label>Max Tool Calls</label>
-                <input type="number" id="agent-max-tools" value="10" min="1" max="100">
+                <input type="number" id="agent-max-tools" placeholder="dynamic (32-160)" min="1" max="200">
+            </div>
+            <div class="form-group">
+                <label>Temperature</label>
+                <input type="number" id="agent-temperature" value="0.3" min="0" max="2" step="0.1">
+            </div>
+            <div class="form-group">
+                <label>Max Tokens</label>
+                <input type="number" id="agent-max-tokens" value="16000" min="100" max="128000" step="1000">
             </div>
             <div class="form-group">
                 <label>System Prompt</label>
@@ -1285,7 +1293,9 @@ pub fn get_dashboard_html() -> &'static str {
                 ${agent.parent_id ? `<div class="detail-field"><label>Parent</label><div class="val">${escapeHtml(agent.parent_id)} <span class="text-dim">(subagent)</span></div></div>` : ''}
                 ${subs.length > 0 ? `<div class="detail-field"><label>Subagents</label><div class="val">${subs.map(s => '<span class="badge badge-info" style="margin-right:4px">' + escapeHtml(s) + '</span>').join('')}</div></div>` : ''}
                 ${agent.workspace ? `<div class="detail-field"><label>Workspace</label><div class="val text-dim" style="font-size:0.85rem">${escapeHtml(agent.workspace)}</div></div>` : ''}
-                <div class="detail-field"><label>Max Tool Calls</label><div class="val">${agent.max_tool_calls || 10}</div></div>
+                <div class="detail-field"><label>Max Tool Calls</label><div class="val">${agent.max_tool_calls || 'dynamic'}</div></div>
+                <div class="detail-field"><label>Temperature</label><div class="val">${agent.temperature != null ? agent.temperature : '0.3'}</div></div>
+                <div class="detail-field"><label>Max Tokens</label><div class="val">${agent.max_tokens || 16000}</div></div>
                 <div class="detail-field"><label>Sessions</label><div class="val">${agent.session_count || 0}</div></div>
                 ${agent.system_prompt ? `<div class="detail-field"><label>System Prompt</label><div style="background:var(--surface-2);padding:0.75rem;border-radius:6px;font-size:0.85rem;max-height:120px;overflow-y:auto;white-space:pre-wrap">${escapeHtml(agent.system_prompt)}</div></div>` : ''}
                 <div class="flex gap-1 mt-2">
@@ -1304,7 +1314,9 @@ pub fn get_dashboard_html() -> &'static str {
             document.getElementById('agent-id').readOnly = false;
             document.getElementById('agent-model').value = '';
             document.getElementById('agent-workspace').value = '';
-            document.getElementById('agent-max-tools').value = '10';
+            document.getElementById('agent-max-tools').value = '';
+            document.getElementById('agent-temperature').value = '0.3';
+            document.getElementById('agent-max-tokens').value = '16000';
             document.getElementById('agent-system-prompt').value = '';
             populateParentSelect('');
             document.getElementById('agent-subagents-info').classList.add('hidden');
@@ -1326,7 +1338,9 @@ pub fn get_dashboard_html() -> &'static str {
             document.getElementById('agent-id').readOnly = true;
             document.getElementById('agent-model').value = agent.model || '';
             document.getElementById('agent-workspace').value = agent.workspace || '';
-            document.getElementById('agent-max-tools').value = agent.max_tool_calls || 10;
+            document.getElementById('agent-max-tools').value = agent.max_tool_calls || '';
+            document.getElementById('agent-temperature').value = agent.temperature != null ? agent.temperature : 0.3;
+            document.getElementById('agent-max-tokens').value = agent.max_tokens || 16000;
             document.getElementById('agent-system-prompt').value = agent.system_prompt || '';
             populateParentSelect(agent.parent_id || '');
             const subs = allAgents.filter(a => a.parent_id === id);
@@ -1357,7 +1371,9 @@ pub fn get_dashboard_html() -> &'static str {
                 model: document.getElementById('agent-model').value.trim() || null,
                 parent_id: document.getElementById('agent-parent').value || null,
                 workspace: document.getElementById('agent-workspace').value.trim() || null,
-                max_tool_calls: parseInt(document.getElementById('agent-max-tools').value) || 10,
+                max_tool_calls: parseInt(document.getElementById('agent-max-tools').value) || null,
+                temperature: parseFloat(document.getElementById('agent-temperature').value) || 0.3,
+                max_tokens: parseInt(document.getElementById('agent-max-tokens').value) || 16000,
                 system_prompt: document.getElementById('agent-system-prompt').value.trim() || null,
             };
 

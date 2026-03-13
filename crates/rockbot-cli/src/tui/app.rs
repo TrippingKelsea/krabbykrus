@@ -687,7 +687,7 @@ impl App {
                 masked: true,
                 action: PasswordAction::InitVault,
             };
-            self.state.input_buffer.clear();
+            self.state.clear_input();
         }
     }
 
@@ -710,7 +710,7 @@ impl App {
                     masked: true,
                     action: PasswordAction::UnlockVault,
                 };
-                self.state.input_buffer.clear();
+                self.state.clear_input();
             }
             UnlockMethod::Keyfile { path } => {
                 // Debug: log keyfile unlock attempt
@@ -778,7 +778,7 @@ impl App {
                     masked: false,
                     action: PasswordAction::UnlockVault,
                 };
-                self.state.input_buffer.clear();
+                self.state.clear_input();
             }
             UnlockMethod::SshKey { path } => {
                 // Try SSH agent unlock
@@ -793,7 +793,7 @@ impl App {
                     masked: true,
                     action: PasswordAction::UnlockVault,
                 };
-                self.state.input_buffer.clear();
+                self.state.clear_input();
             }
         }
     }
@@ -835,7 +835,7 @@ impl App {
             let key = session.key.clone();
             self.state.session_chats.entry(key).or_default();
             self.state.input_mode = InputMode::ChatInput;
-            self.state.input_buffer.clear();
+            self.state.clear_input();
         } else {
             // No sessions — create one
             self.handle_new_session_action();
@@ -1226,7 +1226,7 @@ impl App {
         match key.code {
             KeyCode::Enter => {
                 let password = self.state.input_buffer.clone();
-                self.state.input_buffer.clear();
+                self.state.clear_input();
                 self.state.input_mode = InputMode::Normal;
 
                 if password.is_empty() {
@@ -1295,7 +1295,7 @@ impl App {
                 }
             }
             KeyCode::Esc => {
-                self.state.input_buffer.clear();
+                self.state.clear_input();
                 self.state.input_mode = InputMode::Normal;
                 self.state.status_message = Some(("Cancelled".to_string(), false));
             }
@@ -1726,8 +1726,8 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                // System prompt field (5): Enter inserts a newline
-                if state.field_index == 5 {
+                // System prompt field (7): Enter inserts a newline
+                if state.field_index == 7 {
                     let newline_count = state.system_prompt.chars().filter(|&c| c == '\n').count();
                     if newline_count < 9 {
                         state.system_prompt.push('\n');
@@ -1810,7 +1810,7 @@ impl App {
                             self.state.chat_model = Some(model);
                             self.state.chat_agent_id = None;
                             self.state.input_mode = InputMode::ChatInput;
-                            self.state.input_buffer.clear();
+                            self.state.clear_input();
                         } else {
                             self.state.status_message = Some(("No model available".to_string(), true));
                             self.state.input_mode = InputMode::CreateSession(state);
@@ -1826,7 +1826,7 @@ impl App {
                             self.state.chat_model = agent_model;
                             self.state.chat_agent_id = Some(agent_id);
                             self.state.input_mode = InputMode::ChatInput;
-                            self.state.input_buffer.clear();
+                            self.state.clear_input();
                         } else {
                             self.state.status_message = Some(("No agent available".to_string(), true));
                             self.state.input_mode = InputMode::CreateSession(state);
@@ -1873,6 +1873,18 @@ impl App {
         if !state.max_tool_calls.is_empty() {
             if let Ok(n) = state.max_tool_calls.parse::<u32>() {
                 body.insert("max_tool_calls".to_string(), serde_json::Value::Number(n.into()));
+            }
+        }
+        if !state.temperature.is_empty() {
+            if let Ok(t) = state.temperature.parse::<f64>() {
+                if let Some(n) = serde_json::Number::from_f64(t) {
+                    body.insert("temperature".to_string(), serde_json::Value::Number(n));
+                }
+            }
+        }
+        if !state.max_tokens.is_empty() {
+            if let Ok(n) = state.max_tokens.parse::<u32>() {
+                body.insert("max_tokens".to_string(), serde_json::Value::Number(n.into()));
             }
         }
         if !state.system_prompt.is_empty() {
@@ -2194,7 +2206,8 @@ impl App {
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 let newline_count = self.state.input_buffer.chars().filter(|&c| c == '\n').count();
                 if newline_count < 9 {
-                    self.state.input_buffer.push('\n');
+                    self.state.input_buffer.insert(self.state.input_cursor, '\n');
+                    self.state.input_cursor += 1;
                 }
             }
             // Plain Enter sends the message
@@ -2202,10 +2215,51 @@ impl App {
                 self.send_chat_buffer();
             }
             KeyCode::Char(c) => {
-                self.state.input_buffer.push(c);
+                self.state.input_buffer.insert(self.state.input_cursor, c);
+                self.state.input_cursor += c.len_utf8();
             }
             KeyCode::Backspace => {
-                self.state.input_buffer.pop();
+                if self.state.input_cursor > 0 {
+                    // Find the previous char boundary
+                    let prev = self.state.input_buffer[..self.state.input_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    self.state.input_buffer.remove(prev);
+                    self.state.input_cursor = prev;
+                }
+            }
+            KeyCode::Delete => {
+                if self.state.input_cursor < self.state.input_buffer.len() {
+                    self.state.input_buffer.remove(self.state.input_cursor);
+                }
+            }
+            KeyCode::Left => {
+                if self.state.input_cursor > 0 {
+                    // Move to previous char boundary
+                    self.state.input_cursor = self.state.input_buffer[..self.state.input_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+            }
+            KeyCode::Right => {
+                if self.state.input_cursor < self.state.input_buffer.len() {
+                    // Move to next char boundary
+                    self.state.input_cursor = self.state.input_buffer[self.state.input_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.state.input_cursor + i)
+                        .unwrap_or(self.state.input_buffer.len());
+                }
+            }
+            KeyCode::Home => {
+                self.state.input_cursor = 0;
+            }
+            KeyCode::End => {
+                self.state.input_cursor = self.state.input_buffer.len();
             }
             _ => {}
         }
@@ -2222,7 +2276,7 @@ impl App {
             }
             self.spawn_chat_request(message);
         }
-        self.state.input_buffer.clear();
+        self.state.clear_input();
     }
 
     /// Save provider auth mode preference to config file
@@ -2797,6 +2851,8 @@ async fn load_agents_from_gateway() -> Result<Vec<AgentInfo>> {
         let system_prompt = entry.get("system_prompt").and_then(|v| v.as_str()).map(String::from);
         let workspace = entry.get("workspace").and_then(|v| v.as_str()).map(String::from);
         let max_tool_calls = entry.get("max_tool_calls").and_then(serde_json::Value::as_u64).map(|n| n as u32);
+        let temperature = entry.get("temperature").and_then(serde_json::Value::as_f64).map(|n| n as f32);
+        let max_tokens = entry.get("max_tokens").and_then(serde_json::Value::as_u64).map(|n| n as u32);
         let enabled = entry.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true);
         let session_count = entry.get("session_count").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
 
@@ -2818,6 +2874,8 @@ async fn load_agents_from_gateway() -> Result<Vec<AgentInfo>> {
             system_prompt,
             workspace,
             max_tool_calls,
+            temperature,
+            max_tokens,
             enabled,
         });
     }
@@ -2843,6 +2901,8 @@ async fn load_agents_from_config(config_path: &PathBuf) -> Result<Vec<AgentInfo>
                 let system_prompt = entry.get("system_prompt").and_then(|v| v.as_str()).map(String::from);
                 let workspace = entry.get("workspace").and_then(|v| v.as_str()).map(String::from);
                 let max_tool_calls = entry.get("max_tool_calls").and_then(toml::Value::as_integer).map(|n| n as u32);
+                let temperature = entry.get("temperature").and_then(toml::Value::as_float).map(|n| n as f32);
+                let max_tokens = entry.get("max_tokens").and_then(toml::Value::as_integer).map(|n| n as u32);
                 let enabled = entry.get("enabled").and_then(toml::Value::as_bool).unwrap_or(true);
 
                 let status = if enabled { AgentStatus::Active } else { AgentStatus::Disabled };
@@ -2856,6 +2916,8 @@ async fn load_agents_from_config(config_path: &PathBuf) -> Result<Vec<AgentInfo>
                     system_prompt,
                     workspace,
                     max_tool_calls,
+                    temperature,
+                    max_tokens,
                     enabled,
                 });
             }
@@ -2871,7 +2933,9 @@ async fn load_agents_from_config(config_path: &PathBuf) -> Result<Vec<AgentInfo>
             parent_id: None,
             system_prompt: None,
             workspace: None,
-            max_tool_calls: Some(10),
+            max_tool_calls: None,
+            temperature: Some(0.3),
+            max_tokens: Some(16000),
             enabled: true,
         });
     }
@@ -3089,8 +3153,22 @@ async fn send_agent_message(
                 } else if let Some(err) = result_val.get("message").and_then(|m| m.as_str()) {
                     format!("Error: {err}")
                 } else if let Some(data) = result_val.get("data") {
-                    let s = serde_json::to_string_pretty(data).unwrap_or_default();
-                    truncate_tool_result(&s, 200)
+                    // For exec tool results, show stdout/stderr instead of raw JSON
+                    if let Some(stdout) = data.get("stdout").and_then(|s| s.as_str()) {
+                        let stderr = data.get("stderr").and_then(|s| s.as_str()).unwrap_or("");
+                        let exit_code = data.get("exit_code").and_then(|c| c.as_i64()).unwrap_or(0);
+                        let mut output = stdout.to_string();
+                        if !stderr.is_empty() {
+                            output.push_str(&format!("\nstderr: {stderr}"));
+                        }
+                        if exit_code != 0 {
+                            output.push_str(&format!("\nexit code: {exit_code}"));
+                        }
+                        truncate_tool_result(&output, 500)
+                    } else {
+                        let s = serde_json::to_string_pretty(data).unwrap_or_default();
+                        truncate_tool_result(&s, 200)
+                    }
                 } else if let Some(path) = result_val.get("path").and_then(|p| p.as_str()) {
                     format!("[File: {path}]")
                 } else {

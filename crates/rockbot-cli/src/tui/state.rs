@@ -182,6 +182,8 @@ pub struct AgentInfo {
     pub system_prompt: Option<String>,
     pub workspace: Option<String>,
     pub max_tool_calls: Option<u32>,
+    pub temperature: Option<f32>,
+    pub max_tokens: Option<u32>,
     pub enabled: bool,
 }
 
@@ -528,7 +530,9 @@ pub struct AppState {
     // Input modes (for modals, text input, etc.)
     pub input_mode: InputMode,
     pub input_buffer: String,
-    
+    /// Cursor byte position within input_buffer
+    pub input_cursor: usize,
+
     // Message sender for async updates
     pub tx: mpsc::UnboundedSender<Message>,
 }
@@ -1077,6 +1081,10 @@ pub struct EditAgentState {
     pub workspace: String,
     /// Max tool calls per turn
     pub max_tool_calls: String,
+    /// LLM temperature (0.0-2.0)
+    pub temperature: String,
+    /// LLM max response tokens
+    pub max_tokens: String,
     /// System prompt override
     pub system_prompt: String,
     /// Whether the agent is enabled
@@ -1101,6 +1109,8 @@ impl EditAgentState {
         "Parent Agent (subagent)",
         "Workspace",
         "Max Tool Calls",
+        "Temperature",
+        "Max Tokens",
         "System Prompt",
     ];
 
@@ -1112,7 +1122,9 @@ impl EditAgentState {
             model: String::new(),
             parent_id: String::new(),
             workspace: String::new(),
-            max_tool_calls: "10".to_string(),
+            max_tool_calls: String::new(),
+            temperature: "0.3".to_string(),
+            max_tokens: "16000".to_string(),
             system_prompt: String::new(),
             enabled: true,
             available_models: Vec::new(),
@@ -1128,7 +1140,9 @@ impl EditAgentState {
             model: agent.model.clone().unwrap_or_default(),
             parent_id: agent.parent_id.clone().unwrap_or_default(),
             workspace: agent.workspace.clone().unwrap_or_default(),
-            max_tool_calls: agent.max_tool_calls.map_or_else(|| "10".to_string(), |n| n.to_string()),
+            max_tool_calls: agent.max_tool_calls.map_or_else(String::new, |n| n.to_string()),
+            temperature: agent.temperature.map_or_else(|| "0.3".to_string(), |n| format!("{n}")),
+            max_tokens: agent.max_tokens.map_or_else(|| "16000".to_string(), |n| n.to_string()),
             system_prompt: agent.system_prompt.clone().unwrap_or_default(),
             enabled: agent.enabled,
             available_models: Vec::new(),
@@ -1229,7 +1243,9 @@ impl EditAgentState {
             2 => Some(&mut self.parent_id),
             3 => Some(&mut self.workspace),
             4 => Some(&mut self.max_tool_calls),
-            5 => Some(&mut self.system_prompt),
+            5 => Some(&mut self.temperature),
+            6 => Some(&mut self.max_tokens),
+            7 => Some(&mut self.system_prompt),
             _ => None,
         }
     }
@@ -1860,7 +1876,8 @@ impl AppState {
             
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
-            
+            input_cursor: 0,
+
             tx,
         }
     }
@@ -2163,6 +2180,12 @@ pub enum ProviderCategory {
 }
 
 impl AppState {
+    /// Clear the input buffer and reset cursor
+    pub fn clear_input(&mut self) {
+        self.input_buffer.clear();
+        self.input_cursor = 0;
+    }
+
     /// Move selection up in current list
     pub fn select_prev(&mut self) {
         match self.menu_item {

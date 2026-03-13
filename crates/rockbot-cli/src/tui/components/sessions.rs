@@ -482,16 +482,23 @@ fn render_chat_input(frame: &mut Frame, area: Rect, state: &AppState, is_active:
         .border_style(border_style)
         .title(title);
 
-    let input_text = if is_active {
-        format!("{}█", &state.input_buffer)
+    if is_active {
+        // Build text with visible cursor at the correct position
+        let cursor_pos = state.input_cursor.min(state.input_buffer.len());
+        let before = &state.input_buffer[..cursor_pos];
+        let after = &state.input_buffer[cursor_pos..];
+        // Insert block cursor character and render as plain text so wrapping works
+        let input_text = format!("{before}█{after}");
+        let paragraph = Paragraph::new(input_text)
+            .block(block)
+            .style(Style::default().fg(Color::White))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, area);
     } else {
-        state.input_buffer.clone()
-    };
-
-    let paragraph = Paragraph::new(input_text)
-        .block(block)
-        .style(Style::default().fg(Color::White))
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(paragraph, area);
+        let paragraph = Paragraph::new(state.input_buffer.as_str())
+            .block(block)
+            .style(Style::default().fg(Color::White))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, area);
+    }
 }

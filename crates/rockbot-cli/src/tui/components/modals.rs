@@ -695,6 +695,8 @@ pub fn render_edit_agent_modal(
         Constraint::Length(3),             // Parent Agent
         Constraint::Length(3),             // Workspace
         Constraint::Length(3),             // Max Tool Calls
+        Constraint::Length(3),             // Temperature
+        Constraint::Length(3),             // Max Tokens
         Constraint::Length(prompt_height), // System Prompt (grows up to 12)
         Constraint::Length(2),             // Help/subagent info
         Constraint::Min(0),               // Spacer
@@ -782,12 +784,24 @@ pub fn render_edit_agent_modal(
     // Field 4: Max Tool Calls
     render_input_field(
         frame, chunks[4], "Max Tool Calls", &state.max_tool_calls,
-        "10", state.field_index == 4, false, false,
+        "dynamic (32-160)", state.field_index == 4, false, false,
     );
 
-    // Field 5: System Prompt (multi-line textarea)
+    // Field 5: Temperature
+    render_input_field(
+        frame, chunks[5], "Temperature", &state.temperature,
+        "0.3", state.field_index == 5, false, false,
+    );
+
+    // Field 6: Max Tokens
+    render_input_field(
+        frame, chunks[6], "Max Tokens", &state.max_tokens,
+        "16000", state.field_index == 6, false, false,
+    );
+
+    // Field 7: System Prompt (multi-line textarea)
     {
-        let prompt_active = state.field_index == 5;
+        let prompt_active = state.field_index == 7;
         let border_style = if prompt_active {
             Style::default().fg(Color::Yellow)
         } else {
@@ -826,7 +840,7 @@ pub fn render_edit_agent_modal(
             .block(prompt_block)
             .style(text_style)
             .wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(paragraph, chunks[5]);
+        frame.render_widget(paragraph, chunks[7]);
     }
 
     // Subagent info / help line
@@ -843,7 +857,7 @@ pub fn render_edit_agent_modal(
 
     let help = Paragraph::new(help_text)
         .style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(help, chunks[6]);
+    frame.render_widget(help, chunks[8]);
 }
 
 /// Render the create session modal

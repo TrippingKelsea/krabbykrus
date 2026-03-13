@@ -97,9 +97,15 @@ pub struct AgentInstance {
     pub workspace: Option<PathBuf>,
     /// Model override
     pub model: Option<String>,
-    /// Maximum number of tool calls per turn (default: 10)
+    /// Maximum number of tool calls per turn (dynamic by default)
     #[serde(default = "default_max_tool_calls")]
     pub max_tool_calls: Option<u32>,
+    /// LLM temperature (default: 0.3)
+    #[serde(default = "default_temperature")]
+    pub temperature: Option<f32>,
+    /// LLM max response tokens (default: 16000)
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: Option<u32>,
     /// Parent agent ID (for subagents)
     #[serde(default)]
     pub parent_id: Option<String>,
@@ -585,7 +591,15 @@ fn default_max_context_tokens() -> usize {
 }
 
 fn default_max_tool_calls() -> Option<u32> {
-    Some(10)
+    None // Dynamic: 32 + (available_tools * 8), clamped to [32, 160]
+}
+
+fn default_temperature() -> Option<f32> {
+    Some(0.3)
+}
+
+fn default_max_tokens() -> Option<u32> {
+    Some(16000)
 }
 
 fn default_tool_profile() -> String {

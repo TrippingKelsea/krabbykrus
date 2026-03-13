@@ -645,6 +645,7 @@ mod tests {
             role: MessageRole::User,
             content: "Hello".to_string(),
             tool_calls: None,
+            tool_call_id: None,
         };
 
         let converted = provider.convert_message(&msg);

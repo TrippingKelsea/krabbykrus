@@ -54,6 +54,7 @@ use aws_sdk_bedrockruntime::{
         ContentBlock, ConversationRole, ConverseOutput,
         Message as BedrockMessage, SystemContentBlock,
         Tool, ToolConfiguration, ToolInputSchema, ToolSpecification,
+        ToolResultBlock, ToolResultContentBlock, ToolUseBlock,
         ContentBlockDelta, ConverseStreamOutput,
     },
 };
@@ -437,7 +438,23 @@ impl BedrockProvider {
         messages: &[Message],
     ) -> (Option<Vec<SystemContentBlock>>, Vec<BedrockMessage>) {
         let mut system_blocks = Vec::new();
+        // Collect content blocks grouped by role, merging consecutive same-role messages
+        // (Bedrock requires strictly alternating user/assistant roles)
+        let mut pending_role: Option<ConversationRole> = None;
+        let mut pending_blocks: Vec<ContentBlock> = Vec::new();
         let mut bedrock_messages = Vec::new();
+
+        let flush = |role: ConversationRole, blocks: Vec<ContentBlock>, out: &mut Vec<BedrockMessage>| {
+            if blocks.is_empty() {
+                return;
+            }
+            #[allow(clippy::expect_used)]
+            let mut builder = BedrockMessage::builder().role(role);
+            for block in blocks {
+                builder = builder.content(block);
+            }
+            out.push(builder.build().expect("valid message"));
+        };
 
         for msg in messages {
             match msg.role {
@@ -446,29 +463,69 @@ impl BedrockProvider {
                         SystemContentBlock::Text(msg.content.clone()),
                     );
                 }
-                MessageRole::User | MessageRole::Tool => {
-                    let content = ContentBlock::Text(msg.content.clone());
-                    #[allow(clippy::expect_used)] // builder is always valid when role and content are set
-                    bedrock_messages.push(
-                        BedrockMessage::builder()
-                            .role(ConversationRole::User)
-                            .content(content)
-                            .build()
-                            .expect("valid message"),
-                    );
+                MessageRole::Tool => {
+                    // Tool results are sent as User role with ContentBlock::ToolResult
+                    let target_role = ConversationRole::User;
+                    if pending_role.as_ref() != Some(&target_role) {
+                        if let Some(role) = pending_role.take() {
+                            flush(role, std::mem::take(&mut pending_blocks), &mut bedrock_messages);
+                        }
+                        pending_role = Some(target_role);
+                    }
+                    let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
+                    #[allow(clippy::expect_used)]
+                    let tool_result = ToolResultBlock::builder()
+                        .tool_use_id(&tool_call_id)
+                        .content(ToolResultContentBlock::Text(msg.content.clone()))
+                        .build()
+                        .expect("valid tool result");
+                    pending_blocks.push(ContentBlock::ToolResult(tool_result));
+                }
+                MessageRole::User => {
+                    let target_role = ConversationRole::User;
+                    if pending_role.as_ref() != Some(&target_role) {
+                        if let Some(role) = pending_role.take() {
+                            flush(role, std::mem::take(&mut pending_blocks), &mut bedrock_messages);
+                        }
+                        pending_role = Some(target_role);
+                    }
+                    pending_blocks.push(ContentBlock::Text(msg.content.clone()));
                 }
                 MessageRole::Assistant => {
-                    let content = ContentBlock::Text(msg.content.clone());
-                    #[allow(clippy::expect_used)] // builder is always valid when role and content are set
-                    bedrock_messages.push(
-                        BedrockMessage::builder()
-                            .role(ConversationRole::Assistant)
-                            .content(content)
-                            .build()
-                            .expect("valid message"),
-                    );
+                    let target_role = ConversationRole::Assistant;
+                    if pending_role.as_ref() != Some(&target_role) {
+                        if let Some(role) = pending_role.take() {
+                            flush(role, std::mem::take(&mut pending_blocks), &mut bedrock_messages);
+                        }
+                        pending_role = Some(target_role);
+                    }
+                    if !msg.content.is_empty() {
+                        pending_blocks.push(ContentBlock::Text(msg.content.clone()));
+                    }
+                    if let Some(ref tool_calls) = msg.tool_calls {
+                        for tc in tool_calls {
+                            let input_doc = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
+                                .map(|v| Self::json_to_document(&v))
+                                .unwrap_or_else(|_| aws_smithy_types::Document::Object(Default::default()));
+                            #[allow(clippy::expect_used)]
+                            let tool_use = ToolUseBlock::builder()
+                                .tool_use_id(&tc.id)
+                                .name(&tc.function.name)
+                                .input(input_doc)
+                                .build()
+                                .expect("valid tool use");
+                            pending_blocks.push(ContentBlock::ToolUse(tool_use));
+                        }
+                    }
+                    if pending_blocks.is_empty() {
+                        pending_blocks.push(ContentBlock::Text(String::new()));
+                    }
                 }
             }
+        }
+        // Flush any remaining pending blocks
+        if let Some(role) = pending_role {
+            flush(role, pending_blocks, &mut bedrock_messages);
         }
 
         let system = if system_blocks.is_empty() {
@@ -511,15 +568,27 @@ impl BedrockProvider {
         match doc {
             aws_smithy_types::Document::Null => "null".to_string(),
             aws_smithy_types::Document::Bool(b) => b.to_string(),
-            aws_smithy_types::Document::Number(n) => format!("{n:?}"),
-            aws_smithy_types::Document::String(s) => format!("\"{s}\""),
+            aws_smithy_types::Document::Number(n) => match n {
+                aws_smithy_types::Number::PosInt(i) => i.to_string(),
+                aws_smithy_types::Number::NegInt(i) => i.to_string(),
+                aws_smithy_types::Number::Float(f) => {
+                    if f.is_finite() { format!("{f}") } else { "null".to_string() }
+                }
+            },
+            aws_smithy_types::Document::String(s) => {
+                // Properly escape for JSON
+                serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\""))
+            }
             aws_smithy_types::Document::Array(arr) => {
                 let items: Vec<String> = arr.iter().map(Self::document_to_json_string).collect();
                 format!("[{}]", items.join(","))
             }
             aws_smithy_types::Document::Object(obj) => {
                 let items: Vec<String> = obj.iter()
-                    .map(|(k, v)| format!("\"{}\":{}", k, Self::document_to_json_string(v)))
+                    .map(|(k, v)| {
+                        let key = serde_json::to_string(k).unwrap_or_else(|_| format!("\"{k}\""));
+                        format!("{key}:{}", Self::document_to_json_string(v))
+                    })
                     .collect();
                 format!("{{{}}}", items.join(","))
             }
@@ -898,6 +967,7 @@ impl LlmProvider for BedrockProvider {
                     } else {
                         Some(tool_calls)
                     },
+                    tool_call_id: None,
                 },
                 finish_reason,
             }],

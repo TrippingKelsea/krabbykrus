@@ -221,11 +221,18 @@ impl Message {
     
     /// Create a tool result message
     pub fn tool_result<S: Into<String>>(tool_call_id: S, tool_name: S, content: S) -> Self {
-        Self::new(MessageContent::ToolResult {
+        let tool_call_id = tool_call_id.into();
+        let tool_name = tool_name.into();
+        let content = content.into();
+        let mut msg = Self::new(MessageContent::ToolResult {
             result: ToolResult::Text {
-                content: format!("Tool '{}' (ID: {}): {}", tool_name.into(), tool_call_id.into(), content.into()),
+                content: content.clone(),
             },
-        }).with_role(MessageRole::Tool)
+        }).with_role(MessageRole::Tool);
+        // Store structured tool data in metadata for LLM round-trip
+        msg.metadata.extra.insert("tool_call_id".to_string(), serde_json::Value::String(tool_call_id));
+        msg.metadata.extra.insert("tool_name".to_string(), serde_json::Value::String(tool_name));
+        msg
     }
     
     /// Create a message from an LLM message
@@ -241,30 +248,27 @@ impl Message {
             rockbot_llm::MessageRole::Tool => MessageRole::Tool,
         };
         
-        // If there are tool calls, create a structured message
-        let content = if let Some(tool_calls) = llm_message.tool_calls {
-            // For now, format tool calls as text. In the future, this could be structured
-            let mut formatted_content = llm_message.content;
-            if !tool_calls.is_empty() {
-                formatted_content.push_str("\n\nTool calls:");
-                for tool_call in tool_calls {
-                    formatted_content.push_str(&format!(
-                        "\n- {} (ID: {}): {}",
-                        tool_call.function.name,
-                        tool_call.id,
-                        tool_call.function.arguments
-                    ));
-                }
-            }
-            MessageContent::Text { text: formatted_content }
-        } else {
-            MessageContent::Text { text: llm_message.content }
-        };
-        
-        Ok(Self::new(content)
+        // Preserve tool_calls structurally in metadata for LLM round-trip
+        let content = MessageContent::Text { text: llm_message.content };
+
+        let mut msg = Self::new(content)
             .with_session_id(session_id)
             .with_agent_id(agent_id)
-            .with_role(role))
+            .with_role(role);
+
+        if let Some(ref tool_calls) = llm_message.tool_calls {
+            if !tool_calls.is_empty() {
+                if let Ok(tc_json) = serde_json::to_value(tool_calls) {
+                    msg.metadata.extra.insert("tool_calls".to_string(), tc_json);
+                }
+            }
+        }
+
+        if let Some(ref tool_call_id) = llm_message.tool_call_id {
+            msg.metadata.extra.insert("tool_call_id".to_string(), serde_json::Value::String(tool_call_id.clone()));
+        }
+
+        Ok(msg)
     }
     
     /// Create a message builder

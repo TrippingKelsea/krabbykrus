@@ -293,6 +293,7 @@ impl LlmProvider for AnthropicProvider {
                     role: MessageRole::Assistant,
                     content: response_content,
                     tool_calls: None,
+                    tool_call_id: None,
                 },
                 finish_reason: "stop".to_string(),
             }],

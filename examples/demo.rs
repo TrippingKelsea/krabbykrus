@@ -86,6 +86,8 @@ async fn main() -> Result<()> {
         workspace: Some(workspace_path),
         model: Some(model.to_string()),
         max_tool_calls: None,
+        temperature: Some(0.3),
+        max_tokens: Some(16000),
         parent_id: None,
         system_prompt: None,
         enabled: true,
@@ -114,7 +116,7 @@ async fn main() -> Result<()> {
 
     // Process the message
     let session_id = "demo-session".to_string();
-    match agent.process_message(session_id, user_message).await {
+    match agent.process_message(session_id, user_message, None).await {
         Ok(response) => {
             println!("✅ Response received!");
             println!("   Message: {}", response.message.extract_text().unwrap_or_default());

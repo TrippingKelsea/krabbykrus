@@ -1451,6 +1451,7 @@ impl Gateway {
                                 role: rockbot_llm::MessageRole::System,
                                 content: system_prompt.clone(),
                                 tool_calls: None,
+                                tool_call_id: None,
                             });
                         }
                     }
@@ -1470,6 +1471,7 @@ impl Gateway {
                                     role: rockbot_llm::MessageRole::System,
                                     content: content.trim().to_string(),
                                     tool_calls: None,
+                                    tool_call_id: None,
                                 });
                             }
                         }
@@ -1843,7 +1845,14 @@ impl Gateway {
         if !soul_path.exists() {
             tokio::fs::write(
                 &soul_path,
-                "# Agent Identity\n\nDescribe this agent's personality, role, and behavioral guidelines here.\n",
+                "# Agent Identity\n\n\
+                 You are a capable autonomous agent. You accomplish tasks by taking direct action \
+                 using your tools — never by describing what you would do.\n\n\
+                 ## Principles\n\n\
+                 - Act decisively. Start working immediately when given a task.\n\
+                 - Be thorough. Complete every step before reporting results.\n\
+                 - Be resilient. When something fails, analyze the error and try a different approach.\n\
+                 - Be self-sufficient. Never ask the user to do something you can do with your tools.\n",
             ).await?;
         }
 
@@ -1892,6 +1901,12 @@ impl Gateway {
             }
             if let Some(max_tool_calls) = agent.max_tool_calls {
                 new_agent["max_tool_calls"] = toml_edit::value(max_tool_calls as i64);
+            }
+            if let Some(temperature) = agent.temperature {
+                new_agent["temperature"] = toml_edit::value(temperature as f64);
+            }
+            if let Some(max_tokens) = agent.max_tokens {
+                new_agent["max_tokens"] = toml_edit::value(max_tokens as i64);
             }
             if let Some(ref system_prompt) = agent.system_prompt {
                 new_agent["system_prompt"] = toml_edit::value(system_prompt);
@@ -1950,6 +1965,12 @@ impl Gateway {
                 }
                 if let Some(max_tool_calls) = agent.max_tool_calls {
                     t["max_tool_calls"] = toml_edit::value(max_tool_calls as i64);
+                }
+                if let Some(temperature) = agent.temperature {
+                    t["temperature"] = toml_edit::value(temperature as f64);
+                }
+                if let Some(max_tokens) = agent.max_tokens {
+                    t["max_tokens"] = toml_edit::value(max_tokens as i64);
                 }
                 if let Some(ref system_prompt) = agent.system_prompt {
                     t["system_prompt"] = toml_edit::value(system_prompt);
@@ -2027,6 +2048,8 @@ impl Gateway {
                 "system_prompt": cfg.system_prompt,
                 "workspace": cfg.workspace.as_ref().map(|p| p.display().to_string()),
                 "max_tool_calls": cfg.max_tool_calls,
+                "temperature": cfg.temperature,
+                "max_tokens": cfg.max_tokens,
                 "enabled": cfg.enabled,
                 "session_count": session_count,
             }));
@@ -2043,6 +2066,8 @@ impl Gateway {
                     "system_prompt": p.config.system_prompt,
                     "workspace": p.config.workspace.as_ref().map(|p| p.display().to_string()),
                     "max_tool_calls": p.config.max_tool_calls,
+                    "temperature": p.config.temperature,
+                    "max_tokens": p.config.max_tokens,
                     "enabled": p.config.enabled,
                     "session_count": 0,
                     "reason": p.reason,
@@ -2062,6 +2087,8 @@ impl Gateway {
                     "system_prompt": cfg.system_prompt,
                     "workspace": cfg.workspace.as_ref().map(|p| p.display().to_string()),
                     "max_tool_calls": cfg.max_tool_calls,
+                    "temperature": cfg.temperature,
+                    "max_tokens": cfg.max_tokens,
                     "enabled": cfg.enabled,
                     "session_count": 0,
                 }));
@@ -2096,6 +2123,8 @@ impl Gateway {
             parent_id: Option<String>,
             workspace: Option<String>,
             max_tool_calls: Option<u32>,
+            temperature: Option<f32>,
+            max_tokens: Option<u32>,
             system_prompt: Option<String>,
             #[serde(default = "default_enabled")]
             enabled: bool,
@@ -2128,6 +2157,8 @@ impl Gateway {
             model: req.model,
             workspace: req.workspace.map(std::path::PathBuf::from),
             max_tool_calls: req.max_tool_calls,
+            temperature: req.temperature,
+            max_tokens: req.max_tokens,
             parent_id: req.parent_id,
             system_prompt: req.system_prompt.clone(),
             enabled: req.enabled,
@@ -2198,6 +2229,8 @@ impl Gateway {
             parent_id: Option<String>,
             workspace: Option<String>,
             max_tool_calls: Option<u32>,
+            temperature: Option<f32>,
+            max_tokens: Option<u32>,
             system_prompt: Option<String>,
             enabled: Option<bool>,
         }
@@ -2232,6 +2265,12 @@ impl Gateway {
             }
             if let Some(max_tool_calls) = update.max_tool_calls {
                 cfg.max_tool_calls = Some(max_tool_calls);
+            }
+            if let Some(temperature) = update.temperature {
+                cfg.temperature = Some(temperature);
+            }
+            if let Some(max_tokens) = update.max_tokens {
+                cfg.max_tokens = Some(max_tokens);
             }
             if let Some(system_prompt) = &update.system_prompt {
                 cfg.system_prompt = if system_prompt.is_empty() { None } else { Some(system_prompt.clone()) };
