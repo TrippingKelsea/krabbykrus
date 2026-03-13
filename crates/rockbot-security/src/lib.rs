@@ -222,8 +222,10 @@ impl SecurityManager {
     /// Create security context for a new session
     pub async fn create_session_context(&self, session_id: &str) -> Result<SecurityContext> {
         let mut capabilities = Capabilities::new();
-        
-        // Add default capabilities based on configuration
+
+        // Add capabilities based on configuration.
+        // When capability sections are None (unconfigured), grant permissive defaults
+        // so agents can use tools out of the box. Explicit config restricts to listed paths.
         if let Some(fs_config) = &self.config.capabilities.filesystem {
             for path in &fs_config.read_paths {
                 capabilities.add(Capability::FilesystemRead(path.clone()));
@@ -231,15 +233,22 @@ impl SecurityManager {
             for path in &fs_config.write_paths {
                 capabilities.add(Capability::FilesystemWrite(path.clone()));
             }
+        } else {
+            // Default: allow read/write from working directory
+            capabilities.add(Capability::FilesystemRead(PathBuf::from(".")));
+            capabilities.add(Capability::FilesystemWrite(PathBuf::from(".")));
         }
-        
+
         if let Some(net_config) = &self.config.capabilities.network {
             for domain in &net_config.allowed_domains {
                 capabilities.add(Capability::NetworkAccess(domain.clone()));
             }
         }
-        
+
         if self.config.capabilities.process.is_some() {
+            capabilities.add(Capability::ProcessExecute);
+        } else {
+            // Default: allow process execution for exec tool
             capabilities.add(Capability::ProcessExecute);
         }
         

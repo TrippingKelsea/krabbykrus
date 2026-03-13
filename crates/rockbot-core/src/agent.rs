@@ -61,6 +61,8 @@ struct ProcessingContext {
     available_tools: Vec<String>,
     /// Context size in tokens (estimate)
     token_count: usize,
+    /// Working directory override (e.g. from TUI's cwd)
+    workspace_override: Option<std::path::PathBuf>,
 }
 
 /// Agent execution statistics
@@ -186,10 +188,14 @@ impl Agent {
     }
     
     /// Process an incoming message and generate a response
+    ///
+    /// `workspace_override` allows the caller to set the working directory for tool execution
+    /// (e.g. the TUI passes its launch cwd). Falls back to the agent's configured workspace.
     pub async fn process_message(
         &self,
         session_id: String,
         message: Message,
+        workspace_override: Option<std::path::PathBuf>,
     ) -> Result<AgentResponse> {
         let start_time = std::time::Instant::now();
 
@@ -206,7 +212,7 @@ impl Agent {
 
         // Update processing context
         let available_tools = self.get_available_tools(&session).await?;
-        let mut context = self.update_processing_context(db_session_id.clone(), message, available_tools).await?;
+        let mut context = self.update_processing_context(db_session_id.clone(), message, available_tools, workspace_override).await?;
 
         // Generate LLM request
         let llm_request = self.build_llm_request(&mut context).await?;
@@ -294,17 +300,23 @@ impl Agent {
         session_id: String,
         message: Message,
         available_tools: Vec<String>,
+        workspace_override: Option<std::path::PathBuf>,
     ) -> Result<ProcessingContext> {
         let mut state = self.state.write().await;
-        
+
         let context = state.active_contexts.entry(session_id.clone()).or_insert_with(|| {
             ProcessingContext {
                 session_id: session_id.clone(),
                 messages: Vec::new(),
                 available_tools: available_tools.clone(),
                 token_count: 0,
+                workspace_override: None,
             }
         });
+        // Apply workspace override if provided
+        if workspace_override.is_some() {
+            context.workspace_override = workspace_override;
+        }
         
         // Add new message to context
         context.messages.push(message);
@@ -437,12 +449,13 @@ impl Agent {
         }
         
         // Add session and agent context
+        let effective_workspace = self.resolve_workspace(context);
         let context_section = format!(
-            "# Current Context\n\n- Agent ID: {}\n- Session ID: {}\n- Available tools: {}\n- Workspace: {}",
+            "# Current Context\n\n- Agent ID: {}\n- Session ID: {}\n- Available tools: {}\n- Working directory: {}",
             self.config.id,
             context.session_id,
             context.available_tools.join(", "),
-            self.get_workspace_path().display()
+            effective_workspace.display()
         );
         prompt_parts.push(context_section);
         
@@ -453,10 +466,10 @@ impl Agent {
         Ok(prompt_parts.join("\n\n---\n\n"))
     }
     
-    /// Load a context file from the agent's workspace
+    /// Load a context file from the agent's config directory
     async fn load_context_file(&self, filename: &str) -> Result<String> {
-        let workspace_path = self.get_workspace_path();
-        let file_path = workspace_path.join(filename);
+        let agent_dir = self.get_agent_directory();
+        let file_path = agent_dir.join(filename);
         
         match tokio::fs::read_to_string(&file_path).await {
             Ok(content) => Ok(content),
@@ -717,9 +730,11 @@ impl Agent {
             }
             
             // Execute tool calls and prepare for next iteration
+            let effective_workspace = self.resolve_workspace(context);
             let (tool_results, tool_messages) = self.execute_tool_calls(
                 session_id,
                 &current_response,
+                &effective_workspace,
             ).await?;
             
             all_tool_results.extend(tool_results);
@@ -781,19 +796,20 @@ impl Agent {
         &self,
         session_id: &str,
         llm_response: &ChatCompletionResponse,
+        workspace: &std::path::Path,
     ) -> Result<(Vec<ToolExecutionResult>, Vec<Message>)> {
         let mut tool_results = Vec::new();
         let mut tool_messages = Vec::new();
-        
+
         if let Some(choice) = llm_response.choices.first() {
             if let Some(ref tool_calls) = choice.message.tool_calls {
                 for tool_call in tool_calls {
                     debug!("Executing tool: {}", tool_call.function.name);
-                    
+
                     let execution_context = ToolExecutionContext {
                         session_id: session_id.to_string(),
                         agent_id: self.config.id.clone(),
-                        workspace_path: self.get_workspace_path(),
+                        workspace_path: workspace.to_path_buf(),
                         security_context: self.security_manager
                             .get_session_context(session_id)
                             .await?,
@@ -859,15 +875,26 @@ impl Agent {
         Ok((tool_results, tool_messages))
     }
     
-    /// Get the workspace path for this agent
+    /// Get the agent's config/data directory (for SOUL.md, SYSTEM-PROMPT.md, etc.)
+    fn get_agent_directory(&self) -> std::path::PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
+            .join("rockbot")
+            .join("agents")
+            .join(&self.config.id)
+    }
+
+    /// Get the workspace path for this agent (used for tool execution and system prompt context).
+    /// Falls back to the user's home directory when no workspace is configured.
     fn get_workspace_path(&self) -> std::path::PathBuf {
-        self.config.workspace.as_ref()
-            .unwrap_or(&dirs::config_dir()
-                .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
-                .join("rockbot")
-                .join("agents")
-                .join(&self.config.id))
-            .clone()
+        self.config.workspace.clone()
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
+    }
+
+    /// Resolve the effective workspace: override > config > home dir
+    fn resolve_workspace(&self, context: &ProcessingContext) -> std::path::PathBuf {
+        context.workspace_override.clone()
+            .unwrap_or_else(|| self.get_workspace_path())
     }
     
     /// Update agent statistics

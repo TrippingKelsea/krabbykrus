@@ -1690,8 +1690,14 @@ impl Gateway {
 
         match self.session_manager.create_session(agent_id, &session_key).await {
             Ok(mut session) => {
-                // Store model in metadata for ad-hoc sessions
-                if let Some(model) = parsed.model {
+                // Resolve model: use explicit model, or fall back to agent's configured model
+                let model = parsed.model.or_else(|| {
+                    let configs = self.agents_config.try_read().ok()?;
+                    configs.iter()
+                        .find(|c| c.id == agent_id)
+                        .and_then(|c| c.model.clone())
+                });
+                if let Some(model) = model {
                     session.set_metadata("model", &model);
                     let _ = self.session_manager.update_session(&session).await;
                 }
@@ -2385,8 +2391,8 @@ impl Gateway {
             .with_session_id(&session_id)
             .with_role(MessageRole::User);
         
-        // Process message
-        agent.process_message(session_id, message).await
+        // Process message with optional workspace override from the client
+        agent.process_message(session_id, message, request.workspace.map(std::path::PathBuf::from)).await
     }
     
     /// Get gateway health status
@@ -2470,6 +2476,8 @@ impl Clone for Gateway {
 struct MessageRequest {
     session_key: String,
     message: String,
+    /// Working directory override (e.g. TUI's cwd)
+    workspace: Option<String>,
 }
 
 /// HTTP API error response

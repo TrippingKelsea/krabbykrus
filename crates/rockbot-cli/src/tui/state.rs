@@ -472,6 +472,7 @@ pub struct AppState {
     // Paths
     pub config_path: PathBuf,
     pub vault_path: PathBuf,
+    pub launch_dir: PathBuf,
     
     // Gateway
     pub gateway: GatewayStatus,
@@ -1816,6 +1817,7 @@ impl AppState {
             
             config_path,
             vault_path,
+            launch_dir: std::env::current_dir().unwrap_or_default(),
             
             gateway: GatewayStatus::default(),
             gateway_loading: true,

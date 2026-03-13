@@ -2309,6 +2309,7 @@ impl App {
                 .filter(|id| !id.is_empty() && !id.starts_with("ad-hoc"))
                 .cloned()
         });
+        let launch_dir = self.state.launch_dir.to_string_lossy().to_string();
         let chat_history: Vec<(bool, String)> = self.state.chat_messages()
             .iter()
             .filter_map(|m| match m.role {
@@ -2321,7 +2322,7 @@ impl App {
         tokio::spawn(async move {
             // Use agent message endpoint when an agent is available (full tool loop)
             if let Some(ref agent) = agent_id {
-                match send_agent_message(agent, &session_key, &user_message).await {
+                match send_agent_message(agent, &session_key, &user_message, &launch_dir).await {
                     Ok((content, tool_calls)) => {
                         if tool_calls.is_empty() {
                             let _ = tx.send(Message::ChatResponse(session_key, content));
@@ -3026,10 +3027,12 @@ async fn send_agent_message(
     agent_id: &str,
     session_key: &str,
     user_message: &str,
+    workspace: &str,
 ) -> Result<(String, Vec<ToolCallInfo>)> {
     let request_body = serde_json::json!({
         "session_key": session_key,
         "message": user_message,
+        "workspace": workspace,
     });
 
     let client = reqwest::Client::builder()
