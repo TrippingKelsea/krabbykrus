@@ -1,6 +1,6 @@
 [package]
 name = "rockbot-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Core RockBot framework components"
 license = "MIT"
@@ -10,6 +10,7 @@ default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "too
 # LLM providers
 anthropic = ["rockbot-llm/anthropic"]
 openai = ["rockbot-llm/openai"]
+ollama = ["rockbot-llm/ollama"]
 bedrock = ["rockbot-llm/bedrock"]
 # Channel providers
 discord = ["dep:rockbot-channels-discord"]
@@ -19,6 +20,8 @@ signal = ["dep:rockbot-channels-signal"]
 tools-credentials = ["dep:rockbot-tools-credentials"]
 tools-mcp = ["dep:rockbot-tools-mcp"]
 tools-markdown = ["dep:rockbot-tools-markdown"]
+# Telemetry
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 
 [lints]
 workspace = true
@@ -61,6 +64,7 @@ tokio-stream = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 notify = { workspace = true }
 rusqlite = { workspace = true }
 regex = { workspace = true }
@@ -69,6 +73,13 @@ rand = "0.8"
 which = "6"
 cron = { workspace = true }
 metrics = { workspace = true }
+tiktoken-rs = { workspace = true }
+
+# OpenTelemetry (optional, behind `otel` feature)
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

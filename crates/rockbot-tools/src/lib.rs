@@ -113,6 +113,10 @@ pub struct ToolExecutionContext {
     pub agent_invoker: Option<Arc<dyn AgentInvoker>>,
     /// Current delegation depth (0 = top-level, incremented for subagent calls)
     pub delegation_depth: u32,
+    /// Optional blackboard accessor for swarm coordination
+    pub blackboard: Option<Arc<dyn BlackboardAccessor>>,
+    /// Swarm ID this agent belongs to (if any)
+    pub swarm_id: Option<String>,
 }
 
 impl std::fmt::Debug for ToolExecutionContext {
@@ -127,6 +131,8 @@ impl std::fmt::Debug for ToolExecutionContext {
             .field("has_approval_callback", &self.approval_callback.is_some())
             .field("has_agent_invoker", &self.agent_invoker.is_some())
             .field("delegation_depth", &self.delegation_depth)
+            .field("has_blackboard", &self.blackboard.is_some())
+            .field("swarm_id", &self.swarm_id)
             .finish()
     }
 }
@@ -145,6 +151,21 @@ pub trait AgentInvoker: Send + Sync {
         session_id: &str,
         depth: u32,
     ) -> Result<String>;
+}
+
+/// Shared blackboard for swarm-style coordination between agents.
+///
+/// Agents in the same swarm can read/write key-value pairs on a shared
+/// blackboard identified by `swarm_id`. This enables asynchronous
+/// state passing between handoff steps.
+#[async_trait::async_trait]
+pub trait BlackboardAccessor: Send + Sync {
+    /// Read a single key from the swarm's blackboard.
+    async fn read(&self, swarm_id: &str, key: &str) -> Option<serde_json::Value>;
+    /// Write a key-value pair to the swarm's blackboard.
+    async fn write(&self, swarm_id: &str, key: &str, value: serde_json::Value);
+    /// Read all entries from the swarm's blackboard.
+    async fn read_all(&self, swarm_id: &str) -> HashMap<String, serde_json::Value>;
 }
 
 /// Credential accessor trait for tools to request credentials from the vault
@@ -292,6 +313,103 @@ impl Default for ToolProviderRegistry {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Agent-as-Tool: wraps an entire agent as a callable tool for other agents
+// ---------------------------------------------------------------------------
+
+/// A tool that delegates execution to another agent via `AgentInvoker`.
+///
+/// This allows agents to call other agents as if they were tools, with
+/// the delegation depth tracked to prevent infinite recursion.
+pub struct AgentTool {
+    /// The target agent ID to invoke
+    agent_id: String,
+    /// Tool name visible to calling agents
+    tool_name: String,
+    /// Description of what this agent-tool does
+    tool_description: String,
+}
+
+impl AgentTool {
+    pub fn new(agent_id: String, tool_name: String, tool_description: String) -> Self {
+        Self { agent_id, tool_name, tool_description }
+    }
+}
+
+impl Tool for AgentTool {
+    fn name(&self) -> &str {
+        &self.tool_name
+    }
+
+    fn description(&self) -> &str {
+        &self.tool_description
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "The task or question to send to the agent"
+                }
+            },
+            "required": ["message"]
+        })
+    }
+
+    fn required_capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+        Box::pin(async move {
+            let message = params.get("message")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::InvalidParameters {
+                    message: "Missing required 'message' parameter".to_string(),
+                })?;
+
+            let invoker = context.agent_invoker.as_ref()
+                .ok_or_else(|| ToolError::ExecutionFailed {
+                    message: "No agent invoker available for agent-as-tool delegation".to_string(),
+                })?;
+
+            let max_depth = 3u32;
+            if context.delegation_depth >= max_depth {
+                return Err(ToolError::ExecutionFailed {
+                    message: format!(
+                        "Agent delegation depth limit ({max_depth}) exceeded"
+                    ),
+                });
+            }
+
+            // Prevent self-delegation
+            if self.agent_id == context.agent_id {
+                return Err(ToolError::ExecutionFailed {
+                    message: "Agent cannot delegate to itself".to_string(),
+                });
+            }
+
+            match invoker.invoke_agent(
+                &self.agent_id,
+                message,
+                &context.session_id,
+                context.delegation_depth + 1,
+            ).await {
+                Ok(response) => Ok(ToolResult::Text { content: response }),
+                Err(e) => Err(ToolError::ExecutionFailed {
+                    message: format!("Agent '{}' invocation failed: {e}", self.agent_id),
+                }),
+            }
+        })
+    }
+}
+
 impl ToolRegistry {
     /// Create a new tool registry
     pub async fn new(config: ToolConfig) -> Result<Self> {
@@ -310,8 +428,8 @@ impl ToolRegistry {
     async fn register_builtin_tools(&self) -> Result<()> {
         let tools_to_register = match self.config.profile.as_str() {
             "minimal" => vec!["read", "write"],
-            "standard" => vec!["read", "write", "edit", "exec", "glob", "grep", "patch", "invoke_agent", "web_fetch", "web_search"],
-            "full" => vec!["read", "write", "edit", "exec", "glob", "grep", "patch", "memory_get", "memory_search", "invoke_agent", "web_fetch", "web_search"],
+            "standard" => vec!["read", "write", "edit", "exec", "glob", "grep", "patch", "invoke_agent", "handoff", "web_fetch", "web_search", "test", "lint", "clarify"],
+            "full" => vec!["read", "write", "edit", "exec", "glob", "grep", "patch", "memory_get", "memory_search", "invoke_agent", "handoff", "web_fetch", "web_search", "browser", "test", "lint", "clarify", "blackboard_read", "blackboard_write"],
             _ => vec!["read", "write", "edit", "exec", "glob", "grep", "patch"],
         };
         
@@ -341,8 +459,15 @@ impl ToolRegistry {
             "memory_get" => Ok(Some(Arc::new(builtin::MemoryGetTool::new()))),
             "memory_search" => Ok(Some(Arc::new(builtin::MemorySearchTool::new()))),
             "invoke_agent" => Ok(Some(Arc::new(builtin::InvokeAgentTool::new()))),
+            "handoff" => Ok(Some(Arc::new(builtin::HandoffTool::new()))),
+            "blackboard_read" => Ok(Some(Arc::new(builtin::BlackboardReadTool::new()))),
+            "blackboard_write" => Ok(Some(Arc::new(builtin::BlackboardWriteTool::new()))),
             "web_fetch" => Ok(Some(Arc::new(builtin::WebFetchTool::new()))),
             "web_search" => Ok(Some(Arc::new(builtin::WebSearchTool::new()))),
+            "browser" => Ok(Some(Arc::new(builtin::BrowserTool::new()))),
+            "test" => Ok(Some(Arc::new(builtin::TestTool::new()))),
+            "lint" => Ok(Some(Arc::new(builtin::LintTool::new()))),
+            "clarify" => Ok(Some(Arc::new(builtin::ClarifyTool::new()))),
             _ => Ok(None),
         }
     }
@@ -502,22 +627,35 @@ pub mod message {
         Json { data: serde_json::Value },
         File { path: String, content: Option<Vec<u8>>, mime_type: Option<String> },
         Error { message: String, code: Option<String>, details: Option<serde_json::Value> },
+        Handoff {
+            target_agent_id: String,
+            context: String,
+            message_override: Option<String>,
+        },
     }
-    
+
     impl ToolResult {
         pub fn text<S: Into<String>>(content: S) -> Self {
             Self::Text { content: content.into() }
         }
-        
+
         pub fn json(data: serde_json::Value) -> Self {
             Self::Json { data }
         }
-        
+
         pub fn error<S: Into<String>>(message: S) -> Self {
             Self::Error {
                 message: message.into(),
                 code: None,
                 details: None,
+            }
+        }
+
+        pub fn handoff<S: Into<String>, C: Into<String>>(target_agent_id: S, context: C) -> Self {
+            Self::Handoff {
+                target_agent_id: target_agent_id.into(),
+                context: context.into(),
+                message_override: None,
             }
         }
     }
@@ -598,6 +736,8 @@ mod tests {
             })),
             agent_invoker: None,
             delegation_depth: 0,
+            blackboard: None,
+            swarm_id: None,
         };
 
         let result = registry.execute_tool(
@@ -646,6 +786,8 @@ mod tests {
             })),
             agent_invoker: None,
             delegation_depth: 0,
+            blackboard: None,
+            swarm_id: None,
         };
 
         let result = registry.execute_tool(
@@ -724,6 +866,8 @@ mod tests {
             approval_callback: None,
             agent_invoker: Some(Arc::new(MockAgentInvoker)),
             delegation_depth: 0,
+            blackboard: None,
+            swarm_id: None,
         };
 
         let result = registry.execute_tool(
@@ -766,6 +910,8 @@ mod tests {
             approval_callback: None,
             agent_invoker: Some(Arc::new(MockAgentInvoker)),
             delegation_depth: 3, // At max depth
+            blackboard: None,
+            swarm_id: None,
         };
 
         let result = registry.execute_tool(
@@ -807,6 +953,8 @@ mod tests {
             approval_callback: None,
             agent_invoker: Some(Arc::new(MockAgentInvoker)),
             delegation_depth: 0,
+            blackboard: None,
+            swarm_id: None,
         };
 
         let result = registry.execute_tool(

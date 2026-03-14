@@ -651,6 +651,109 @@ impl Default for VectorIndex {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Episodic Memory — cross-session interaction recall
+// ---------------------------------------------------------------------------
+
+/// A single episode (summary of a past agent interaction).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Episode {
+    /// Session this episode came from.
+    pub session_id: String,
+    /// When the interaction occurred.
+    pub timestamp: DateTime<Utc>,
+    /// LLM-generated summary of the interaction.
+    pub summary: String,
+    /// Outcome: "success", "partial", "error".
+    pub outcome: String,
+    /// Tools that were used.
+    pub tools_used: Vec<String>,
+    /// Token count for the interaction.
+    pub tokens_used: u64,
+}
+
+/// File-based episodic memory store.
+///
+/// Episodes are stored as JSONL files per agent in the agent's data directory.
+/// Recall uses keyword matching against episode summaries (future: embedding search).
+pub struct EpisodicStore {
+    base_path: PathBuf,
+}
+
+impl EpisodicStore {
+    /// Create an episodic store rooted at `base_path`.
+    /// Episodes for agent "foo" are stored at `base_path/foo/episodes.jsonl`.
+    pub fn new(base_path: PathBuf) -> Self {
+        Self { base_path }
+    }
+
+    /// Store a new episode for the given agent.
+    pub async fn store(&self, agent_id: &str, episode: &Episode) -> Result<()> {
+        let dir = self.base_path.join(agent_id);
+        tokio::fs::create_dir_all(&dir).await?;
+        let file_path = dir.join("episodes.jsonl");
+
+        let line = serde_json::to_string(episode)?;
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .await?;
+        use tokio::io::AsyncWriteExt;
+        file.write_all(line.as_bytes()).await?;
+        file.write_all(b"\n").await?;
+        Ok(())
+    }
+
+    /// Recall the most relevant episodes for a query.
+    ///
+    /// Uses simple keyword matching against summaries. Returns up to `limit` episodes
+    /// sorted by relevance (most recent wins on ties).
+    pub async fn recall(&self, agent_id: &str, query: &str, limit: usize) -> Result<Vec<Episode>> {
+        let file_path = self.base_path.join(agent_id).join("episodes.jsonl");
+        if !file_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let content = tokio::fs::read_to_string(&file_path).await?;
+        let query_lower = query.to_lowercase();
+        let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
+
+        let mut scored: Vec<(f32, Episode)> = content.lines()
+            .filter_map(|line| serde_json::from_str::<Episode>(line).ok())
+            .map(|ep| {
+                let summary_lower = ep.summary.to_lowercase();
+                let term_hits = query_terms.iter()
+                    .filter(|t| summary_lower.contains(**t))
+                    .count();
+                let score = term_hits as f32 / query_terms.len().max(1) as f32;
+                (score, ep)
+            })
+            .filter(|(score, _)| *score > 0.0)
+            .collect();
+
+        // Sort by score descending, then by timestamp descending (most recent first)
+        scored.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.1.timestamp.cmp(&a.1.timestamp))
+        });
+
+        scored.truncate(limit);
+        Ok(scored.into_iter().map(|(_, ep)| ep).collect())
+    }
+
+    /// Get the total number of stored episodes for an agent.
+    pub async fn episode_count(&self, agent_id: &str) -> Result<usize> {
+        let file_path = self.base_path.join(agent_id).join("episodes.jsonl");
+        if !file_path.exists() {
+            return Ok(0);
+        }
+        let content = tokio::fs::read_to_string(&file_path).await?;
+        Ok(content.lines().filter(|l| !l.is_empty()).count())
+    }
+}
+
 /// Mock memory manager for testing
 pub struct MockMemoryManager;
 
@@ -987,5 +1090,73 @@ mod tests {
         let idx = mm.vector_index.read().await;
         assert!(!idx.dirty);
         assert!(idx.total_chunks > 0);
+    }
+
+    #[tokio::test]
+    async fn test_episodic_store_and_recall() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = EpisodicStore::new(temp_dir.path().to_path_buf());
+
+        let ep1 = Episode {
+            session_id: "s1".to_string(),
+            timestamp: Utc::now(),
+            summary: "User asked to refactor the database module".to_string(),
+            outcome: "success".to_string(),
+            tools_used: vec!["read".to_string(), "edit".to_string()],
+            tokens_used: 5000,
+        };
+        let ep2 = Episode {
+            session_id: "s2".to_string(),
+            timestamp: Utc::now(),
+            summary: "User asked to fix a bug in the web server".to_string(),
+            outcome: "success".to_string(),
+            tools_used: vec!["grep".to_string(), "edit".to_string()],
+            tokens_used: 3000,
+        };
+
+        store.store("agent-1", &ep1).await.unwrap();
+        store.store("agent-1", &ep2).await.unwrap();
+
+        assert_eq!(store.episode_count("agent-1").await.unwrap(), 2);
+
+        let results = store.recall("agent-1", "database refactor", 5).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].session_id, "s1");
+
+        let results = store.recall("agent-1", "web server bug", 5).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].session_id, "s2");
+    }
+
+    #[tokio::test]
+    async fn test_episodic_store_empty_recall() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = EpisodicStore::new(temp_dir.path().to_path_buf());
+
+        let results = store.recall("nonexistent", "anything", 5).await.unwrap();
+        assert!(results.is_empty());
+
+        assert_eq!(store.episode_count("nonexistent").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_episodic_store_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = EpisodicStore::new(temp_dir.path().to_path_buf());
+
+        for i in 0..10 {
+            let ep = Episode {
+                session_id: format!("s{i}"),
+                timestamp: Utc::now(),
+                summary: format!("Episode {i} about testing code quality"),
+                outcome: "success".to_string(),
+                tools_used: vec![],
+                tokens_used: 100,
+            };
+            store.store("agent-1", &ep).await.unwrap();
+        }
+
+        let results = store.recall("agent-1", "testing code", 3).await.unwrap();
+        assert_eq!(results.len(), 3);
     }
 }

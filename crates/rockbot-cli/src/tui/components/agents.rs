@@ -250,7 +250,7 @@ fn render_agent_details(frame: &mut Frame, area: Rect, state: &AppState) {
 
         content.push(Line::from(""));
         content.push(Line::from(Span::styled(
-            "[a]dd  [e]dit  [d]isable  [r]eload",
+            "[a]dd  [e]dit  [f]iles  [d]isable  [r]eload",
             Style::default().fg(Color::DarkGray),
         )));
 

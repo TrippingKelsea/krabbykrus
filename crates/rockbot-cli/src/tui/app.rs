@@ -21,12 +21,13 @@ use super::components::{
     render_view_endpoint_modal, render_view_provider_modal,
     render_view_model_list_modal, render_edit_permission_modal,
     render_view_permission_modal,
+    render_view_context_files_modal, render_edit_context_file_modal,
 };
 use super::effects::EffectState;
 use super::state::{
-    AddCredentialState, AppState, ChatMessage, ConfirmAction, CreateSessionState, EditAgentState,
-    EditCredentialState, EditProviderState, EndpointInfo, InputMode, MenuItem, Message,
-    PasswordAction, SessionMode, ToolCallInfo, UnlockMethod,
+    AddCredentialState, AppState, ChatMessage, ConfirmAction, ContextFileInfo, CreateSessionState,
+    EditAgentState, EditCredentialState, EditProviderState, EndpointInfo, InputMode, MenuItem,
+    Message, PasswordAction, SessionMode, ToolCallInfo, UnlockMethod, ViewContextFilesState,
 };
 
 /// Check if Claude Code OAuth credentials are available
@@ -90,6 +91,8 @@ pub struct App {
     models_tab: usize,
     /// Unlocked vault handle (None if locked or not initialized)
     vault: Option<rockbot_credentials::CredentialVault>,
+    /// WebSocket sender for the persistent gateway connection (None if not connected)
+    ws_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 }
 
 impl App {
@@ -102,6 +105,7 @@ impl App {
             effect_state: EffectState::new(),
             models_tab: 0,
             vault: None,
+            ws_tx: None,
         }
     }
 
@@ -145,7 +149,79 @@ impl App {
         self.spawn_providers_load();
         self.spawn_credential_schemas_load();
         self.spawn_sessions_load();
+        self.spawn_ws_connect();
         Ok(())
+    }
+
+    /// Spawn a background task that connects to the gateway via WebSocket
+    fn spawn_ws_connect(&mut self) {
+        let tx = self.state.tx.clone();
+        let (ws_send_tx, mut ws_send_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        self.ws_tx = Some(ws_send_tx);
+
+        tokio::spawn(async move {
+            // Try to connect, retry on failure
+            let ws_url = "ws://127.0.0.1:18080/ws";
+            let ws_stream = match tokio_tungstenite::connect_async(ws_url).await {
+                Ok((stream, _)) => {
+                    tracing::info!("WebSocket connected to gateway");
+                    stream
+                }
+                Err(e) => {
+                    tracing::debug!("WebSocket connection failed (will use HTTP fallback): {e}");
+                    // Signal that WS is not available
+                    let _ = tx.send(Message::SetStatus(
+                        "WebSocket unavailable, using HTTP polling".to_string(), false,
+                    ));
+                    return;
+                }
+            };
+
+            use futures_util::{SinkExt, StreamExt};
+            let (mut ws_sink, mut ws_source) = ws_stream.split();
+
+            loop {
+                tokio::select! {
+                    // Outbound: messages from the app to send over WebSocket
+                    outbound = ws_send_rx.recv() => {
+                        match outbound {
+                            Some(text) => {
+                                use tokio_tungstenite::tungstenite::Message as WsMsg;
+                                if ws_sink.send(WsMsg::Text(text)).await.is_err() {
+                                    tracing::warn!("WebSocket send failed, disconnecting");
+                                    break;
+                                }
+                            }
+                            None => break, // Channel closed
+                        }
+                    }
+                    // Inbound: messages from the gateway
+                    inbound = ws_source.next() => {
+                        match inbound {
+                            Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
+                                handle_ws_response(&tx, &text);
+                            }
+                            Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) | None => {
+                                tracing::info!("WebSocket closed by server");
+                                break;
+                            }
+                            Some(Err(e)) => {
+                                tracing::debug!("WebSocket error: {e}");
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            tracing::info!("WebSocket disconnected");
+        });
+    }
+
+    /// Check if a WebSocket connection is active
+    fn ws_connected(&self) -> bool {
+        self.ws_tx.as_ref().is_some_and(|tx| !tx.is_closed())
     }
 
     /// Spawn a task to check gateway status
@@ -380,6 +456,14 @@ impl App {
                 let state = state.clone();
                 self.handle_edit_permission(key, state)
             }
+            InputMode::ViewContextFiles(state) => {
+                let state = state.clone();
+                self.handle_view_context_files(key, state)
+            }
+            InputMode::EditContextFile(state) => {
+                let state = state.clone();
+                self.handle_edit_context_file(key, state)
+            }
         }
     }
 
@@ -570,6 +654,18 @@ impl App {
             }
             KeyCode::Char('e') if !self.state.sidebar_focus => {
                 self.handle_edit_action();
+            }
+            KeyCode::Char('f') if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Agents => {
+                if let Some(agent) = self.state.agents.get(self.state.selected_agent) {
+                    let agent_id = agent.id.clone();
+                    self.state.input_mode = InputMode::ViewContextFiles(ViewContextFilesState {
+                        agent_id: agent_id.clone(),
+                        files: Vec::new(),
+                        selected: 0,
+                        loading: true,
+                    });
+                    self.fetch_context_files(&agent_id);
+                }
             }
             KeyCode::Char('p') if !self.state.sidebar_focus => {
                 self.handle_permission_action();
@@ -2193,6 +2289,10 @@ impl App {
                         }
                         self.state.status_message = Some((format!("Disabled agent: {id}"), false));
                     }
+                    ConfirmAction::DiscardContextFile(browser_state) => {
+                        self.state.input_mode = InputMode::ViewContextFiles(browser_state);
+                        return Ok(());
+                    }
                 }
                 self.state.input_mode = InputMode::Normal;
             }
@@ -2203,6 +2303,200 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_view_context_files(&mut self, key: KeyEvent, state: ViewContextFilesState) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let mut s = state;
+                if s.selected > 0 {
+                    s.selected -= 1;
+                }
+                self.state.input_mode = InputMode::ViewContextFiles(s);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let mut s = state;
+                if s.selected + 1 < s.files.len() {
+                    s.selected += 1;
+                }
+                self.state.input_mode = InputMode::ViewContextFiles(s);
+            }
+            KeyCode::Enter => {
+                if let Some(file) = state.files.get(state.selected) {
+                    let filename = file.name.clone();
+                    let agent_id = state.agent_id.clone();
+                    if file.exists {
+                        // Load file content from API
+                        self.fetch_context_file(&agent_id, &filename);
+                    } else {
+                        // Open editor with empty content for new file
+                        self.state.input_mode = InputMode::EditContextFile(
+                            super::state::EditContextFileState::new(agent_id, filename, String::new())
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_edit_context_file(&mut self, key: KeyEvent, mut state: super::state::EditContextFileState) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                if state.is_dirty {
+                    // Build browser state to return to on confirm
+                    let browser = ViewContextFilesState {
+                        agent_id: state.agent_id.clone(),
+                        files: Vec::new(),
+                        selected: 0,
+                        loading: true,
+                    };
+                    self.state.input_mode = InputMode::Confirm {
+                        message: "Discard unsaved changes?".to_string(),
+                        action: ConfirmAction::DiscardContextFile(browser.clone()),
+                    };
+                    // Also refresh the file list so it's ready when we go back
+                    self.fetch_context_files(&browser.agent_id);
+                } else {
+                    // Go back to file browser
+                    let agent_id = state.agent_id.clone();
+                    self.state.input_mode = InputMode::ViewContextFiles(ViewContextFilesState {
+                        agent_id: agent_id.clone(),
+                        files: Vec::new(),
+                        selected: 0,
+                        loading: true,
+                    });
+                    self.fetch_context_files(&agent_id);
+                }
+            }
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.save_context_file(&state.agent_id, &state.filename, &state.content);
+                self.state.input_mode = InputMode::EditContextFile(state);
+            }
+            KeyCode::Enter => {
+                state.insert_char('\n');
+                state.ensure_cursor_visible(20);
+                self.state.input_mode = InputMode::EditContextFile(state);
+            }
+            KeyCode::Backspace => {
+                state.delete_char();
+                state.ensure_cursor_visible(20);
+                self.state.input_mode = InputMode::EditContextFile(state);
+            }
+            KeyCode::Up => {
+                state.cursor_up();
+                state.ensure_cursor_visible(20);
+                self.state.input_mode = InputMode::EditContextFile(state);
+            }
+            KeyCode::Down => {
+                state.cursor_down();
+                state.ensure_cursor_visible(20);
+                self.state.input_mode = InputMode::EditContextFile(state);
+            }
+            KeyCode::Left => {
+                state.cursor_left();
+                self.state.input_mode = InputMode::EditContextFile(state);
+            }
+            KeyCode::Right => {
+                state.cursor_right();
+                self.state.input_mode = InputMode::EditContextFile(state);
+            }
+            KeyCode::Home => {
+                state.cursor_col = 0;
+                self.state.input_mode = InputMode::EditContextFile(state);
+            }
+            KeyCode::End => {
+                let line_len = state.content.split('\n')
+                    .nth(state.cursor_line).unwrap_or("").len();
+                state.cursor_col = line_len;
+                self.state.input_mode = InputMode::EditContextFile(state);
+            }
+            KeyCode::Char(c) => {
+                state.insert_char(c);
+                state.ensure_cursor_visible(20);
+                self.state.input_mode = InputMode::EditContextFile(state);
+            }
+            _ => {
+                self.state.input_mode = InputMode::EditContextFile(state);
+            }
+        }
+        Ok(())
+    }
+
+    fn fetch_context_files(&self, agent_id: &str) {
+        let tx = self.state.tx.clone();
+        let url = format!("http://127.0.0.1:18080/api/agents/{}/files", agent_id);
+        let agent_id = agent_id.to_string();
+        tokio::spawn(async move {
+            match reqwest::get(&url).await {
+                Ok(resp) if resp.status().is_success() => {
+                    if let Ok(files) = resp.json::<Vec<ContextFileInfo>>().await {
+                        let _ = tx.send(Message::ContextFilesLoaded(agent_id, files));
+                    }
+                }
+                Ok(resp) => {
+                    let _ = tx.send(Message::ContextFileError(
+                        format!("Failed to list files: {}", resp.status())
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::ContextFileError(format!("Failed to list files: {e}")));
+                }
+            }
+        });
+    }
+
+    fn fetch_context_file(&self, agent_id: &str, filename: &str) {
+        let tx = self.state.tx.clone();
+        let url = format!("http://127.0.0.1:18080/api/agents/{}/files/{}", agent_id, filename);
+        let agent_id = agent_id.to_string();
+        let filename = filename.to_string();
+        tokio::spawn(async move {
+            match reqwest::get(&url).await {
+                Ok(resp) if resp.status().is_success() => {
+                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let _ = tx.send(Message::ContextFileLoaded(agent_id, filename, content));
+                    }
+                }
+                Ok(resp) => {
+                    let _ = tx.send(Message::ContextFileError(
+                        format!("Failed to load {filename}: {}", resp.status())
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::ContextFileError(format!("Failed to load {filename}: {e}")));
+                }
+            }
+        });
+    }
+
+    fn save_context_file(&self, agent_id: &str, filename: &str, content: &str) {
+        let tx = self.state.tx.clone();
+        let url = format!("http://127.0.0.1:18080/api/agents/{}/files/{}", agent_id, filename);
+        let agent_id = agent_id.to_string();
+        let filename = filename.to_string();
+        let body = serde_json::json!({ "content": content });
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            match client.put(&url).json(&body).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    let _ = tx.send(Message::ContextFileSaved(agent_id, filename));
+                }
+                Ok(resp) => {
+                    let _ = tx.send(Message::ContextFileError(
+                        format!("Failed to save {filename}: {}", resp.status())
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::ContextFileError(format!("Failed to save {filename}: {e}")));
+                }
+            }
+        });
     }
 
     fn handle_chat_input(&mut self, key: KeyEvent) -> Result<()> {
@@ -2458,6 +2752,25 @@ impl App {
             })
             .collect();
 
+        // Try WebSocket for agent messages (persistent, streaming)
+        if let Some(ref agent) = agent_id {
+            if self.ws_connected() {
+                let ws_msg = serde_json::json!({
+                    "type": "agent_message",
+                    "agent_id": agent,
+                    "session_key": session_key,
+                    "message": user_message,
+                    "workspace": launch_dir,
+                });
+                if let Some(ref ws_tx) = self.ws_tx {
+                    if ws_tx.send(ws_msg.to_string()).is_ok() {
+                        return; // Message sent via WebSocket, responses arrive asynchronously
+                    }
+                }
+            }
+        }
+
+        // Fallback to HTTP
         tokio::spawn(async move {
             // Use agent message endpoint when an agent is available (full tool loop)
             if let Some(ref agent) = agent_id {
@@ -2567,6 +2880,12 @@ impl App {
             InputMode::EditPermission(state) => {
                 render_edit_permission_modal(frame, frame.area(), state);
             }
+            InputMode::ViewContextFiles(state) => {
+                render_view_context_files_modal(frame, frame.area(), state);
+            }
+            InputMode::EditContextFile(state) => {
+                render_edit_context_file_modal(frame, frame.area(), state);
+            }
             _ => {}
         }
     }
@@ -2619,6 +2938,8 @@ impl App {
             InputMode::ViewModelList { .. } => "↑↓:Scroll │ Esc:Close".to_string(),
             InputMode::ViewPermission { .. } => "e:Edit │ +/-:Reorder │ d:Delete │ Esc:Close".to_string(),
             InputMode::EditPermission(_) => "↑↓:Field │ ←→:Cycle │ Enter/Ctrl+S:Save │ Esc:Cancel".to_string(),
+            InputMode::ViewContextFiles(_) => "↑↓:Select │ Enter:Edit │ Esc:Close".to_string(),
+            InputMode::EditContextFile(_) => "Ctrl+S:Save │ ↑↓←→:Move │ Esc:Back".to_string(),
         }
     }
 }
@@ -2831,8 +3152,20 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf) -> Result<()> {
 
             // Periodic refresh
             _ = refresh_interval.tick() => {
-                if !app.state.gateway_loading {
-                    app.spawn_gateway_check();
+                if app.ws_connected() {
+                    // WebSocket is active — send a ping instead of HTTP poll
+                    if let Some(ref ws_tx) = app.ws_tx {
+                        let _ = ws_tx.send(r#"{"type":"health_check"}"#.to_string());
+                    }
+                } else {
+                    // No WebSocket — fall back to HTTP status check
+                    if !app.state.gateway_loading {
+                        app.spawn_gateway_check();
+                    }
+                    // Try to reconnect WebSocket if gateway is up
+                    if app.state.gateway.connected {
+                        app.spawn_ws_connect();
+                    }
                 }
             }
         }
@@ -2853,6 +3186,114 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf) -> Result<()> {
 // =============================================================================
 // Background task implementations
 // =============================================================================
+
+/// Parse an incoming WebSocket message from the gateway and dispatch to the TUI state
+fn handle_ws_response(tx: &mpsc::UnboundedSender<Message>, text: &str) {
+    let json: serde_json::Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Invalid WebSocket JSON from gateway: {e}");
+            return;
+        }
+    };
+
+    let msg_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match msg_type {
+        "stream_chunk" => {
+            let session_key = json.get("session_key").and_then(|v| v.as_str()).unwrap_or("");
+            let delta = json.get("delta").and_then(|v| v.as_str()).unwrap_or("");
+            if !session_key.is_empty() && !delta.is_empty() {
+                // ChatStreamChunk format is "session_key:text"
+                let _ = tx.send(Message::ChatStreamChunk(
+                    format!("{session_key}:{delta}")
+                ));
+            }
+        }
+        "tool_call" => {
+            let tool_name = json.get("tool_name").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let _ = tx.send(Message::SetStatus(format!("Running: {tool_name}..."), false));
+        }
+        "tool_result" => {
+            let tool_name = json.get("tool_name").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let success = json.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
+            let duration = json.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+            let status = if success { "✓" } else { "✗" };
+            let _ = tx.send(Message::SetStatus(
+                format!("{status} {tool_name} ({duration}ms)"), !success
+            ));
+        }
+        "agent_response" => {
+            let session_key = json.get("session_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let tool_calls: Vec<ToolCallInfo> = json.get("tool_calls")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter().filter_map(|tc| {
+                        let raw_result = tc.get("result").and_then(|v| v.as_str()).unwrap_or("");
+                        Some(ToolCallInfo {
+                            tool_name: tc.get("tool_name")?.as_str()?.to_string(),
+                            arguments: String::new(),
+                            result: truncate_tool_result(raw_result, 500),
+                            success: tc.get("success").and_then(|v| v.as_bool()).unwrap_or(true),
+                            duration_ms: tc.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0),
+                            expanded: false,
+                        })
+                    }).collect()
+                })
+                .unwrap_or_default();
+
+            if tool_calls.is_empty() {
+                let _ = tx.send(Message::ChatResponse(session_key.clone(), content));
+            } else {
+                let _ = tx.send(Message::ChatAgentResponse(session_key.clone(), content, tool_calls));
+            }
+
+            // Show token usage in status bar if available
+            if let Some(tokens) = json.get("tokens_used") {
+                let total = tokens.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                let prompt = tokens.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                let completion = tokens.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                let time_ms = json.get("processing_time_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                if total > 0 {
+                    let status = if time_ms > 0 {
+                        format!("Tokens: {total} ({prompt} prompt + {completion} completion) | {time_ms}ms")
+                    } else {
+                        format!("Tokens: {total} ({prompt} prompt + {completion} completion)")
+                    };
+                    let _ = tx.send(Message::SetStatus(status, false));
+                }
+            }
+        }
+        "agent_error" => {
+            let session_key = json.get("session_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let error = json.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error").to_string();
+            let _ = tx.send(Message::ChatError(session_key, error));
+        }
+        "pong" => {
+            // Silently handle keepalive responses
+        }
+        "health_status" => {
+            // Update gateway status from WebSocket health check
+            if let Some(status) = json.get("status") {
+                let gateway_status = super::state::GatewayStatus {
+                    connected: true,
+                    version: status.get("version").and_then(|v| v.as_str()).map(String::from),
+                    uptime_secs: status.get("uptime_seconds").and_then(|v| v.as_u64()),
+                    active_sessions: status.get("active_sessions").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                    pending_agents: status.get("pending_agents").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                };
+                let _ = tx.send(Message::GatewayStatus(gateway_status));
+            }
+        }
+        "error" => {
+            let message = json.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+            tracing::warn!("Gateway WebSocket error: {message}");
+        }
+        other => {
+            tracing::debug!("Unhandled WebSocket message type: {other}");
+        }
+    }
+}
 
 use super::state::{AgentInfo, AgentStatus, AuthMethodInfo, CredentialFieldInfo, CredentialSchemaInfo, GatewayStatus, ModelProvider, ModelProviderModel, VaultStatus};
 

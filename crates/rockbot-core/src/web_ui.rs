@@ -586,6 +586,29 @@ pub fn get_dashboard_html() -> &'static str {
         </div>
     </div>
 
+    <!-- Context Files Modal -->
+    <div id="modal-context-files" class="modal-overlay hidden">
+        <div class="modal" style="max-width:720px;width:90%">
+            <h2>Context Files: <span id="ctx-agent-id"></span></h2>
+            <div style="display:flex;gap:0.5rem;margin-bottom:0.75rem;align-items:center">
+                <select id="ctx-file-select" onchange="loadContextFile()" style="flex:1"></select>
+                <input type="text" id="ctx-new-filename" placeholder="NEW-FILE.md" style="width:140px;display:none">
+                <button class="btn btn-secondary btn-sm" onclick="toggleNewFile()" id="ctx-new-btn" title="Create new file">+ New</button>
+            </div>
+            <div class="form-group">
+                <label id="ctx-file-label" style="display:flex;justify-content:space-between">
+                    <span>File Content</span>
+                    <span id="ctx-file-status" class="text-dim" style="font-size:0.8rem"></span>
+                </label>
+                <textarea id="ctx-file-content" rows="18" style="font-family:monospace;font-size:0.85rem;white-space:pre;overflow-wrap:normal;tab-size:4"></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal('context-files')">Close</button>
+                <button class="btn btn-primary" onclick="saveContextFile()">Save</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Edit Provider Modal -->
     <div id="modal-provider" class="modal-overlay hidden">
         <div class="modal">
@@ -1300,6 +1323,7 @@ pub fn get_dashboard_html() -> &'static str {
                 ${agent.system_prompt ? `<div class="detail-field"><label>System Prompt</label><div style="background:var(--surface-2);padding:0.75rem;border-radius:6px;font-size:0.85rem;max-height:120px;overflow-y:auto;white-space:pre-wrap">${escapeHtml(agent.system_prompt)}</div></div>` : ''}
                 <div class="flex gap-1 mt-2">
                     <button class="btn btn-primary btn-sm" onclick="showEditAgent('${escapeHtml(id)}')">Edit</button>
+                    <button class="btn btn-secondary btn-sm" onclick="openContextFiles('${escapeHtml(id)}')">Context Files</button>
                     <button class="btn btn-secondary btn-sm" onclick="showCreateSubagent('${escapeHtml(id)}')">+ Subagent</button>
                     <button class="btn btn-danger btn-sm" onclick="deleteAgent('${escapeHtml(id)}')">Delete</button>
                 </div>
@@ -1402,6 +1426,86 @@ pub fn get_dashboard_html() -> &'static str {
         }
 
         function refreshAgents() { loadAgentsPage(); }
+
+        // ========== Context Files ==========
+        let currentCtxAgentId = null;
+        let currentCtxFiles = [];
+        let ctxNewMode = false;
+
+        async function openContextFiles(agentId) {
+            currentCtxAgentId = agentId;
+            ctxNewMode = false;
+            document.getElementById('ctx-agent-id').textContent = agentId;
+            document.getElementById('ctx-file-content').value = '';
+            document.getElementById('ctx-file-status').textContent = '';
+            document.getElementById('ctx-new-filename').style.display = 'none';
+            document.getElementById('ctx-new-filename').value = '';
+            try {
+                currentCtxFiles = await api(`/api/agents/${agentId}/files`);
+                const sel = document.getElementById('ctx-file-select');
+                sel.innerHTML = currentCtxFiles.map(f =>
+                    `<option value="${f.name}">${f.name}${f.exists ? '' : ' (new)'}</option>`
+                ).join('');
+                document.getElementById('modal-context-files').classList.remove('hidden');
+                await loadContextFile();
+            } catch(e) { toast(e.message, true); }
+        }
+
+        async function loadContextFile() {
+            const filename = document.getElementById('ctx-file-select').value;
+            if (!filename) return;
+            const file = currentCtxFiles.find(f => f.name === filename);
+            const statusEl = document.getElementById('ctx-file-status');
+            if (file && file.exists) {
+                statusEl.textContent = `${file.size_bytes} bytes`;
+                try {
+                    const res = await api(`/api/agents/${currentCtxAgentId}/files/${filename}`);
+                    document.getElementById('ctx-file-content').value = res.content || '';
+                } catch(e) {
+                    document.getElementById('ctx-file-content').value = '';
+                    statusEl.textContent = 'Failed to load';
+                }
+            } else {
+                statusEl.textContent = 'Not created yet — will be created on save';
+                document.getElementById('ctx-file-content').value = '';
+            }
+        }
+
+        function toggleNewFile() {
+            ctxNewMode = !ctxNewMode;
+            const input = document.getElementById('ctx-new-filename');
+            input.style.display = ctxNewMode ? 'block' : 'none';
+            if (ctxNewMode) {
+                input.focus();
+                document.getElementById('ctx-file-content').value = '';
+                document.getElementById('ctx-file-status').textContent = 'New file';
+            }
+        }
+
+        async function saveContextFile() {
+            let filename;
+            if (ctxNewMode) {
+                filename = document.getElementById('ctx-new-filename').value.trim();
+                if (!filename) { toast('Enter a filename', true); return; }
+                if (!filename.endsWith('.md')) { toast('Filename must end in .md', true); return; }
+            } else {
+                filename = document.getElementById('ctx-file-select').value;
+            }
+            if (!filename) return;
+            const content = document.getElementById('ctx-file-content').value;
+            try {
+                await api(`/api/agents/${currentCtxAgentId}/files/${filename}`, 'PUT', { content });
+                toast(`Saved ${filename}`);
+                // Refresh file list
+                ctxNewMode = false;
+                document.getElementById('ctx-new-filename').style.display = 'none';
+                document.getElementById('ctx-new-filename').value = '';
+                await openContextFiles(currentCtxAgentId);
+                // Re-select the saved file
+                document.getElementById('ctx-file-select').value = filename;
+                await loadContextFile();
+            } catch(e) { toast(e.message, true); }
+        }
 
         // ========== Sessions Page ==========
         async function loadSessionsPage() {

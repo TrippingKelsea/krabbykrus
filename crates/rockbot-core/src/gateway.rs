@@ -88,6 +88,34 @@ pub struct ProviderStatus {
     pub credential_schema: Option<rockbot_credentials_schema::CredentialSchema>,
 }
 
+/// Session export payload returned by the export API
+#[derive(Debug, Serialize)]
+struct SessionExportPayload {
+    agent_id: String,
+    session_id: String,
+    created_at: String,
+    updated_at: String,
+    messages: Vec<SessionExportMessage>,
+    stats: SessionExportStats,
+}
+
+/// A single message in a session export
+#[derive(Debug, Serialize)]
+struct SessionExportMessage {
+    role: String,
+    content: String,
+    timestamp: String,
+}
+
+/// Token usage statistics included in a session export
+#[derive(Debug, Serialize)]
+struct SessionExportStats {
+    total_messages: usize,
+    input_tokens: u64,
+    output_tokens: u64,
+    total_tokens: u64,
+}
+
 /// Model info returned by the provider API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderModelInfo {
@@ -130,6 +158,8 @@ pub struct Gateway {
     ws_connections: Arc<RwLock<HashMap<String, WsConnection>>>,
     /// A2A task store for agent-to-agent protocol
     a2a_task_store: Arc<crate::a2a::TaskStore>,
+    /// Shared blackboard for swarm coordination
+    blackboard: Arc<crate::orchestration::SwarmBlackboard>,
     /// Shutdown broadcast channel
     shutdown_tx: broadcast::Sender<()>,
 }
@@ -145,53 +175,86 @@ struct WsConnection {
     connected_at: std::time::Instant,
 }
 
-/// WebSocket message types
-#[allow(dead_code)]
+/// WebSocket message types (client -> server)
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 enum WsMessageType {
-    #[serde(rename = "auth")]
-    Auth { token: String },
     #[serde(rename = "agent_message")]
     AgentMessage {
         agent_id: String,
         session_key: String,
-        message: Message,
-    },
-    #[serde(rename = "session_list")]
-    SessionList { agent_id: Option<String> },
-    #[serde(rename = "session_history")]
-    SessionHistory {
-        session_id: String,
-        limit: Option<usize>,
-        offset: Option<usize>,
+        message: String,
+        workspace: Option<String>,
     },
     #[serde(rename = "health_check")]
     HealthCheck,
+    #[serde(rename = "ping")]
+    Ping,
 }
 
-/// WebSocket response types
-#[allow(dead_code)]
+/// WebSocket response types (server -> client)
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 enum WsResponseType {
-    #[serde(rename = "auth_result")]
-    AuthResult { success: bool, user_id: Option<String> },
-    #[serde(rename = "agent_response")]
-    AgentResponse {
-        session_id: String,
-        response: AgentResponse,
+    #[serde(rename = "stream_chunk")]
+    StreamChunk {
+        session_key: String,
+        delta: String,
     },
-    #[serde(rename = "session_list")]
-    SessionList { sessions: Vec<crate::session::Session> },
-    #[serde(rename = "session_history")]
-    SessionHistory { history: crate::session::MessageHistory },
+    #[serde(rename = "tool_call")]
+    ToolCall {
+        session_key: String,
+        tool_name: String,
+        arguments: String,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        session_key: String,
+        tool_name: String,
+        result: String,
+        success: bool,
+        duration_ms: u64,
+    },
+    #[serde(rename = "agent_response")]
+    AgentResponseMsg {
+        session_key: String,
+        content: String,
+        tool_calls: Vec<WsToolCallInfo>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tokens_used: Option<WsTokenUsage>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        processing_time_ms: Option<u64>,
+    },
+    #[serde(rename = "agent_error")]
+    AgentError {
+        session_key: String,
+        error: String,
+    },
     #[serde(rename = "health_status")]
     HealthStatus { status: GatewayHealth },
+    #[serde(rename = "pong")]
+    Pong,
     #[serde(rename = "error")]
-    Error { message: String, code: Option<String> },
+    Error { message: String },
+}
+
+/// Tool call info sent over WebSocket
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WsToolCallInfo {
+    tool_name: String,
+    result: String,
+    success: bool,
+    duration_ms: u64,
+}
+
+/// Token usage sent over WebSocket
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WsTokenUsage {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
 }
 
 /// Gateway health status
@@ -304,6 +367,7 @@ impl Gateway {
             tool_provider_registry: Arc::new(tool_provider_registry),
             ws_connections: Arc::new(RwLock::new(HashMap::new())),
             a2a_task_store: Arc::new(crate::a2a::TaskStore::new()),
+            blackboard: Arc::new(crate::orchestration::SwarmBlackboard::new()),
             shutdown_tx,
         })
     }
@@ -368,6 +432,53 @@ impl Gateway {
     /// via the `invoke_agent` tool.
     pub fn agent_invoker(&self) -> Arc<dyn rockbot_tools::AgentInvoker> {
         Arc::new(GatewayInvoker::new(Arc::clone(&self.agents)))
+    }
+
+    /// Get the shared blackboard for swarm coordination.
+    pub fn blackboard(&self) -> Arc<crate::orchestration::SwarmBlackboard> {
+        Arc::clone(&self.blackboard)
+    }
+
+    /// Register agent-as-tool entries for agents that have `expose_as_tool` configured.
+    ///
+    /// For each agent with `expose_as_tool`, an `AgentTool` is registered in the
+    /// tool registries of all *other* agents so they can call it like any tool.
+    /// Call this after all agents have been registered.
+    pub async fn register_agent_tools(&self) {
+        let agents = self.agents.read().await;
+        // Collect agents that expose themselves as tools
+        let exposures: Vec<(String, String, String)> = agents.values()
+            .filter_map(|agent| {
+                agent.config.expose_as_tool.as_ref().map(|cfg| (
+                    agent.config.id.clone(),
+                    cfg.tool_name.clone(),
+                    cfg.description.clone(),
+                ))
+            })
+            .collect();
+
+        if exposures.is_empty() {
+            return;
+        }
+
+        info!("Registering {} agent-as-tool(s)", exposures.len());
+
+        for (source_agent_id, tool_name, description) in &exposures {
+            // Register in every other agent's tool registry
+            for (target_id, target_agent) in agents.iter() {
+                if target_id == source_agent_id {
+                    continue; // Don't register self-tool
+                }
+                let agent_tool = Arc::new(rockbot_tools::AgentTool::new(
+                    source_agent_id.clone(),
+                    tool_name.clone(),
+                    description.clone(),
+                ));
+                target_agent.tool_registry().register_tool(agent_tool).await;
+                debug!("Registered agent-tool '{}' (→ agent '{}') in agent '{}'",
+                    tool_name, source_agent_id, target_id);
+            }
+        }
     }
 
     /// Set the agent factory for creating new agents
@@ -452,6 +563,7 @@ impl Gateway {
                 Ok(mut agent) => {
                     if let Some(a) = Arc::get_mut(&mut agent) {
                         a.set_agent_invoker(self.agent_invoker());
+                        a.set_blackboard(self.blackboard());
                     }
                     let mut agents = self.agents.write().await;
                     agents.insert(agent_id.clone(), agent);
@@ -518,17 +630,18 @@ impl Gateway {
     /// Handle a new TCP connection
     async fn handle_connection(&self, stream: TcpStream, addr: SocketAddr) -> Result<()> {
         debug!("New connection from {}", addr);
-        
+
         let io = TokioIo::new(stream);
-        
+
         let gateway = self.clone();
         let service = service_fn(move |req| {
             let gateway = gateway.clone();
             async move { gateway.handle_request(req).await }
         });
-        
+
         if let Err(err) = http1::Builder::new()
             .serve_connection(io, service)
+            .with_upgrades()
             .await
         {
             // IncompleteMessage is normal — client disconnected before sending a full request
@@ -540,7 +653,7 @@ impl Gateway {
                 error!("Error serving connection from {}: {:?}", addr, err);
             }
         }
-        
+
         Ok(())
     }
     
@@ -577,6 +690,19 @@ impl Gateway {
             }
             (&Method::POST, "/api/agents") => {
                 self.handle_create_agent(req).await
+            }
+            // Agent context files API (must precede generic agent PUT/DELETE)
+            (&Method::GET, p) if p.starts_with("/api/agents/") && p.contains("/files") && !p.ends_with("/files") => {
+                Ok(self.handle_get_agent_file(&path).await)
+            }
+            (&Method::GET, p) if p.starts_with("/api/agents/") && p.ends_with("/files") => {
+                Ok(self.handle_list_agent_files(&path).await)
+            }
+            (&Method::PUT, p) if p.starts_with("/api/agents/") && p.contains("/files/") => {
+                Ok(self.handle_put_agent_file(&path, req).await)
+            }
+            (&Method::DELETE, p) if p.starts_with("/api/agents/") && p.contains("/files/") => {
+                Ok(self.handle_delete_agent_file(&path).await)
             }
             (&Method::PUT, p) if p.starts_with("/api/agents/") && !p.contains("/message") => {
                 self.handle_update_agent(req).await
@@ -677,6 +803,9 @@ impl Gateway {
             }
             (&Method::GET, "/api/gateway/pending") => {
                 self.handle_list_pending_agents().await
+            }
+            (&Method::GET, p) if p.starts_with("/api/agents/") && p.contains("/sessions/") && p.ends_with("/export") => {
+                self.handle_session_export(req).await
             }
             (&Method::POST, p) if p.starts_with("/api/agents/") && p.ends_with("/stream") => {
                 self.handle_agent_message_stream(req).await
@@ -1487,6 +1616,7 @@ impl Gateway {
                             chat_req.messages.insert(0, rockbot_llm::Message {
                                 role: rockbot_llm::MessageRole::System,
                                 content: system_prompt.clone(),
+                                images: vec![],
                                 tool_calls: None,
                                 tool_call_id: None,
                             });
@@ -1507,6 +1637,7 @@ impl Gateway {
                                 chat_req.messages.insert(0, rockbot_llm::Message {
                                     role: rockbot_llm::MessageRole::System,
                                     content: content.trim().to_string(),
+                                    images: vec![],
                                     tool_calls: None,
                                     tool_call_id: None,
                                 });
@@ -1800,6 +1931,84 @@ impl Gateway {
         }
     }
 
+    // ==================== Session Export ====================
+
+    /// Handle session export (GET /api/agents/{agent_id}/sessions/{session_id}/export)
+    async fn handle_session_export(
+        &self,
+        req: Request<IncomingBody>,
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        let path = req.uri().path().to_string();
+        // Path: /api/agents/{agent_id}/sessions/{session_id}/export
+        let segments: Vec<&str> = path.splitn(8, '/').collect();
+        // segments: ["", "api", "agents", agent_id, "sessions", session_id, "export"]
+        if segments.len() < 7 {
+            return Ok(Self::json_error("Invalid path", StatusCode::BAD_REQUEST));
+        }
+        let agent_id = segments[3].to_string();
+        let session_id = segments[5].to_string();
+        if agent_id.is_empty() || session_id.is_empty() {
+            return Ok(Self::json_error("Missing agent_id or session_id", StatusCode::BAD_REQUEST));
+        }
+
+        let session = match self.session_manager.get_session(&session_id).await {
+            Ok(Some(s)) => s,
+            Ok(None) => return Ok(Self::json_error("Session not found", StatusCode::NOT_FOUND)),
+            Err(e) => return Ok(Self::json_error(&format!("Failed to get session: {e}"), StatusCode::INTERNAL_SERVER_ERROR)),
+        };
+
+        if session.agent_id != agent_id {
+            return Ok(Self::json_error("Session not found", StatusCode::NOT_FOUND));
+        }
+
+        let history = match self.session_manager.get_message_history(&session_id, None, None).await {
+            Ok(h) => h,
+            Err(e) => return Ok(Self::json_error(&format!("Failed to get messages: {e}"), StatusCode::INTERNAL_SERVER_ERROR)),
+        };
+
+        let messages: Vec<SessionExportMessage> = history
+            .messages
+            .iter()
+            .map(|stored| {
+                let role = match stored.message.metadata.role {
+                    crate::message::MessageRole::User => "user",
+                    crate::message::MessageRole::Assistant => "assistant",
+                    crate::message::MessageRole::System => "system",
+                    crate::message::MessageRole::Tool => "tool",
+                }
+                .to_string();
+                let content = match &stored.message.content {
+                    crate::message::MessageContent::Text { text } => text.clone(),
+                    crate::message::MessageContent::System { message, .. } => message.clone(),
+                    crate::message::MessageContent::Error { error, .. } => error.clone(),
+                    other => serde_json::to_string(other).unwrap_or_default(),
+                };
+                SessionExportMessage {
+                    role,
+                    content,
+                    timestamp: stored.message.created_at.to_rfc3339(),
+                }
+            })
+            .collect();
+
+        let payload = SessionExportPayload {
+            agent_id,
+            session_id: session.id.clone(),
+            created_at: session.created_at.to_rfc3339(),
+            updated_at: session.updated_at.to_rfc3339(),
+            stats: SessionExportStats {
+                total_messages: history.total_count,
+                input_tokens: session.token_stats.input_tokens,
+                output_tokens: session.token_stats.output_tokens,
+                total_tokens: session.token_stats.total_tokens,
+            },
+            messages,
+        };
+
+        let json = serde_json::to_string(&payload).unwrap_or_default();
+        Ok(Self::json_response(&json, StatusCode::OK))
+    }
+
     // ==================== Gateway Management Handlers ====================
 
     /// Handle reload agents request
@@ -1808,6 +2017,9 @@ impl Gateway {
     ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
         match self.reload_agents().await {
             Ok((created, pending)) => {
+                if created > 0 {
+                    self.register_agent_tools().await;
+                }
                 let body = serde_json::json!({
                     "status": "ok",
                     "agents_created": created,
@@ -1901,7 +2113,198 @@ impl Gateway {
             tokio::fs::write(&prompt_path, content).await?;
         }
 
+        let agents_path = agent_dir.join("AGENTS.md");
+        if !agents_path.exists() {
+            tokio::fs::write(
+                &agents_path,
+                "# Operational Guidelines\n\n\
+                 Define behavioral rules, constraints, and standard operating procedures here.\n",
+            ).await?;
+        }
+
+        let memory_path = agent_dir.join("MEMORY.md");
+        if !memory_path.exists() {
+            tokio::fs::write(
+                &memory_path,
+                "# Memory Guidelines\n\n\
+                 Describe how this agent should use its memory tools, what to remember,\n\
+                 and how to organize stored knowledge.\n",
+            ).await?;
+        }
+
         Ok(())
+    }
+
+    /// Well-known context files that are always listed even if absent
+    const WELL_KNOWN_CONTEXT_FILES: &'static [&'static str] = &[
+        "SOUL.md",
+        "SYSTEM-PROMPT.md",
+        "AGENTS.md",
+        "MEMORY.md",
+    ];
+
+    /// Validate a context filename — alphanumeric, hyphens, underscores, must end with .md
+    fn is_valid_context_filename(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= 64
+            && name.ends_with(".md")
+            && !name.contains('/')
+            && !name.contains('\\')
+            && !name.contains("..")
+            && name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    }
+
+    /// Extract agent_id and filename from a path like /api/agents/{id}/files/{name}
+    fn parse_agent_file_path(path: &str) -> Option<(&str, &str)> {
+        let stripped = path.strip_prefix("/api/agents/")?;
+        let (agent_id, rest) = stripped.split_once("/files/")?;
+        if agent_id.is_empty() || rest.is_empty() {
+            return None;
+        }
+        Some((agent_id, rest))
+    }
+
+    /// Extract agent_id from a path like /api/agents/{id}/files
+    fn parse_agent_files_list_path(path: &str) -> Option<&str> {
+        let stripped = path.strip_prefix("/api/agents/")?;
+        let agent_id = stripped.strip_suffix("/files")?;
+        if agent_id.is_empty() {
+            return None;
+        }
+        Some(agent_id)
+    }
+
+    /// List context files for an agent
+    async fn handle_list_agent_files(&self, path: &str) -> Response<GatewayBody> {
+        let Some(agent_id) = Self::parse_agent_files_list_path(path) else {
+            return Self::json_error("Invalid path", StatusCode::BAD_REQUEST);
+        };
+
+        let agent_dir = self.agent_directory(agent_id);
+        let mut files: Vec<serde_json::Value> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        // Always include well-known files
+        for &name in Self::WELL_KNOWN_CONTEXT_FILES {
+            let file_path = agent_dir.join(name);
+            let (exists, size) = match tokio::fs::metadata(&file_path).await {
+                Ok(meta) => (true, meta.len()),
+                Err(_) => (false, 0),
+            };
+            seen.insert(name.to_string());
+            files.push(serde_json::json!({
+                "name": name,
+                "exists": exists,
+                "size_bytes": size,
+                "well_known": true,
+            }));
+        }
+
+        // Scan for additional .md files in the agent directory
+        if let Ok(mut entries) = tokio::fs::read_dir(&agent_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".md") && !seen.contains(&name) {
+                    let size = entry.metadata().await.map(|m| m.len()).unwrap_or(0);
+                    files.push(serde_json::json!({
+                        "name": name,
+                        "exists": true,
+                        "size_bytes": size,
+                        "well_known": false,
+                    }));
+                }
+            }
+        }
+
+        let body = serde_json::to_string(&files).unwrap_or_default();
+        Self::json_response(&body, StatusCode::OK)
+    }
+
+    /// Get the content of a single context file
+    async fn handle_get_agent_file(&self, path: &str) -> Response<GatewayBody> {
+        let Some((agent_id, filename)) = Self::parse_agent_file_path(path) else {
+            return Self::json_error("Invalid path", StatusCode::BAD_REQUEST);
+        };
+        if !Self::is_valid_context_filename(filename) {
+            return Self::json_error("Invalid filename", StatusCode::BAD_REQUEST);
+        }
+
+        let file_path = self.agent_directory(agent_id).join(filename);
+        match tokio::fs::read_to_string(&file_path).await {
+            Ok(content) => {
+                let body = serde_json::json!({ "name": filename, "content": content }).to_string();
+                Self::json_response(&body, StatusCode::OK)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Self::json_error(&format!("File '{filename}' not found"), StatusCode::NOT_FOUND)
+            }
+            Err(e) => {
+                Self::json_error(&format!("Failed to read file: {e}"), StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+    }
+
+    /// Create or update a context file
+    async fn handle_put_agent_file(&self, path: &str, req: Request<IncomingBody>) -> Response<GatewayBody> {
+        let Some((agent_id, filename)) = Self::parse_agent_file_path(path) else {
+            return Self::json_error("Invalid path", StatusCode::BAD_REQUEST);
+        };
+        if !Self::is_valid_context_filename(filename) {
+            return Self::json_error("Invalid filename", StatusCode::BAD_REQUEST);
+        }
+
+        let body = match req.collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(e) => return Self::json_error(&format!("Failed to read body: {e}"), StatusCode::BAD_REQUEST),
+        };
+        let payload: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return Self::json_error(&format!("Invalid JSON: {e}"), StatusCode::BAD_REQUEST),
+        };
+        let content = payload.get("content").and_then(|v| v.as_str()).unwrap_or("");
+
+        let agent_dir = self.agent_directory(agent_id);
+        if let Err(e) = tokio::fs::create_dir_all(&agent_dir).await {
+            return Self::json_error(&format!("Failed to create agent directory: {e}"), StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        let file_path = agent_dir.join(filename);
+        match tokio::fs::write(&file_path, content).await {
+            Ok(()) => {
+                let resp = serde_json::json!({ "written": true, "name": filename, "size_bytes": content.len() }).to_string();
+                Self::json_response(&resp, StatusCode::OK)
+            }
+            Err(e) => {
+                Self::json_error(&format!("Failed to write file: {e}"), StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+    }
+
+    /// Delete a context file (rejects deletion of SOUL.md)
+    async fn handle_delete_agent_file(&self, path: &str) -> Response<GatewayBody> {
+        let Some((agent_id, filename)) = Self::parse_agent_file_path(path) else {
+            return Self::json_error("Invalid path", StatusCode::BAD_REQUEST);
+        };
+        if !Self::is_valid_context_filename(filename) {
+            return Self::json_error("Invalid filename", StatusCode::BAD_REQUEST);
+        }
+        if filename == "SOUL.md" {
+            return Self::json_error("Cannot delete SOUL.md — it is required for agent identity", StatusCode::BAD_REQUEST);
+        }
+
+        let file_path = self.agent_directory(agent_id).join(filename);
+        match tokio::fs::remove_file(&file_path).await {
+            Ok(()) => {
+                let resp = serde_json::json!({ "deleted": true, "name": filename }).to_string();
+                Self::json_response(&resp, StatusCode::OK)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Self::json_error(&format!("File '{filename}' not found"), StatusCode::NOT_FOUND)
+            }
+            Err(e) => {
+                Self::json_error(&format!("Failed to delete file: {e}"), StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
     }
 
     /// Persist a single new agent to the TOML config file
@@ -2026,16 +2429,435 @@ impl Gateway {
     }
 
     /// Handle WebSocket upgrade request
+    #[allow(clippy::expect_used)] // Response::builder() only fails on invalid headers
     async fn handle_websocket_upgrade(
         &self,
-        _req: Request<IncomingBody>,
+        req: Request<IncomingBody>,
     ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
-        // For simplicity, we'll return an error for now
-        // In a full implementation, this would handle the WebSocket upgrade protocol
+        // Validate upgrade headers
+        let upgrade_hdr = req.headers().get("upgrade")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !upgrade_hdr.eq_ignore_ascii_case("websocket") {
+            return Ok(Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(GatewayBody::Left(Full::new("Missing Upgrade: websocket header".into())))
+                .expect("response"));
+        }
+        let ws_key = match req.headers().get("sec-websocket-key") {
+            Some(k) => k.to_str().unwrap_or("").to_string(),
+            None => {
+                return Ok(Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(GatewayBody::Left(Full::new("Missing Sec-WebSocket-Key".into())))
+                    .expect("response"));
+            }
+        };
+
+        let accept_key = tungstenite::handshake::derive_accept_key(ws_key.as_bytes());
+        let conn_id = uuid::Uuid::new_v4().to_string();
+
+        // Spawn task to handle the upgraded connection
+        let gateway = self.clone();
+        let conn_id_clone = conn_id.clone();
+        tokio::spawn(async move {
+            match hyper::upgrade::on(req).await {
+                Ok(upgraded) => {
+                    let io = TokioIo::new(upgraded);
+                    let ws_stream = tokio_tungstenite::WebSocketStream::from_raw_socket(
+                        io,
+                        tokio_tungstenite::tungstenite::protocol::Role::Server,
+                        None,
+                    ).await;
+
+                    info!("WebSocket connection established: {}", conn_id_clone);
+                    gateway.handle_websocket_connection(ws_stream, conn_id_clone).await;
+                }
+                Err(e) => {
+                    error!("WebSocket upgrade failed: {}", e);
+                }
+            }
+        });
+
+        // Return 101 Switching Protocols
         Ok(Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(GatewayBody::Left(Full::new("WebSocket upgrade not implemented in this demo".into())))
-            .unwrap())
+            .status(StatusCode::SWITCHING_PROTOCOLS)
+            .header("Upgrade", "websocket")
+            .header("Connection", "Upgrade")
+            .header("Sec-WebSocket-Accept", accept_key)
+            .body(GatewayBody::Left(Full::new(hyper::body::Bytes::new())))
+            .expect("response"))
+    }
+
+    /// Handle an active WebSocket connection (read/write loop)
+    async fn handle_websocket_connection<S>(&self, ws_stream: tokio_tungstenite::WebSocketStream<S>, conn_id: String)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        use futures_util::{SinkExt, StreamExt};
+
+        let (mut ws_sink, mut ws_source) = ws_stream.split();
+        let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel::<WsMessage>();
+
+        // Register connection
+        {
+            let mut conns = self.ws_connections.write().await;
+            conns.insert(conn_id.clone(), WsConnection {
+                id: conn_id.clone(),
+                sender: outbound_tx.clone(),
+                user_id: None,
+                connected_at: std::time::Instant::now(),
+            });
+        }
+        info!("WebSocket registered: {} (total: {})", conn_id,
+              self.ws_connections.read().await.len());
+
+        // Writer task: forward outbound messages to WebSocket sink
+        let writer_handle = tokio::spawn(async move {
+            while let Some(msg) = outbound_rx.recv().await {
+                if ws_sink.send(msg).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        // Reader loop: process incoming WebSocket messages
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        loop {
+            tokio::select! {
+                msg = ws_source.next() => {
+                    match msg {
+                        Some(Ok(WsMessage::Text(text))) => {
+                            self.handle_ws_message(&conn_id, &outbound_tx, &text).await;
+                        }
+                        Some(Ok(WsMessage::Ping(data))) => {
+                            let _ = outbound_tx.send(WsMessage::Pong(data));
+                        }
+                        Some(Ok(WsMessage::Close(_))) | None => {
+                            debug!("WebSocket closed: {}", conn_id);
+                            break;
+                        }
+                        Some(Err(e)) => {
+                            debug!("WebSocket error for {}: {}", conn_id, e);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                _ = shutdown_rx.recv() => {
+                    let _ = outbound_tx.send(WsMessage::Close(None));
+                    break;
+                }
+            }
+        }
+
+        // Cleanup
+        {
+            let mut conns = self.ws_connections.write().await;
+            conns.remove(&conn_id);
+        }
+        writer_handle.abort();
+        info!("WebSocket disconnected: {} (remaining: {})", conn_id,
+              self.ws_connections.read().await.len());
+    }
+
+    /// Process a single incoming WebSocket message
+    async fn handle_ws_message(
+        &self,
+        conn_id: &str,
+        outbound_tx: &tokio::sync::mpsc::UnboundedSender<WsMessage>,
+        text: &str,
+    ) {
+        let msg: WsMessageType = match serde_json::from_str(text) {
+            Ok(m) => m,
+            Err(e) => {
+                let resp = WsResponseType::Error {
+                    message: format!("Invalid message: {e}"),
+                };
+                let _ = outbound_tx.send(WsMessage::Text(
+                    serde_json::to_string(&resp).unwrap_or_default(),
+                ));
+                return;
+            }
+        };
+
+        match msg {
+            WsMessageType::Ping => {
+                let resp = WsResponseType::Pong;
+                let _ = outbound_tx.send(WsMessage::Text(
+                    serde_json::to_string(&resp).unwrap_or_default(),
+                ));
+            }
+            WsMessageType::HealthCheck => {
+                let health = self.get_health_status().await;
+                let resp = WsResponseType::HealthStatus { status: health };
+                let _ = outbound_tx.send(WsMessage::Text(
+                    serde_json::to_string(&resp).unwrap_or_default(),
+                ));
+            }
+            WsMessageType::AgentMessage { agent_id, session_key, message, workspace } => {
+                self.handle_ws_agent_message(
+                    conn_id, outbound_tx, agent_id, session_key, message, workspace,
+                ).await;
+            }
+        }
+    }
+
+    /// Handle an agent message received over WebSocket.
+    ///
+    /// Runs the agent through the proven non-streaming `process_message` path
+    /// and sends the result back over the WebSocket. This avoids issues with
+    /// providers that don't fully support streaming (e.g. some Bedrock models).
+    async fn handle_ws_agent_message(
+        &self,
+        _conn_id: &str,
+        outbound_tx: &tokio::sync::mpsc::UnboundedSender<WsMessage>,
+        agent_id: String,
+        session_key: String,
+        user_message: String,
+        workspace: Option<String>,
+    ) {
+        // Look up agent
+        let agents = self.agents.read().await;
+        let agent = match agents.get(&agent_id) {
+            Some(a) => Arc::clone(a),
+            None => {
+                let resp = WsResponseType::AgentError {
+                    session_key,
+                    error: format!("Agent '{agent_id}' not found"),
+                };
+                let _ = outbound_tx.send(WsMessage::Text(
+                    serde_json::to_string(&resp).unwrap_or_default(),
+                ));
+                return;
+            }
+        };
+        drop(agents);
+
+        let session_id = format!("{agent_id}:{session_key}");
+        let tx = outbound_tx.clone();
+        let sk = session_key.clone();
+
+        // Build the domain Message
+        let message = Message::text(user_message)
+            .with_session_id(&session_id)
+            .with_role(MessageRole::User);
+        let workspace_path = workspace.map(std::path::PathBuf::from);
+
+        // Create a progress channel to send real-time updates to the client
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let progress_ws_tx = tx.clone();
+        let progress_sk = sk.clone();
+        let progress_handle = tokio::spawn(async move {
+            while let Some(event) = progress_rx.recv().await {
+                let messages: Vec<WsResponseType> = match event {
+                    crate::agent::AgentProgressEvent::ToolStart { ref tool_name } => {
+                        vec![WsResponseType::ToolCall {
+                            session_key: progress_sk.clone(),
+                            tool_name: tool_name.clone(),
+                            arguments: String::new(),
+                        }]
+                    }
+                    crate::agent::AgentProgressEvent::ToolDone { ref tool_name, success, duration_ms } => {
+                        vec![WsResponseType::ToolResult {
+                            session_key: progress_sk.clone(),
+                            tool_name: tool_name.clone(),
+                            result: if success { "ok".to_string() } else { "error".to_string() },
+                            success,
+                            duration_ms,
+                        }]
+                    }
+                    crate::agent::AgentProgressEvent::ToolOutput {
+                        ref tool_name, ref output, success, duration_ms
+                    } => {
+                        // Send tool result with output as a stream chunk so the
+                        // user sees what each tool produced in the chat.
+                        let status = if success { "✓" } else { "✗" };
+                        let truncated = if output.len() > 500 {
+                            format!("{}…", &output[..500])
+                        } else {
+                            output.clone()
+                        };
+                        let chunk = format!(
+                            "\n{status} **{tool_name}** ({duration_ms}ms)\n```\n{truncated}\n```\n"
+                        );
+                        vec![
+                            WsResponseType::ToolResult {
+                                session_key: progress_sk.clone(),
+                                tool_name: tool_name.clone(),
+                                result: truncated.clone(),
+                                success,
+                                duration_ms,
+                            },
+                            WsResponseType::StreamChunk {
+                                session_key: progress_sk.clone(),
+                                delta: chunk,
+                            },
+                        ]
+                    }
+                    crate::agent::AgentProgressEvent::TextDelta { ref text } => {
+                        // Stream the model's actual text/reasoning to the client
+                        vec![WsResponseType::StreamChunk {
+                            session_key: progress_sk.clone(),
+                            delta: format!("\n{text}\n"),
+                        }]
+                    }
+                    crate::agent::AgentProgressEvent::TokenUsage {
+                        prompt_tokens, completion_tokens, total_tokens, cumulative_total,
+                    } => {
+                        vec![WsResponseType::StreamChunk {
+                            session_key: progress_sk.clone(),
+                            delta: format!(
+                                "\n*[tokens: {total_tokens} ({prompt_tokens}p + {completion_tokens}c) | cumulative: {cumulative_total}]*\n"
+                            ),
+                        }]
+                    }
+                    crate::agent::AgentProgressEvent::LlmCall { .. } => {
+                        // Replaced by TextDelta + TokenUsage events
+                        vec![]
+                    }
+                    crate::agent::AgentProgressEvent::Handoff {
+                        ref from_agent, ref to_agent, ref context_preview,
+                    } => {
+                        vec![WsResponseType::StreamChunk {
+                            session_key: progress_sk.clone(),
+                            delta: format!(
+                                "\n**[{from_agent} → {to_agent}]** {context_preview}\n"
+                            ),
+                        }]
+                    }
+                };
+                for resp in messages {
+                    let json = serde_json::to_string(&resp).unwrap_or_default();
+                    if progress_ws_tx.send(WsMessage::Text(json)).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Run the agent with progress reporting
+        let mut result = agent.process_message_with_progress(
+            session_id.clone(), message, workspace_path, progress_tx,
+        ).await;
+
+        // Progress channel is closed when agent completes; clean up the forwarder
+        progress_handle.abort();
+
+        // Handle handoff chain — follow handoffs through to the final agent
+        let mut handoff_depth = 0u32;
+        while let Ok(ref response) = result {
+            if let Some(ref handoff) = response.handoff {
+                handoff_depth += 1;
+                if handoff_depth > 5 {
+                    warn!("Handoff chain depth exceeded in WS handler");
+                    break;
+                }
+
+                // Notify the client about the handoff
+                let chunk = WsResponseType::StreamChunk {
+                    session_key: sk.clone(),
+                    delta: format!(
+                        "\n**[Handing off to agent '{}']**\n",
+                        handoff.target_agent_id
+                    ),
+                };
+                let _ = tx.send(WsMessage::Text(
+                    serde_json::to_string(&chunk).unwrap_or_default(),
+                ));
+
+                // Look up target agent and invoke it
+                let agents = self.agents.read().await;
+                let target = agents.get(&handoff.target_agent_id).cloned();
+                drop(agents);
+
+                if let Some(target_agent) = target {
+                    let target_message = if let Some(ref override_msg) = handoff.message_override {
+                        override_msg.clone()
+                    } else {
+                        format!(
+                            "Context from previous agent:\n{}\n\nOriginal user request was forwarded to you.",
+                            handoff.context
+                        )
+                    };
+                    let msg = crate::message::Message::text(target_message)
+                        .with_session_id(&session_id)
+                        .with_role(crate::message::MessageRole::User);
+
+                    result = target_agent.process_message(
+                        session_id.clone(), msg, None,
+                    ).await;
+                } else {
+                    warn!("Handoff target '{}' not found", handoff.target_agent_id);
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Send final response or error over WebSocket
+        match result {
+            Ok(response) => {
+                let tool_calls: Vec<WsToolCallInfo> = response.tool_results.iter().map(|tr| {
+                    let raw_result = match &tr.result {
+                        rockbot_tools::message::ToolResult::Text { content } => content.clone(),
+                        rockbot_tools::message::ToolResult::Error { message, .. } => format!("Error: {message}"),
+                        rockbot_tools::message::ToolResult::Json { data } => {
+                            serde_json::to_string(data).unwrap_or_default()
+                        }
+                        rockbot_tools::message::ToolResult::File { path, .. } => {
+                            format!("[File: {path}]")
+                        }
+                        rockbot_tools::message::ToolResult::Handoff { target_agent_id, .. } => {
+                            format!("[Handoff to {target_agent_id}]")
+                        }
+                    };
+                    // Cap tool results to avoid sending megabytes over WebSocket
+                    let result = if raw_result.len() > 2000 {
+                        format!("{}... ({} bytes truncated)", &raw_result[..2000], raw_result.len() - 2000)
+                    } else {
+                        raw_result
+                    };
+                    WsToolCallInfo {
+                        tool_name: tr.tool_name.clone(),
+                        result,
+                        success: tr.success,
+                        duration_ms: tr.execution_time_ms,
+                    }
+                }).collect();
+
+                let content = response.message.extract_text().unwrap_or_default();
+                let tokens = if response.tokens_used.total_tokens > 0 {
+                    Some(WsTokenUsage {
+                        prompt_tokens: response.tokens_used.prompt_tokens,
+                        completion_tokens: response.tokens_used.completion_tokens,
+                        total_tokens: response.tokens_used.total_tokens,
+                    })
+                } else {
+                    None
+                };
+                let resp = WsResponseType::AgentResponseMsg {
+                    session_key: sk,
+                    content,
+                    tool_calls,
+                    tokens_used: tokens,
+                    processing_time_ms: Some(response.processing_time_ms),
+                };
+                let _ = tx.send(WsMessage::Text(
+                    serde_json::to_string(&resp).unwrap_or_default(),
+                ));
+            }
+            Err(e) => {
+                let resp = WsResponseType::AgentError {
+                    session_key: sk,
+                    error: e.to_string(),
+                };
+                let _ = tx.send(WsMessage::Text(
+                    serde_json::to_string(&resp).unwrap_or_default(),
+                ));
+            }
+        }
     }
     
     /// Handle health check endpoint
@@ -2224,6 +3046,14 @@ impl Gateway {
             enabled: req.enabled,
             mcp_servers: std::collections::HashMap::new(),
             config: std::collections::HashMap::new(),
+            max_context_tokens: 128000,
+            guardrails: Vec::new(),
+            reflection_enabled: false,
+            breakpoint_tools: Vec::new(),
+            planning_mode: "never".to_string(),
+            expose_as_tool: None,
+            episodic_memory: false,
+            workflow: None,
         };
 
         // Create agent directory with SOUL.md and SYSTEM-PROMPT.md
@@ -2243,9 +3073,10 @@ impl Gateway {
         let status = if let Some(ref factory) = self.agent_factory {
             match factory(config.clone()).await {
                 Ok(mut agent) => {
-                    // Inject agent invoker so invoke_agent tool works
+                    // Inject agent invoker and blackboard
                     if let Some(a) = Arc::get_mut(&mut agent) {
                         a.set_agent_invoker(self.agent_invoker());
+                        a.set_blackboard(self.blackboard());
                     }
                     self.agents.write().await.insert(req.id.clone(), agent);
                     "created"
@@ -2265,6 +3096,10 @@ impl Gateway {
             });
             "pending"
         };
+
+        if status == "created" {
+            self.register_agent_tools().await;
+        }
 
         let body = serde_json::json!({ "status": status, "id": req.id });
         let code = if status == "created" { StatusCode::CREATED } else { StatusCode::ACCEPTED };
@@ -2362,6 +3197,7 @@ impl Gateway {
                 Ok(mut new_agent) => {
                     if let Some(a) = Arc::get_mut(&mut new_agent) {
                         a.set_agent_invoker(self.agent_invoker());
+                        a.set_blackboard(self.blackboard());
                     }
                     let mut agents = self.agents.write().await;
                     agents.insert(agent_id.clone(), new_agent);
@@ -2829,6 +3665,7 @@ impl Clone for Gateway {
             tool_provider_registry: Arc::clone(&self.tool_provider_registry),
             ws_connections: Arc::clone(&self.ws_connections),
             a2a_task_store: Arc::clone(&self.a2a_task_store),
+            blackboard: Arc::clone(&self.blackboard),
             shutdown_tx: self.shutdown_tx.clone(),
         }
     }
@@ -2850,6 +3687,9 @@ impl GatewayInvoker {
     }
 }
 
+/// Maximum handoff chain depth to prevent infinite loops
+const MAX_HANDOFF_CHAIN_DEPTH: u32 = 5;
+
 #[async_trait::async_trait]
 impl rockbot_tools::AgentInvoker for GatewayInvoker {
     async fn invoke_agent(
@@ -2857,14 +3697,24 @@ impl rockbot_tools::AgentInvoker for GatewayInvoker {
         agent_id: &str,
         message: &str,
         session_id: &str,
-        _depth: u32,
+        depth: u32,
     ) -> std::result::Result<String, rockbot_tools::ToolError> {
+        if depth > MAX_HANDOFF_CHAIN_DEPTH {
+            return Err(rockbot_tools::ToolError::ExecutionFailed {
+                message: format!(
+                    "Handoff chain depth limit ({MAX_HANDOFF_CHAIN_DEPTH}) exceeded"
+                ),
+            });
+        }
+
         let agents = self.agents.read().await;
         let agent = agents.get(agent_id).ok_or_else(|| {
             rockbot_tools::ToolError::ExecutionFailed {
                 message: format!("invoke_agent: agent '{agent_id}' not found"),
             }
         })?;
+        let agent = Arc::clone(agent);
+        drop(agents);
 
         let msg = crate::message::Message::text(message)
             .with_session_id(session_id)
@@ -2872,6 +3722,28 @@ impl rockbot_tools::AgentInvoker for GatewayInvoker {
 
         match agent.process_message(session_id.to_string(), msg, None).await {
             Ok(response) => {
+                // If the response includes a handoff, follow the chain
+                if let Some(handoff) = &response.handoff {
+                    info!(
+                        "Handoff chain: {} -> {} (depth {})",
+                        agent_id, handoff.target_agent_id, depth + 1
+                    );
+                    let target_message = if let Some(ref override_msg) = handoff.message_override {
+                        override_msg.clone()
+                    } else {
+                        format!(
+                            "Context from agent '{agent_id}':\n{}\n\nOriginal request:\n{message}",
+                            handoff.context
+                        )
+                    };
+                    return self.invoke_agent(
+                        &handoff.target_agent_id,
+                        &target_message,
+                        session_id,
+                        depth + 1,
+                    ).await;
+                }
+
                 let text = match &response.message.content {
                     crate::message::MessageContent::Text { text } => text.clone(),
                     other => format!("{other:?}"),

@@ -1,6 +1,6 @@
 [package]
 name = "rockbot-cli"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Command-line interface for RockBot"
 license = "MIT"
@@ -10,6 +10,7 @@ default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "too
 # LLM providers
 anthropic = ["rockbot-llm/anthropic", "rockbot-core/anthropic"]
 openai = ["rockbot-llm/openai", "rockbot-core/openai"]
+ollama = ["rockbot-llm/ollama", "rockbot-core/ollama"]
 bedrock = ["rockbot-llm/bedrock", "rockbot-core/bedrock"]
 # Channel providers
 discord = ["rockbot-core/discord"]
@@ -55,3 +56,7 @@ atty = "0.2"
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 crossterm = "0.28"
 tachyonfx = "0.7"
+
+# WebSocket
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }

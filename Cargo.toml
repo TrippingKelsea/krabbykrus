@@ -80,6 +80,9 @@ regex = "1.0"
 # Glob pattern matching
 glob = "0.3"
 
+# String similarity / fuzzy matching
+strsim = "0.11"
+
 # Cron scheduling
 cron = "0.13"
 
@@ -95,6 +98,15 @@ async-trait = "0.1"
 
 # Metrics
 metrics = "0.24"
+
+# BPE tokenizer for accurate token counting
+tiktoken-rs = "0.6"
+
+# OpenTelemetry (optional, behind `otel` feature)
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["tonic"] }
+tracing-opentelemetry = "0.28"
 
 # Shared dev dependencies
 [workspace.dependencies.tempfile]
@@ -140,7 +152,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 # Package metadata for all crates
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"

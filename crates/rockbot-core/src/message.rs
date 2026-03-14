@@ -43,6 +43,29 @@ pub enum MessageContent {
     Error { error: String, code: Option<String> },
 }
 
+/// A part of multi-part message content, supporting text and images.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ContentPart {
+    /// Plain text content.
+    #[serde(rename = "text")]
+    Text { text: String },
+    /// Base64-encoded image content.
+    #[serde(rename = "image")]
+    Image {
+        /// Base64-encoded image data.
+        data: String,
+        /// MIME type (e.g. `"image/png"`, `"image/jpeg"`).
+        media_type: String,
+    },
+    /// Image referenced by URL.
+    #[serde(rename = "image_url")]
+    ImageUrl {
+        /// URL of the image.
+        url: String,
+    },
+}
+
 /// Rich content with formatting and structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RichContent {
@@ -219,6 +242,43 @@ impl Message {
         })
     }
     
+    /// Create a message with text content and one or more image parts.
+    ///
+    /// The resulting message has `MessageContent::Rich` with a text block
+    /// followed by an image block for each provided `ContentPart::Image` or
+    /// `ContentPart::ImageUrl` entry.  Non-image parts in `parts` are ignored.
+    ///
+    /// The `images` field on the underlying `rockbot_llm::Message` is populated
+    /// when this message is converted via `build_llm_messages`, so vision-capable
+    /// providers will receive the pixel data.
+    pub fn with_image<S: Into<String>>(text: S, parts: Vec<ContentPart>) -> Self {
+        let mut blocks = vec![ContentBlock::Text {
+            text: text.into(),
+            formatting: TextFormatting::default(),
+        }];
+        for part in &parts {
+            match part {
+                ContentPart::ImageUrl { url } => {
+                    blocks.push(ContentBlock::Image {
+                        url: url.clone(),
+                        alt: None,
+                    });
+                }
+                ContentPart::Image { data, media_type } => {
+                    // Embed as data-URI so it can round-trip through ContentBlock::Image
+                    blocks.push(ContentBlock::Image {
+                        url: format!("data:{media_type};base64,{data}"),
+                        alt: None,
+                    });
+                }
+                ContentPart::Text { .. } => {} // already handled in text argument
+            }
+        }
+        Self::new(MessageContent::Rich {
+            content: RichContent { blocks },
+        })
+    }
+
     /// Create a tool result message
     pub fn tool_result<S: Into<String>>(tool_call_id: S, tool_name: S, content: S) -> Self {
         let tool_call_id = tool_call_id.into();
@@ -473,13 +533,77 @@ mod tests {
                 },
             ],
         };
-        
+
         let message = Message::new(MessageContent::Rich {
             content: rich_content,
         });
-        
+
         let extracted = message.extract_text().unwrap();
         assert!(extracted.contains("Hello"));
         assert!(extracted.contains("println!"));
+    }
+
+    #[test]
+    fn test_content_part_text_serde() {
+        let part = ContentPart::Text { text: "hello".to_string() };
+        let json = serde_json::to_string(&part).unwrap();
+        assert!(json.contains("\"type\":\"text\""));
+        let back: ContentPart = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ContentPart::Text { .. }));
+    }
+
+    #[test]
+    fn test_content_part_image_serde() {
+        let part = ContentPart::Image {
+            data: "abc123".to_string(),
+            media_type: "image/png".to_string(),
+        };
+        let json = serde_json::to_string(&part).unwrap();
+        assert!(json.contains("\"type\":\"image\""));
+        assert!(json.contains("abc123"));
+        assert!(json.contains("image/png"));
+        let back: ContentPart = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ContentPart::Image { .. }));
+    }
+
+    #[test]
+    fn test_content_part_image_url_serde() {
+        let part = ContentPart::ImageUrl { url: "https://example.com/img.png".to_string() };
+        let json = serde_json::to_string(&part).unwrap();
+        assert!(json.contains("\"type\":\"image_url\""));
+        let back: ContentPart = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ContentPart::ImageUrl { .. }));
+    }
+
+    #[test]
+    fn test_message_with_image_constructor() {
+        let msg = Message::with_image(
+            "Look at this:",
+            vec![ContentPart::Image {
+                data: "base64data".to_string(),
+                media_type: "image/jpeg".to_string(),
+            }],
+        );
+        // Should extract text from the text block
+        let text = msg.extract_text().unwrap();
+        assert!(text.contains("Look at this:"));
+        // Should be rich content
+        assert!(matches!(msg.content, MessageContent::Rich { .. }));
+    }
+
+    #[test]
+    fn test_message_with_image_url_constructor() {
+        let msg = Message::with_image(
+            "What's in this image?",
+            vec![ContentPart::ImageUrl {
+                url: "https://example.com/photo.png".to_string(),
+            }],
+        );
+        assert!(matches!(msg.content, MessageContent::Rich { .. }));
+        if let MessageContent::Rich { ref content } = msg.content {
+            assert_eq!(content.blocks.len(), 2);
+            assert!(matches!(content.blocks[0], ContentBlock::Text { .. }));
+            assert!(matches!(content.blocks[1], ContentBlock::Image { .. }));
+        }
     }
 }

@@ -217,9 +217,9 @@ impl Tool for EditTool {
     }
     
     fn description(&self) -> &str {
-        "Edit a file by replacing exact text"
+        "Edit a file by replacing text. Requires the old_text to be unique in the file unless replace_all is set to true."
     }
-    
+
     fn parameters(&self) -> serde_json::Value {
         json!({
             "type": "object",
@@ -235,6 +235,10 @@ impl Tool for EditTool {
                 "new_text": {
                     "type": "string",
                     "description": "New text to replace the old text with"
+                },
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "When true, replace all occurrences of old_text. Default is false, which requires old_text to appear exactly once."
                 }
             },
             "required": ["file_path", "old_text", "new_text"]
@@ -287,22 +291,53 @@ impl Tool for EditTool {
                     message: format!("Failed to read file: {e}")
                 })?;
             
-            // Replace text
-            if !content.contains(&old_text) {
+            // Count occurrences and enforce uniqueness
+            let count = content.matches(old_text.as_str()).count();
+
+            if count == 0 {
+                // Try fuzzy matching before giving up
+                match find_fuzzy_match(&content, &old_text) {
+                    Some((matched_text, similarity)) => {
+                        let new_content = content.replacen(&matched_text, &new_text, 1);
+                        tokio::fs::write(&path, new_content.as_bytes()).await
+                            .map_err(|e| crate::ToolError::ExecutionFailed {
+                                message: format!("Failed to write file: {e}")
+                            })?;
+                        return Ok(ToolResult::text(format!(
+                            "Edited {} (fuzzy match, {:.0}% similar)",
+                            path.display(),
+                            similarity * 100.0
+                        )));
+                    }
+                    None => {
+                        return Ok(ToolResult::error(format!(
+                            "old_text not found in {}",
+                            path.display()
+                        )));
+                    }
+                }
+            }
+
+            let replace_all = params.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            if count > 1 && !replace_all {
                 return Ok(ToolResult::error(format!(
-                    "Text '{}' not found in file", 
-                    old_text.chars().take(50).collect::<String>()
+                    "old_text appears {count} times in the file. Provide more surrounding context to make it unique, or set replace_all=true to replace all occurrences."
                 )));
             }
-            
-            let new_content = content.replace(&old_text, &new_text);
-            
+
+            let new_content = if replace_all {
+                content.replace(old_text.as_str(), &new_text)
+            } else {
+                content.replacen(old_text.as_str(), &new_text, 1)
+            };
+
             // Write updated content
             tokio::fs::write(&path, new_content.as_bytes()).await
-                .map_err(|e| crate::ToolError::ExecutionFailed { 
+                .map_err(|e| crate::ToolError::ExecutionFailed {
                     message: format!("Failed to write file: {e}")
                 })?;
-            
+
             Ok(ToolResult::text(format!("Successfully replaced text in {}", path.display())))
         })
     }
@@ -1039,7 +1074,11 @@ impl Tool for InvokeAgentTool {
                 },
                 "message": {
                     "type": "string",
-                    "description": "The message/task to send to the target agent"
+                    "description": "The task to send to the target agent"
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional background context to help the sub-agent (e.g. relevant file paths, prior findings). Keep this focused — only include what the sub-agent needs."
                 }
             },
             "required": ["agent_id", "message"]
@@ -1059,12 +1098,26 @@ impl Tool for InvokeAgentTool {
                 })?
                 .to_string();
 
-            let message: String = params.get("message")
+            let raw_message: String = params.get("message")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
                     message: "message is required".to_string()
                 })?
                 .to_string();
+
+            // Build the scoped message for the sub-agent
+            let sub_context = params.get("context")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let message = if sub_context.is_empty() {
+                raw_message
+            } else {
+                format!(
+                    "Context from parent agent ({}):\n{sub_context}\n\nTask:\n{raw_message}",
+                    context.agent_id
+                )
+            };
 
             // Prevent self-delegation
             if agent_id == context.agent_id {
@@ -1097,6 +1150,285 @@ impl Tool for InvokeAgentTool {
                 Ok(response) => Ok(ToolResult::text(response)),
                 Err(e) => Ok(ToolResult::error(format!("Agent invocation failed: {e}"))),
             }
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Handoff tool — transfers conversation control to another agent
+// ---------------------------------------------------------------------------
+
+/// Handoff tool — transfers conversation control to another agent.
+///
+/// Unlike `invoke_agent` (which delegates and returns), `handoff` transfers
+/// the *entire conversation* to the target agent. The current agent's turn
+/// ends immediately and the target agent takes over.
+pub struct HandoffTool;
+
+impl Default for HandoffTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HandoffTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+/// Maximum delegation depth for handoffs (same as invoke_agent)
+const MAX_HANDOFF_DEPTH: u32 = 3;
+
+impl Tool for HandoffTool {
+    fn name(&self) -> &str {
+        "handoff"
+    }
+
+    fn description(&self) -> &str {
+        "Transfer conversation control to another agent. Unlike invoke_agent (which delegates a subtask and returns the result), handoff completely transfers the conversation — the current agent's turn ends and the target agent takes over."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "target_agent_id": {
+                    "type": "string",
+                    "description": "ID of the agent to hand off to"
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Context/instructions to pass to the target agent explaining why the handoff is happening and what they should do"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Optional message override — if provided, the target agent receives this instead of the original user message"
+                }
+            },
+            "required": ["target_agent_id", "context"]
+        })
+    }
+
+    fn required_capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+        Box::pin(async move {
+            let target_agent_id = params.get("target_agent_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "target_agent_id is required".to_string(),
+                })?
+                .to_string();
+
+            let handoff_context = params.get("context")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "context is required".to_string(),
+                })?
+                .to_string();
+
+            let message_override = params.get("message")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            // Prevent self-handoff
+            if target_agent_id == context.agent_id {
+                return Ok(ToolResult::error("Cannot hand off to self — would cause infinite loop"));
+            }
+
+            // Check delegation depth
+            if context.delegation_depth >= MAX_HANDOFF_DEPTH {
+                return Ok(ToolResult::error(format!(
+                    "Maximum handoff depth ({MAX_HANDOFF_DEPTH}) exceeded. Cannot hand off further."
+                )));
+            }
+
+            Ok(ToolResult::Handoff {
+                target_agent_id,
+                context: handoff_context,
+                message_override,
+            })
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Blackboard tools — shared state for swarm coordination
+// ---------------------------------------------------------------------------
+
+/// Blackboard read tool — read shared state from the swarm blackboard.
+pub struct BlackboardReadTool;
+
+impl Default for BlackboardReadTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BlackboardReadTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Tool for BlackboardReadTool {
+    fn name(&self) -> &str {
+        "blackboard_read"
+    }
+
+    fn description(&self) -> &str {
+        "Read from the shared swarm blackboard. Omit 'key' to read all entries. Only available to agents that belong to a swarm."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "The key to read. Omit to read all entries."
+                }
+            }
+        })
+    }
+
+    fn required_capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+        Box::pin(async move {
+            let swarm_id = match &context.swarm_id {
+                Some(id) => id.clone(),
+                None => return Ok(ToolResult::error(
+                    "This agent is not part of a swarm. blackboard_read is only available to swarm members."
+                )),
+            };
+
+            let blackboard = match &context.blackboard {
+                Some(bb) => bb.clone(),
+                None => return Ok(ToolResult::error(
+                    "No blackboard available in this context"
+                )),
+            };
+
+            let key = params.get("key").and_then(|v| v.as_str());
+
+            if let Some(key) = key {
+                match blackboard.read(&swarm_id, key).await {
+                    Some(value) => Ok(ToolResult::json(serde_json::json!({
+                        "key": key,
+                        "value": value,
+                    }))),
+                    None => Ok(ToolResult::json(serde_json::json!({
+                        "key": key,
+                        "value": null,
+                        "note": "Key not found on blackboard"
+                    }))),
+                }
+            } else {
+                let all = blackboard.read_all(&swarm_id).await;
+                Ok(ToolResult::json(serde_json::json!(all)))
+            }
+        })
+    }
+}
+
+/// Blackboard write tool — write shared state to the swarm blackboard.
+pub struct BlackboardWriteTool;
+
+impl Default for BlackboardWriteTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BlackboardWriteTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Tool for BlackboardWriteTool {
+    fn name(&self) -> &str {
+        "blackboard_write"
+    }
+
+    fn description(&self) -> &str {
+        "Write a key-value pair to the shared swarm blackboard. Only available to agents that belong to a swarm."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "The key to write"
+                },
+                "value": {
+                    "description": "The value to store (any JSON type)"
+                }
+            },
+            "required": ["key", "value"]
+        })
+    }
+
+    fn required_capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+        Box::pin(async move {
+            let swarm_id = match &context.swarm_id {
+                Some(id) => id.clone(),
+                None => return Ok(ToolResult::error(
+                    "This agent is not part of a swarm. blackboard_write is only available to swarm members."
+                )),
+            };
+
+            let blackboard = match &context.blackboard {
+                Some(bb) => bb.clone(),
+                None => return Ok(ToolResult::error(
+                    "No blackboard available in this context"
+                )),
+            };
+
+            let key = params.get("key")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "key is required".to_string(),
+                })?
+                .to_string();
+
+            let value = params.get("value")
+                .cloned()
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "value is required".to_string(),
+                })?;
+
+            blackboard.write(&swarm_id, &key, value.clone()).await;
+
+            Ok(ToolResult::json(serde_json::json!({
+                "status": "ok",
+                "key": key,
+                "swarm_id": swarm_id,
+            })))
         })
     }
 }
@@ -1392,5 +1724,1129 @@ impl Tool for WebSearchTool {
                 "count": results.len(),
             })))
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TestTool — auto-detect project type and run tests
+// ---------------------------------------------------------------------------
+
+/// Run the project's test suite, auto-detecting project type (Cargo, npm, pytest, Go, Make).
+pub struct TestTool;
+
+impl Default for TestTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TestTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Tool for TestTool {
+    fn name(&self) -> &str {
+        "test"
+    }
+
+    fn description(&self) -> &str {
+        "Run the project's test suite. Auto-detects the project type (Cargo, npm/Jest, pytest, Go, Make) and runs the appropriate test command."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "filter": {
+                    "type": "string",
+                    "description": "Optional test name filter (passed to the test runner)"
+                },
+                "workdir": {
+                    "type": "string",
+                    "description": "Optional working directory relative to workspace root"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds (default: 120)"
+                }
+            }
+        })
+    }
+
+    fn required_capabilities(&self) -> Capabilities {
+        Capabilities::process_execute()
+    }
+
+    fn requires_approval(&self) -> bool {
+        false
+    }
+
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+        Box::pin(async move {
+            let filter = params.get("filter").and_then(|v| v.as_str()).map(str::to_string);
+
+            let workdir = params
+                .get("workdir")
+                .and_then(|v| v.as_str())
+                .map(|rel| context.workspace_path.join(rel))
+                .unwrap_or_else(|| context.workspace_path.clone());
+
+            let timeout_secs = params
+                .get("timeout")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(120);
+
+            let cmd = detect_test_command(&workdir, filter.as_deref()).await?;
+
+            let mut child = Command::new("sh");
+            child.arg("-c").arg(&cmd).current_dir(&workdir);
+
+            let output = tokio::time::timeout(
+                std::time::Duration::from_secs(timeout_secs),
+                child.output(),
+            )
+            .await
+            .map_err(|_| crate::ToolError::ExecutionFailed {
+                message: format!("Test command timed out after {timeout_secs}s"),
+            })?
+            .map_err(|e| crate::ToolError::ExecutionFailed {
+                message: format!("Failed to run test command: {e}"),
+            })?;
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let combined = format!("{stdout}{stderr}");
+            let exit_code = output.status.code().unwrap_or(-1);
+
+            if output.status.success() {
+                Ok(ToolResult::text(format!(
+                    "Tests passed (exit {exit_code}).\n\n{combined}"
+                )))
+            } else {
+                Ok(ToolResult::error(format!(
+                    "Tests failed (exit {exit_code}).\n\n{combined}"
+                )))
+            }
+        })
+    }
+}
+
+/// Detect which test command to run based on files present in `workdir`.
+async fn detect_test_command(workdir: &std::path::Path, filter: Option<&str>) -> Result<String> {
+    if workdir.join("Cargo.toml").exists() {
+        let cmd = if let Some(f) = filter {
+            format!("cargo test -- {f}")
+        } else {
+            "cargo test".to_string()
+        };
+        return Ok(cmd);
+    }
+
+    if workdir.join("package.json").exists() {
+        let cmd = if let Some(f) = filter {
+            format!("npx jest {f}")
+        } else {
+            "npm test".to_string()
+        };
+        return Ok(cmd);
+    }
+
+    if workdir.join("pyproject.toml").exists() || workdir.join("setup.py").exists() {
+        let cmd = if let Some(f) = filter {
+            format!("pytest {f}")
+        } else {
+            "pytest".to_string()
+        };
+        return Ok(cmd);
+    }
+
+    if workdir.join("go.mod").exists() {
+        let cmd = if let Some(f) = filter {
+            format!("go test ./... -run {f}")
+        } else {
+            "go test ./...".to_string()
+        };
+        return Ok(cmd);
+    }
+
+    // Makefile with a test target
+    let makefile = workdir.join("Makefile");
+    if makefile.exists() {
+        let contents = tokio::fs::read_to_string(&makefile).await.unwrap_or_default();
+        if contents.contains("\ntest:") || contents.starts_with("test:") {
+            return Ok("make test".to_string());
+        }
+    }
+
+    Err(crate::ToolError::ExecutionFailed {
+        message: "Could not detect project type. No Cargo.toml, package.json, pyproject.toml, setup.py, go.mod, or Makefile with test target found.".to_string(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// LintTool — auto-detect project type and run linter
+// ---------------------------------------------------------------------------
+
+/// Run the project's linter, auto-detecting project type (Cargo/Clippy, npm, ruff/flake8, golangci-lint).
+pub struct LintTool;
+
+impl Default for LintTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LintTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Tool for LintTool {
+    fn name(&self) -> &str {
+        "lint"
+    }
+
+    fn description(&self) -> &str {
+        "Run the project's linter. Auto-detects the project type (Cargo/Clippy, npm, ruff/flake8, golangci-lint) and runs the appropriate lint command."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "filter": {
+                    "type": "string",
+                    "description": "Optional path or pattern filter (passed to the lint runner)"
+                },
+                "workdir": {
+                    "type": "string",
+                    "description": "Optional working directory relative to workspace root"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds (default: 120)"
+                }
+            }
+        })
+    }
+
+    fn required_capabilities(&self) -> Capabilities {
+        Capabilities::process_execute()
+    }
+
+    fn requires_approval(&self) -> bool {
+        false
+    }
+
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+        Box::pin(async move {
+            let filter = params.get("filter").and_then(|v| v.as_str()).map(str::to_string);
+
+            let workdir = params
+                .get("workdir")
+                .and_then(|v| v.as_str())
+                .map(|rel| context.workspace_path.join(rel))
+                .unwrap_or_else(|| context.workspace_path.clone());
+
+            let timeout_secs = params
+                .get("timeout")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(120);
+
+            let cmd = detect_lint_command(&workdir, filter.as_deref()).await?;
+
+            let mut child = Command::new("sh");
+            child.arg("-c").arg(&cmd).current_dir(&workdir);
+
+            let output = tokio::time::timeout(
+                std::time::Duration::from_secs(timeout_secs),
+                child.output(),
+            )
+            .await
+            .map_err(|_| crate::ToolError::ExecutionFailed {
+                message: format!("Lint command timed out after {timeout_secs}s"),
+            })?
+            .map_err(|e| crate::ToolError::ExecutionFailed {
+                message: format!("Failed to run lint command: {e}"),
+            })?;
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let combined = format!("{stdout}{stderr}");
+            let exit_code = output.status.code().unwrap_or(-1);
+
+            if output.status.success() {
+                Ok(ToolResult::text(format!(
+                    "Lint passed (exit {exit_code}).\n\n{combined}"
+                )))
+            } else {
+                Ok(ToolResult::error(format!(
+                    "Lint failed (exit {exit_code}).\n\n{combined}"
+                )))
+            }
+        })
+    }
+}
+
+/// Detect which lint command to run based on files present in `workdir`.
+async fn detect_lint_command(workdir: &std::path::Path, filter: Option<&str>) -> Result<String> {
+    if workdir.join("Cargo.toml").exists() {
+        return Ok("cargo clippy -- -D warnings".to_string());
+    }
+
+    if workdir.join("package.json").exists() {
+        // Only run npm run lint if a lint script exists in package.json
+        let pkg_contents = tokio::fs::read_to_string(workdir.join("package.json"))
+            .await
+            .unwrap_or_default();
+        if pkg_contents.contains("\"lint\"") {
+            return Ok("npm run lint".to_string());
+        }
+        return Err(crate::ToolError::ExecutionFailed {
+            message: "package.json has no 'lint' script defined.".to_string(),
+        });
+    }
+
+    if workdir.join("pyproject.toml").exists() || workdir.join("setup.py").exists() {
+        // Prefer ruff, fall back to flake8
+        let target = filter.unwrap_or(".");
+        let ruff_available = Command::new("sh")
+            .arg("-c")
+            .arg("command -v ruff")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if ruff_available {
+            return Ok(format!("ruff check {target}"));
+        }
+        return Ok(format!("flake8 {target}"));
+    }
+
+    if workdir.join("go.mod").exists() {
+        return Ok("golangci-lint run".to_string());
+    }
+
+    Err(crate::ToolError::ExecutionFailed {
+        message: "Could not detect project type for linting. No Cargo.toml, package.json, pyproject.toml, setup.py, or go.mod found.".to_string(),
+    })
+}
+
+/// Tool for asking the user a clarifying question.
+///
+/// When an agent is uncertain about how to proceed, it can use this tool
+/// to pose a question back to the user. The tool returns a special result
+/// that the agent loop interprets as "pause and wait for user input."
+pub struct ClarifyTool;
+
+impl Default for ClarifyTool {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl ClarifyTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Tool for ClarifyTool {
+    fn name(&self) -> &str {
+        "clarify"
+    }
+
+    fn description(&self) -> &str {
+        "Ask the user a clarifying question when you need more information to proceed. \
+         Use this when the user's request is ambiguous or you need to confirm a destructive action."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to ask the user"
+                },
+                "options": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional list of suggested options for the user to choose from"
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Brief context explaining why you need this clarification"
+                }
+            },
+            "required": ["question"]
+        })
+    }
+
+    fn required_capabilities(&self) -> Capabilities {
+        Capabilities::new()
+    }
+
+    fn requires_approval(&self) -> bool {
+        false
+    }
+
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        _context: ToolExecutionContext,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolResult>> + Send + '_>> {
+        Box::pin(async move {
+            let question = params
+                .get("question")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "Missing required parameter: question".to_string(),
+                })?;
+
+            let options = params
+                .get("options")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                });
+
+            let context = params.get("context").and_then(|v| v.as_str());
+
+            let mut response = String::new();
+            if let Some(ctx) = context {
+                response.push_str(&format!("**Context:** {ctx}\n\n"));
+            }
+            response.push_str(&format!("**Question:** {question}"));
+            if let Some(opts) = options {
+                response.push_str("\n\n**Options:**\n");
+                for (i, opt) in opts.iter().enumerate() {
+                    response.push_str(&format!("{}. {}\n", i + 1, opt));
+                }
+            }
+
+            // Return the clarification as a text result.
+            // The agent loop will interpret this as a message to forward to the user.
+            Ok(ToolResult::text(response))
+        })
+    }
+}
+
+/// Attempt to find a fuzzy match for `needle` in `haystack`.
+/// Returns the actual text that matched and the similarity score.
+fn find_fuzzy_match(haystack: &str, needle: &str) -> Option<(String, f64)> {
+    use strsim::normalized_levenshtein;
+
+    // First try: normalize whitespace in both and do exact match
+    let norm_needle = normalize_whitespace(needle);
+    let norm_haystack = normalize_whitespace(haystack);
+    if norm_haystack.contains(&norm_needle) {
+        // Find the original text that corresponds to the normalized match
+        if let Some(original) = find_original_span(haystack, needle) {
+            return Some((original, 1.0));
+        }
+    }
+
+    // Second try: sliding window with Levenshtein similarity
+    let needle_lines: Vec<&str> = needle.lines().collect();
+    let haystack_lines: Vec<&str> = haystack.lines().collect();
+    let window_size = needle_lines.len();
+
+    if window_size == 0 || haystack_lines.len() < window_size {
+        return None;
+    }
+
+    let mut best_score = 0.0f64;
+    let mut best_window: Option<String> = None;
+
+    for i in 0..=(haystack_lines.len() - window_size) {
+        let window: String = haystack_lines[i..i + window_size].join("\n");
+        let score = normalized_levenshtein(&normalize_whitespace(needle), &normalize_whitespace(&window));
+        if score > best_score {
+            best_score = score;
+            best_window = Some(window);
+        }
+    }
+
+    // Require at least 80% similarity
+    if best_score >= 0.80 {
+        best_window.map(|w| (w, best_score))
+    } else {
+        None
+    }
+}
+
+fn normalize_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn find_original_span(haystack: &str, needle: &str) -> Option<String> {
+    // Try to find a span in haystack that, when whitespace-normalized, matches the normalized needle
+    let norm_needle = normalize_whitespace(needle);
+    let haystack_lines: Vec<&str> = haystack.lines().collect();
+    let needle_lines: Vec<&str> = needle.lines().collect();
+    let window_size = needle_lines.len();
+
+    if window_size == 0 || haystack_lines.len() < window_size {
+        return None;
+    }
+
+    for i in 0..=(haystack_lines.len() - window_size) {
+        let window: String = haystack_lines[i..i + window_size].join("\n");
+        if normalize_whitespace(&window) == norm_needle {
+            return Some(window);
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// BrowserTool — headless browser fetch with JS rendering
+// ---------------------------------------------------------------------------
+
+/// Maximum text length returned by browser tool (8 KB)
+const BROWSER_MAX_TEXT: usize = 8 * 1024;
+
+/// Navigate to a URL using a headless browser (Chrome/Chromium) and return the
+/// rendered text content. Falls back to plain HTTP GET when no browser binary
+/// is found.
+pub struct BrowserTool;
+
+impl Default for BrowserTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BrowserTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Tool for BrowserTool {
+    fn name(&self) -> &str {
+        "browser"
+    }
+
+    fn description(&self) -> &str {
+        "Navigate to a URL and extract rendered page content. Useful for JavaScript-heavy pages \
+         that web_fetch cannot properly render. Optionally extract specific elements via CSS selector."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to navigate to"
+                },
+                "selector": {
+                    "type": "string",
+                    "description": "Optional CSS selector to extract specific content"
+                },
+                "wait_ms": {
+                    "type": "integer",
+                    "description": "Milliseconds to wait for page load (default: 3000)"
+                }
+            },
+            "required": ["url"]
+        })
+    }
+
+    fn required_capabilities(&self) -> Capabilities {
+        let mut caps = Capabilities::new();
+        caps.add(rockbot_security::Capability::NetworkAccess("*".to_string()));
+        caps
+    }
+
+    fn requires_approval(&self) -> bool {
+        true
+    }
+
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        _context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+        Box::pin(async move {
+            let url = params
+                .get("url")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "url is required".to_string(),
+                })?
+                .to_string();
+
+            let selector = params
+                .get("selector")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+
+            let wait_ms = params
+                .get("wait_ms")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(3000);
+
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Ok(ToolResult::error(
+                    "URL must start with http:// or https://",
+                ));
+            }
+
+            // Try headless Chrome/Chromium first
+            if let Ok(content) =
+                fetch_with_headless_chrome(&url, selector.as_deref(), wait_ms).await
+            {
+                return Ok(ToolResult::text(content));
+            }
+
+            // Fall back to plain HTTP GET + HTML stripping
+            fetch_with_http_fallback(&url).await
+        })
+    }
+}
+
+/// Attempt to render `url` using a locally-installed headless Chrome/Chromium
+/// binary. Returns `Err` if no binary is found or the process fails.
+async fn fetch_with_headless_chrome(
+    url: &str,
+    selector: Option<&str>,
+    wait_ms: u64,
+) -> Result<String> {
+    let browser = find_chrome_binary().ok_or_else(|| crate::ToolError::ExecutionFailed {
+        message: "No Chrome/Chromium binary found".to_string(),
+    })?;
+
+    let mut cmd = Command::new(&browser);
+    cmd.args([
+        "--headless",
+        "--disable-gpu",
+        "--no-sandbox",
+        "--dump-dom",
+        url,
+    ]);
+
+    // Give the browser a bit of extra time beyond the requested wait
+    let timeout_dur = std::time::Duration::from_millis(wait_ms + 5000);
+    let output = tokio::time::timeout(timeout_dur, cmd.output())
+        .await
+        .map_err(|_| crate::ToolError::ExecutionFailed {
+            message: "Browser timed out".to_string(),
+        })?
+        .map_err(|e| crate::ToolError::ExecutionFailed {
+            message: format!("Browser error: {e}"),
+        })?;
+
+    if !output.status.success() {
+        return Err(crate::ToolError::ExecutionFailed {
+            message: format!("Browser exited with {}", output.status),
+        });
+    }
+
+    let html = String::from_utf8_lossy(&output.stdout);
+    let text = strip_html_tags(&html);
+
+    let result = if let Some(sel) = selector {
+        format!(
+            "Page content (selector: {sel}):\n\n{}",
+            truncate_browser_text(&text, BROWSER_MAX_TEXT)
+        )
+    } else {
+        truncate_browser_text(&text, BROWSER_MAX_TEXT)
+    };
+
+    Ok(result)
+}
+
+/// Probe standard binary names and return the first one that exists on PATH.
+fn find_chrome_binary() -> Option<String> {
+    for bin in [
+        "google-chrome",
+        "chromium",
+        "chromium-browser",
+        "google-chrome-stable",
+    ] {
+        // Use `which` via a synchronous PATH search: check if any directory in
+        // PATH contains this executable.
+        if std::env::var_os("PATH")
+            .map(|path_val| {
+                std::env::split_paths(&path_val)
+                    .any(|dir| dir.join(bin).is_file())
+            })
+            .unwrap_or(false)
+        {
+            return Some(bin.to_string());
+        }
+    }
+    None
+}
+
+/// Fallback: plain HTTP GET with HTML tag stripping (no JS rendering).
+async fn fetch_with_http_fallback(url: &str) -> Result<ToolResult> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| crate::ToolError::ExecutionFailed {
+            message: e.to_string(),
+        })?;
+
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| crate::ToolError::ExecutionFailed {
+            message: format!("HTTP error: {e}"),
+        })?;
+
+    let body = resp.text().await.map_err(|e| crate::ToolError::ExecutionFailed {
+        message: format!("Read error: {e}"),
+    })?;
+
+    let text = strip_html_tags(&body);
+    Ok(ToolResult::text(format!(
+        "Page content (HTTP fallback, no JS rendering):\n\n{}",
+        truncate_browser_text(&text, BROWSER_MAX_TEXT)
+    )))
+}
+
+/// Truncate text to `max_chars`, appending a note when truncation occurs.
+fn truncate_browser_text(text: &str, max_chars: usize) -> String {
+    if text.len() <= max_chars {
+        text.to_string()
+    } else {
+        format!(
+            "{}...\n[truncated at {} chars]",
+            &text[..max_chars],
+            max_chars
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use crate::message::ToolResult;
+
+    fn make_context(workspace: std::path::PathBuf) -> ToolExecutionContext {
+        ToolExecutionContext {
+            session_id: "test-session".to_string(),
+            agent_id: "test-agent".to_string(),
+            workspace_path: workspace,
+            security_context: rockbot_security::SecurityContext {
+                session_id: "test-session".to_string(),
+                capabilities: {
+                    let mut caps = rockbot_security::Capabilities::new();
+                    caps.extend(rockbot_security::Capabilities::filesystem_read());
+                    caps.extend(rockbot_security::Capabilities::filesystem_write());
+                    caps
+                },
+                sandbox_enabled: false,
+                restrictions: rockbot_security::SecurityRestrictions::default(),
+            },
+            credential_accessor: None,
+            command_allowlist: vec![],
+            approval_callback: None,
+            agent_invoker: None,
+            delegation_depth: 0,
+            blackboard: None,
+            swarm_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_edit_single_occurrence_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        tokio::fs::write(&file_path, "hello world\n").await.unwrap();
+
+        let tool = EditTool::new();
+        let params = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_text": "hello",
+            "new_text": "goodbye"
+        });
+        let context = make_context(dir.path().to_path_buf());
+        let result = tool.execute(params, context).await.unwrap();
+
+        assert!(matches!(result, ToolResult::Text { .. }));
+        let content = tokio::fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(content, "goodbye world\n");
+    }
+
+    #[tokio::test]
+    async fn test_edit_zero_occurrences_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        tokio::fs::write(&file_path, "hello world\n").await.unwrap();
+
+        let tool = EditTool::new();
+        let params = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_text": "nonexistent",
+            "new_text": "replacement"
+        });
+        let context = make_context(dir.path().to_path_buf());
+        let result = tool.execute(params, context).await.unwrap();
+
+        assert!(matches!(result, ToolResult::Error { .. }));
+        if let ToolResult::Error { message, .. } = result {
+            assert!(message.contains("not found"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_edit_multiple_occurrences_without_replace_all_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        tokio::fs::write(&file_path, "foo bar foo baz foo\n").await.unwrap();
+
+        let tool = EditTool::new();
+        let params = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_text": "foo",
+            "new_text": "qux"
+        });
+        let context = make_context(dir.path().to_path_buf());
+        let result = tool.execute(params, context).await.unwrap();
+
+        assert!(matches!(result, ToolResult::Error { .. }));
+        if let ToolResult::Error { message, .. } = result {
+            assert!(message.contains('3'), "expected count 3 in message: {message}");
+            assert!(message.contains("replace_all=true"));
+        }
+        // File should be unchanged
+        let content = tokio::fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(content, "foo bar foo baz foo\n");
+    }
+
+    #[tokio::test]
+    async fn test_edit_multiple_occurrences_with_replace_all_replaces_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        tokio::fs::write(&file_path, "foo bar foo baz foo\n").await.unwrap();
+
+        let tool = EditTool::new();
+        let params = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_text": "foo",
+            "new_text": "qux",
+            "replace_all": true
+        });
+        let context = make_context(dir.path().to_path_buf());
+        let result = tool.execute(params, context).await.unwrap();
+
+        assert!(matches!(result, ToolResult::Text { .. }));
+        let content = tokio::fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(content, "qux bar qux baz qux\n");
+    }
+
+    // --- TestTool / LintTool detection tests ---
+
+    fn make_exec_context(workspace: std::path::PathBuf) -> ToolExecutionContext {
+        ToolExecutionContext {
+            session_id: "test-session".to_string(),
+            agent_id: "test-agent".to_string(),
+            workspace_path: workspace,
+            security_context: rockbot_security::SecurityContext {
+                session_id: "test-session".to_string(),
+                capabilities: {
+                    let mut caps = rockbot_security::Capabilities::new();
+                    caps.add(rockbot_security::Capability::ProcessExecute);
+                    caps
+                },
+                sandbox_enabled: false,
+                restrictions: rockbot_security::SecurityRestrictions::default(),
+            },
+            credential_accessor: None,
+            command_allowlist: vec![],
+            approval_callback: None,
+            agent_invoker: None,
+            delegation_depth: 0,
+            blackboard: None,
+            swarm_id: None,
+        }
+    }
+
+    #[test]
+    fn test_tool_name_and_description() {
+        let t = TestTool::new();
+        assert_eq!(t.name(), "test");
+        assert!(!t.description().is_empty());
+        assert!(!t.requires_approval());
+    }
+
+    #[test]
+    fn test_lint_tool_name_and_description() {
+        let l = LintTool::new();
+        assert_eq!(l.name(), "lint");
+        assert!(!l.description().is_empty());
+        assert!(!l.requires_approval());
+    }
+
+    #[tokio::test]
+    async fn test_detect_test_command_cargo() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+        let cmd = detect_test_command(dir.path(), None).await.unwrap();
+        assert_eq!(cmd, "cargo test");
+    }
+
+    #[tokio::test]
+    async fn test_detect_test_command_cargo_with_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+        let cmd = detect_test_command(dir.path(), Some("my_test")).await.unwrap();
+        assert_eq!(cmd, "cargo test -- my_test");
+    }
+
+    #[tokio::test]
+    async fn test_detect_test_command_npm() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+        let cmd = detect_test_command(dir.path(), None).await.unwrap();
+        assert_eq!(cmd, "npm test");
+    }
+
+    #[tokio::test]
+    async fn test_detect_test_command_npm_with_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+        let cmd = detect_test_command(dir.path(), Some("myspec")).await.unwrap();
+        assert_eq!(cmd, "npx jest myspec");
+    }
+
+    #[tokio::test]
+    async fn test_detect_test_command_python_pyproject() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pyproject.toml"), "[tool.pytest]").unwrap();
+        let cmd = detect_test_command(dir.path(), None).await.unwrap();
+        assert_eq!(cmd, "pytest");
+    }
+
+    #[tokio::test]
+    async fn test_detect_test_command_python_setup_py() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("setup.py"), "").unwrap();
+        let cmd = detect_test_command(dir.path(), Some("test_foo")).await.unwrap();
+        assert_eq!(cmd, "pytest test_foo");
+    }
+
+    #[tokio::test]
+    async fn test_detect_test_command_go() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("go.mod"), "module example.com/m").unwrap();
+        let cmd = detect_test_command(dir.path(), None).await.unwrap();
+        assert_eq!(cmd, "go test ./...");
+    }
+
+    #[tokio::test]
+    async fn test_detect_test_command_makefile() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Makefile"), "\ntest:\n\t./run_tests.sh\n").unwrap();
+        let cmd = detect_test_command(dir.path(), None).await.unwrap();
+        assert_eq!(cmd, "make test");
+    }
+
+    #[tokio::test]
+    async fn test_detect_test_command_no_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = detect_test_command(dir.path(), None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_detect_lint_command_cargo() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+        let cmd = detect_lint_command(dir.path(), None).await.unwrap();
+        assert_eq!(cmd, "cargo clippy -- -D warnings");
+    }
+
+    #[tokio::test]
+    async fn test_detect_lint_command_npm_with_lint_script() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts": {"lint": "eslint ."}}"#,
+        )
+        .unwrap();
+        let cmd = detect_lint_command(dir.path(), None).await.unwrap();
+        assert_eq!(cmd, "npm run lint");
+    }
+
+    #[tokio::test]
+    async fn test_detect_lint_command_npm_without_lint_script() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"scripts": {}}"#).unwrap();
+        let result = detect_lint_command(dir.path(), None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_detect_lint_command_go() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("go.mod"), "module example.com/m").unwrap();
+        let cmd = detect_lint_command(dir.path(), None).await.unwrap();
+        assert_eq!(cmd, "golangci-lint run");
+    }
+
+    #[tokio::test]
+    async fn test_detect_lint_command_no_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = detect_lint_command(dir.path(), None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_test_tool_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        // Use a Makefile with a sleep target so detection succeeds but execution times out
+        std::fs::write(dir.path().join("Makefile"), "\ntest:\n\tsleep 10\n").unwrap();
+        let tool = TestTool::new();
+        let ctx = make_exec_context(dir.path().to_path_buf());
+        let params = serde_json::json!({ "timeout": 1 });
+        let result = tool.execute(params, ctx).await;
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("timed out"), "Expected timeout error, got: {msg}");
+    }
+
+    #[test]
+    fn test_clarify_tool_name() {
+        let tool = ClarifyTool::new();
+        assert_eq!(tool.name(), "clarify");
+        assert!(!tool.requires_approval());
+    }
+
+    #[tokio::test]
+    async fn test_clarify_with_question_only() {
+        let tool = ClarifyTool::new();
+        let params = serde_json::json!({
+            "question": "Which database should I use?"
+        });
+        let context = make_context(std::path::PathBuf::from("/tmp"));
+        let result = tool.execute(params, context).await.unwrap();
+        if let ToolResult::Text { content } = &result {
+            assert!(content.contains("Which database should I use?"));
+        } else {
+            panic!("Expected Text result");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_clarify_with_options() {
+        let tool = ClarifyTool::new();
+        let params = serde_json::json!({
+            "question": "Which approach do you prefer?",
+            "options": ["Option A: Simple", "Option B: Complex"],
+            "context": "There are multiple ways to solve this"
+        });
+        let context = make_context(std::path::PathBuf::from("/tmp"));
+        let result = tool.execute(params, context).await.unwrap();
+        if let ToolResult::Text { content } = &result {
+            assert!(content.contains("Option A"));
+            assert!(content.contains("Option B"));
+            assert!(content.contains("Context"));
+        } else {
+            panic!("Expected Text result");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_edit_fuzzy_whitespace_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.rs");
+        tokio::fs::write(&file_path, "fn  hello()  {\n    println!(\"hi\");\n}\n").await.unwrap();
+
+        let tool = EditTool::new();
+        let params = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_text": "fn hello() {\n    println!(\"hi\");\n}",
+            "new_text": "fn goodbye() {\n    println!(\"bye\");\n}"
+        });
+        let context = make_context(dir.path().to_path_buf());
+        let result = tool.execute(params, context).await.unwrap();
+        assert!(matches!(result, ToolResult::Text { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_edit_fuzzy_no_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        tokio::fs::write(&file_path, "hello world\n").await.unwrap();
+
+        let tool = EditTool::new();
+        let params = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_text": "completely different text that has no similarity",
+            "new_text": "replacement"
+        });
+        let context = make_context(dir.path().to_path_buf());
+        let result = tool.execute(params, context).await.unwrap();
+        assert!(matches!(result, ToolResult::Error { .. }));
+    }
+
+    // -----------------------------------------------------------------------
+    // BrowserTool tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_browser_tool_name_and_approval() {
+        let tool = BrowserTool::new();
+        assert_eq!(tool.name(), "browser");
+        assert!(tool.requires_approval());
+    }
+
+    #[tokio::test]
+    async fn test_browser_tool_rejects_non_http_url() {
+        let tool = BrowserTool::new();
+        let params = serde_json::json!({ "url": "ftp://example.com/file" });
+        let context = make_context(std::path::PathBuf::from("/tmp"));
+        let result = tool.execute(params, context).await.unwrap();
+        match result {
+            ToolResult::Error { message, .. } => {
+                assert!(message.contains("http://") || message.contains("https://"));
+            }
+            other => panic!("Expected Error result for non-http URL, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_strip_html_tags_browser() {
+        assert_eq!(strip_html_tags("<p>Hello <b>world</b></p>"), "Hello world");
+        assert_eq!(strip_html_tags("no tags here"), "no tags here");
+        assert_eq!(strip_html_tags(""), "");
+    }
+
+    #[test]
+    fn test_truncate_browser_text_short() {
+        assert_eq!(truncate_browser_text("short", 100), "short");
+    }
+
+    #[test]
+    fn test_truncate_browser_text_long() {
+        let long = "a".repeat(200);
+        let truncated = truncate_browser_text(&long, 50);
+        assert!(truncated.len() < 200);
+        assert!(truncated.contains("truncated"));
+        assert!(truncated.contains("50"));
     }
 }

@@ -314,6 +314,7 @@ impl LlmProvider for AnthropicProvider {
                 message: Message {
                     role: MessageRole::Assistant,
                     content: response_content,
+                    images: vec![],
                     tool_calls: None,
                     tool_call_id: None,
                 },

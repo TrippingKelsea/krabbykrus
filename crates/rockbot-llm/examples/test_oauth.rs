@@ -52,6 +52,7 @@ async fn _main() -> Result<(), Box<dyn std::error::Error>> {
         messages: vec![Message {
             role: MessageRole::User,
             content: "Say 'Hello from rockbot!' and nothing else.".to_string(),
+            images: vec![],
             tool_calls: None,
             tool_call_id: None,
         }],

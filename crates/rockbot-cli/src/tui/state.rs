@@ -81,6 +81,12 @@ pub enum Message {
     ChatStreamChunk(String),            // Streaming chunk (for future use)
     SessionMessagesLoaded(String, Vec<ChatMessage>), // (session_key, messages)
     
+    // Context files
+    ContextFilesLoaded(String, Vec<ContextFileInfo>),   // (agent_id, files)
+    ContextFileLoaded(String, String, String),           // (agent_id, filename, content)
+    ContextFileSaved(String, String),                    // (agent_id, filename)
+    ContextFileError(String),                            // error message
+
     // UI feedback
     SetStatus(String, bool), // (message, is_error)
     ClearStatus,
@@ -572,6 +578,10 @@ pub enum InputMode {
     ViewPermission { permission_index: usize },
     /// Edit permission for a credential endpoint
     EditPermission(EditPermissionState),
+    /// Browse context files for an agent
+    ViewContextFiles(ViewContextFilesState),
+    /// Edit a context file (fullscreen markdown editor)
+    EditContextFile(EditContextFileState),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -586,6 +596,7 @@ pub enum ConfirmAction {
     DeleteAgent(String),    // agent id
     KillSession(String),    // session key
     DisableAgent(String),   // agent id (different from delete - actually disables in config)
+    DiscardContextFile(ViewContextFilesState), // return to file browser state
 }
 
 /// State for the "Edit Credential" modal.
@@ -1270,6 +1281,168 @@ impl EditAgentState {
                 return Some("Max tool calls must be a number".to_string());
             }
         None
+    }
+}
+
+/// Info about a context file in an agent's directory
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ContextFileInfo {
+    pub name: String,
+    pub exists: bool,
+    pub size_bytes: u64,
+    pub well_known: bool,
+}
+
+/// State for browsing an agent's context files
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewContextFilesState {
+    pub agent_id: String,
+    pub files: Vec<ContextFileInfo>,
+    pub selected: usize,
+    pub loading: bool,
+}
+
+/// State for editing a single context file
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditContextFileState {
+    pub agent_id: String,
+    pub filename: String,
+    pub content: String,
+    pub cursor_line: usize,
+    pub cursor_col: usize,
+    pub scroll_offset: usize,
+    pub is_dirty: bool,
+    pub is_loading: bool,
+    pub is_new_file: bool,
+}
+
+impl EditContextFileState {
+    pub fn new(agent_id: String, filename: String, content: String) -> Self {
+        let is_new_file = content.is_empty();
+        Self {
+            agent_id,
+            filename,
+            content,
+            cursor_line: 0,
+            cursor_col: 0,
+            scroll_offset: 0,
+            is_dirty: false,
+            is_loading: false,
+            is_new_file,
+        }
+    }
+
+    /// Insert a character at the current cursor position
+    pub fn insert_char(&mut self, c: char) {
+        let byte_pos = self.cursor_byte_position();
+        self.content.insert(byte_pos, c);
+        if c == '\n' {
+            self.cursor_line += 1;
+            self.cursor_col = 0;
+        } else {
+            self.cursor_col += 1;
+        }
+        self.is_dirty = true;
+    }
+
+    /// Delete the character before the cursor (backspace)
+    pub fn delete_char(&mut self) {
+        if self.cursor_col == 0 && self.cursor_line == 0 {
+            return;
+        }
+        let byte_pos = self.cursor_byte_position();
+        if byte_pos == 0 {
+            return;
+        }
+        // Find the previous character boundary
+        let prev_char = self.content[..byte_pos].chars().next_back();
+        if let Some(ch) = prev_char {
+            let char_start = byte_pos - ch.len_utf8();
+            self.content.remove(char_start);
+            if ch == '\n' {
+                // Move cursor to end of previous line
+                self.cursor_line -= 1;
+                let prev_line = self.lines().nth(self.cursor_line).unwrap_or("");
+                self.cursor_col = prev_line.len();
+            } else {
+                self.cursor_col -= 1;
+            }
+            self.is_dirty = true;
+        }
+    }
+
+    /// Get the byte position of the cursor
+    fn cursor_byte_position(&self) -> usize {
+        let mut pos = 0;
+        for (i, line) in self.content.split('\n').enumerate() {
+            if i == self.cursor_line {
+                return pos + self.cursor_col.min(line.len());
+            }
+            pos += line.len() + 1; // +1 for the \n
+        }
+        self.content.len()
+    }
+
+    /// Get an iterator over lines
+    fn lines(&self) -> std::str::Split<'_, char> {
+        self.content.split('\n')
+    }
+
+    /// Total number of lines
+    pub fn line_count(&self) -> usize {
+        self.content.split('\n').count()
+    }
+
+    /// Move cursor up
+    pub fn cursor_up(&mut self) {
+        if self.cursor_line > 0 {
+            self.cursor_line -= 1;
+            let line_len = self.lines().nth(self.cursor_line).unwrap_or("").len();
+            self.cursor_col = self.cursor_col.min(line_len);
+        }
+    }
+
+    /// Move cursor down
+    pub fn cursor_down(&mut self) {
+        if self.cursor_line + 1 < self.line_count() {
+            self.cursor_line += 1;
+            let line_len = self.lines().nth(self.cursor_line).unwrap_or("").len();
+            self.cursor_col = self.cursor_col.min(line_len);
+        }
+    }
+
+    /// Move cursor left
+    pub fn cursor_left(&mut self) {
+        if self.cursor_col > 0 {
+            self.cursor_col -= 1;
+        } else if self.cursor_line > 0 {
+            self.cursor_line -= 1;
+            let line_len = self.lines().nth(self.cursor_line).unwrap_or("").len();
+            self.cursor_col = line_len;
+        }
+    }
+
+    /// Move cursor right
+    pub fn cursor_right(&mut self) {
+        let line_len = self.lines().nth(self.cursor_line).unwrap_or("").len();
+        if self.cursor_col < line_len {
+            self.cursor_col += 1;
+        } else if self.cursor_line + 1 < self.line_count() {
+            self.cursor_line += 1;
+            self.cursor_col = 0;
+        }
+    }
+
+    /// Ensure the cursor is visible by adjusting scroll_offset
+    pub fn ensure_cursor_visible(&mut self, visible_lines: usize) {
+        if visible_lines == 0 {
+            return;
+        }
+        if self.cursor_line < self.scroll_offset {
+            self.scroll_offset = self.cursor_line;
+        } else if self.cursor_line >= self.scroll_offset + visible_lines {
+            self.scroll_offset = self.cursor_line - visible_lines + 1;
+        }
     }
 }
 
@@ -2020,6 +2193,33 @@ impl AppState {
                 chat.loaded = true;
             }
             
+            Message::ContextFilesLoaded(agent_id, files) => {
+                if let InputMode::ViewContextFiles(ref mut state) = self.input_mode {
+                    if state.agent_id == agent_id {
+                        state.files = files;
+                        state.loading = false;
+                    }
+                }
+            }
+            Message::ContextFileLoaded(agent_id, filename, content) => {
+                // Transition to edit mode for this file
+                self.input_mode = InputMode::EditContextFile(
+                    EditContextFileState::new(agent_id, filename, content)
+                );
+            }
+            Message::ContextFileSaved(agent_id, filename) => {
+                self.status_message = Some((format!("Saved {filename}"), false));
+                if let InputMode::EditContextFile(ref mut state) = self.input_mode {
+                    if state.agent_id == agent_id && state.filename == filename {
+                        state.is_dirty = false;
+                        state.is_new_file = false;
+                    }
+                }
+            }
+            Message::ContextFileError(err) => {
+                self.status_message = Some((err, true));
+            }
+
             Message::SetStatus(msg, is_error) => {
                 self.status_message = Some((msg, is_error));
             }

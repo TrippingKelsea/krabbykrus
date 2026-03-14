@@ -50,6 +50,7 @@
 //!         messages: vec![Message {
 //!             role: MessageRole::User,
 //!             content: "Hello!".to_string(),
+//!             images: vec![],
 //!             tool_calls: None,
 //!             tool_call_id: None,
 //!         }],
@@ -84,6 +85,8 @@ pub use rockbot_credentials_schema::{
 pub mod anthropic;
 #[cfg(feature = "openai")]
 pub mod openai;
+#[cfg(feature = "ollama")]
+pub mod ollama;
 #[cfg(feature = "bedrock")]
 pub mod bedrock;
 
@@ -91,6 +94,8 @@ pub mod bedrock;
 pub use anthropic::AnthropicProvider;
 #[cfg(feature = "openai")]
 pub use openai::OpenAiProvider;
+#[cfg(feature = "ollama")]
+pub use ollama::OllamaProvider;
 #[cfg(feature = "bedrock")]
 pub use bedrock::BedrockProvider;
 
@@ -208,11 +213,24 @@ pub struct ChatCompletionResponse {
     pub usage: Usage,
 }
 
+/// A base64-encoded image to include in a message.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ImageContent {
+    /// Base64-encoded image data.
+    pub data: String,
+    /// MIME type of the image (e.g. `"image/png"`, `"image/jpeg"`).
+    pub media_type: String,
+}
+
 /// Message in a chat completion
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: MessageRole,
     pub content: String,
+    /// Optional images to include alongside the text content.
+    /// When non-empty, providers that support vision will attach these images.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageContent>,
     pub tool_calls: Option<Vec<ToolCall>>,
     /// For Tool role messages: the tool_use_id this result corresponds to
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -370,6 +388,16 @@ impl LlmProviderRegistry {
             }
         }
 
+        // Register Ollama provider (always available; probed at runtime)
+        #[cfg(feature = "ollama")]
+        {
+            let base_url = std::env::var("OLLAMA_HOST")
+                .unwrap_or_else(|_| "http://localhost:11434".to_string());
+            let ollama = OllamaProvider::with_base_url(base_url);
+            tracing::info!("Registered Ollama provider");
+            self.register_provider(Arc::new(ollama)).await;
+        }
+
         Ok(())
     }
 
@@ -501,6 +529,7 @@ impl LlmProvider for MockLlmProvider {
                 message: Message {
                     role: MessageRole::Assistant,
                     content: response_content,
+                    images: vec![],
                     tool_calls: None,
                     tool_call_id: None,
                 },
@@ -604,6 +633,7 @@ mod tests {
             messages: vec![Message {
                 role: MessageRole::User,
                 content: "Hello, world!".to_string(),
+                images: vec![],
                 tool_calls: None,
                 tool_call_id: None,
             }],

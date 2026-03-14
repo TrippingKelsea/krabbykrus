@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::state::{AddCredentialState, AgentInfo, CredentialSchemaInfo, CreateSessionState, EditAgentState, EditCredentialState, EditPermissionState, EditProviderState, EndpointInfo, ModelProvider, PermissionRule, SessionInfo, SessionMode, get_fields_for_endpoint_type};
+use crate::tui::state::{AddCredentialState, AgentInfo, CredentialSchemaInfo, CreateSessionState, EditAgentState, EditContextFileState, EditCredentialState, EditPermissionState, EditProviderState, EndpointInfo, ModelProvider, PermissionRule, SessionInfo, SessionMode, ViewContextFilesState, get_fields_for_endpoint_type};
 use super::centered_rect;
 
 /// Endpoint types for the add credential modal
@@ -1481,5 +1481,167 @@ pub fn render_view_permission_modal(
     ];
 
     let paragraph = Paragraph::new(content);
+    frame.render_widget(paragraph, inner);
+}
+
+/// Render the context files browser modal
+pub fn render_view_context_files_modal(
+    frame: &mut Frame,
+    area: Rect,
+    state: &ViewContextFilesState,
+) {
+    let modal_area = centered_rect(60, 60, area);
+    frame.render_widget(Clear, modal_area);
+
+    let title = format!(" Context Files: {} ", state.agent_id);
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    if state.loading && state.files.is_empty() {
+        let loading = Paragraph::new("Loading files...");
+        frame.render_widget(loading, inner);
+        return;
+    }
+
+    let mut lines = Vec::new();
+    for (i, file) in state.files.iter().enumerate() {
+        let is_selected = i == state.selected;
+        let style = if is_selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+
+        let status = if file.exists {
+            Span::styled("●", Style::default().fg(Color::Green))
+        } else {
+            Span::styled("○", Style::default().fg(Color::DarkGray))
+        };
+
+        let name = Span::styled(
+            format!(" {:<24}", file.name),
+            style,
+        );
+
+        let size = if file.exists {
+            Span::styled(
+                format!(" {:>6} bytes", file.size_bytes),
+                if is_selected { style } else { Style::default().fg(Color::DarkGray) },
+            )
+        } else {
+            Span::styled(
+                " (not created) ",
+                if is_selected { style } else { Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC) },
+            )
+        };
+
+        let label = if file.well_known {
+            Span::styled(" ★", Style::default().fg(Color::Yellow))
+        } else {
+            Span::raw("  ")
+        };
+
+        lines.push(Line::from(vec![
+            Span::raw(if is_selected { "▸ " } else { "  " }),
+            status,
+            name,
+            size,
+            label,
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Enter:Edit │ Esc:Close │ ★ = well-known file",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+}
+
+/// Render the context file editor modal (near-fullscreen markdown editor)
+pub fn render_edit_context_file_modal(
+    frame: &mut Frame,
+    area: Rect,
+    state: &EditContextFileState,
+) {
+    let modal_area = centered_rect(90, 90, area);
+    frame.render_widget(Clear, modal_area);
+
+    let dirty_indicator = if state.is_dirty { " *" } else { "" };
+    let title = format!(" {} / {}{} ", state.agent_id, state.filename, dirty_indicator);
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(if state.is_dirty {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Cyan)
+        });
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    if state.is_loading {
+        let loading = Paragraph::new("Loading...");
+        frame.render_widget(loading, inner);
+        return;
+    }
+
+    // Render content with line numbers and cursor
+    let visible_height = inner.height.saturating_sub(2) as usize; // leave room for status line
+    let content_lines: Vec<&str> = state.content.split('\n').collect();
+
+    let mut display_lines = Vec::new();
+    for (i, line_text) in content_lines.iter().enumerate() {
+        if i < state.scroll_offset || i >= state.scroll_offset + visible_height {
+            continue;
+        }
+
+        let line_num = Span::styled(
+            format!("{:>4} ", i + 1),
+            Style::default().fg(Color::DarkGray),
+        );
+
+        let is_cursor_line = i == state.cursor_line;
+        if is_cursor_line {
+            // Insert cursor block character at cursor position
+            let col = state.cursor_col.min(line_text.len());
+            let (before, after) = line_text.split_at(col);
+            let cursor_char = if after.is_empty() { " " } else { &after[..1] };
+            let rest = if after.is_empty() { "" } else { &after[1..] };
+
+            display_lines.push(Line::from(vec![
+                line_num,
+                Span::raw(before.to_string()),
+                Span::styled(cursor_char, Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(rest.to_string()),
+            ]));
+        } else {
+            display_lines.push(Line::from(vec![
+                line_num,
+                Span::raw(line_text.to_string()),
+            ]));
+        }
+    }
+
+    // Status line at bottom
+    display_lines.push(Line::from(""));
+    let line_info = format!(
+        "  Ln {}, Col {} │ {} lines │ Ctrl+S:Save │ Esc:Back",
+        state.cursor_line + 1,
+        state.cursor_col + 1,
+        content_lines.len(),
+    );
+    display_lines.push(Line::from(Span::styled(
+        line_info,
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let paragraph = Paragraph::new(display_lines);
     frame.render_widget(paragraph, inner);
 }

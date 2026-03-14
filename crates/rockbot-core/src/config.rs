@@ -121,6 +121,44 @@ pub struct AgentInstance {
     /// Agent-specific configuration
     #[serde(default)]
     pub config: HashMap<String, serde_json::Value>,
+    /// Maximum context window in tokens (default: 128000, inherited from defaults)
+    #[serde(default = "default_max_context_tokens")]
+    pub max_context_tokens: usize,
+    /// Guardrails to enable (e.g. ["pii", "prompt_injection"])
+    #[serde(default)]
+    pub guardrails: Vec<String>,
+    /// Enable reflection/self-critique after tool loop completes
+    #[serde(default)]
+    pub reflection_enabled: bool,
+    /// Tool names that always require human approval (breakpoints)
+    #[serde(default)]
+    pub breakpoint_tools: Vec<String>,
+    /// Planning mode: "never" (default), "auto", "always", "approval_required"
+    #[serde(default = "default_planning_mode")]
+    pub planning_mode: String,
+    /// Expose this agent as a callable tool for other agents
+    #[serde(default)]
+    pub expose_as_tool: Option<AgentToolConfig>,
+    /// Enable episodic memory (long-term cross-session recall)
+    #[serde(default)]
+    pub episodic_memory: bool,
+    /// Optional workflow definition — if present, this agent acts as a DAG workflow
+    /// dispatcher rather than a standard LLM-driven agent.
+    #[serde(default)]
+    pub workflow: Option<crate::orchestration::WorkflowDefinition>,
+}
+
+/// Configuration for exposing an agent as a tool
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentToolConfig {
+    /// Tool name visible to other agents
+    pub tool_name: String,
+    /// Description of what this agent-tool does
+    pub description: String,
+}
+
+fn default_planning_mode() -> String {
+    "never".to_string()
 }
 
 /// MCP server entry in agent config

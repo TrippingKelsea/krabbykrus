@@ -1,6 +1,6 @@
 [package]
 name = "rockbot-tools-credentials"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Credential vault access tool for RockBot agents"
 license = "MIT"

@@ -1,6 +1,6 @@
 [package]
 name = "rockbot-llm"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "LLM provider abstraction for RockBot"
 license = "MIT"
@@ -9,6 +9,7 @@ license = "MIT"
 default = ["bedrock"]
 anthropic = ["dep:claude-agent-sdk"]
 openai = []
+ollama = []
 bedrock = ["dep:aws-config", "dep:aws-sdk-bedrock", "dep:aws-sdk-bedrockruntime", "dep:aws-smithy-types"]
 
 [lints]

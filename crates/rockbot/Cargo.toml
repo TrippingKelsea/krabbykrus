@@ -1,6 +1,6 @@
 [package]
 name = "rockbot"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Next-generation AI agent framework"
 license = "MIT"
@@ -16,8 +16,9 @@ default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "too
 # LLM providers
 anthropic = ["rockbot-cli/anthropic", "rockbot-core/anthropic", "rockbot-llm/anthropic"]
 openai = ["rockbot-cli/openai", "rockbot-core/openai", "rockbot-llm/openai"]
+ollama = ["rockbot-cli/ollama", "rockbot-core/ollama", "rockbot-llm/ollama"]
 bedrock = ["rockbot-cli/bedrock", "rockbot-core/bedrock", "rockbot-llm/bedrock"]
-all-providers = ["anthropic", "openai", "bedrock"]
+all-providers = ["anthropic", "openai", "ollama", "bedrock"]
 # Channel providers
 discord = ["rockbot-cli/discord", "rockbot-core/discord"]
 telegram = ["rockbot-cli/telegram", "rockbot-core/telegram"]
@@ -28,6 +29,8 @@ tools-credentials = ["rockbot-cli/tools-credentials", "rockbot-core/tools-creden
 tools-mcp = ["rockbot-cli/tools-mcp", "rockbot-core/tools-mcp"]
 tools-markdown = ["rockbot-cli/tools-markdown", "rockbot-core/tools-markdown"]
 all-tools = ["tools-credentials", "tools-mcp", "tools-markdown"]
+# Telemetry
+otel = ["rockbot-core/otel"]
 
 [lints]
 workspace = true

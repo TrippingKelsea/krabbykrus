@@ -26,6 +26,7 @@ pub use modals::{
     render_view_endpoint_modal, render_view_provider_modal,
     render_view_model_list_modal, render_edit_permission_modal,
     render_view_permission_modal,
+    render_view_context_files_modal, render_edit_context_file_modal,
 };
 
 use ratatui::{

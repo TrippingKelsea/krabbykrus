@@ -935,6 +935,7 @@ impl LlmProvider for BedrockProvider {
         })?;
 
         let mut content = String::new();
+        let mut reasoning_text = String::new();
         let mut tool_calls = Vec::new();
 
         if let Some(ConverseOutput::Message(msg)) = response.output() {
@@ -942,6 +943,11 @@ impl LlmProvider for BedrockProvider {
                 match block {
                     ContentBlock::Text(text) => {
                         content.push_str(text);
+                    }
+                    ContentBlock::ReasoningContent(reasoning) => {
+                        if let Ok(rt) = reasoning.as_reasoning_text() {
+                            reasoning_text.push_str(rt.text());
+                        }
                     }
                     ContentBlock::ToolUse(tool_use) => {
                         let args = Self::document_to_json_string(tool_use.input());
@@ -957,6 +963,13 @@ impl LlmProvider for BedrockProvider {
                     _ => {}
                 }
             }
+        }
+
+        // If the model produced no visible text but did produce reasoning content
+        // (common with reasoning models like Kimi K2.5), wrap the reasoning in
+        // <think> tags so downstream strip_think_blocks can handle it properly.
+        if content.trim().is_empty() && !reasoning_text.is_empty() {
+            content = format!("<think>{reasoning_text}</think>");
         }
 
         let usage = response.usage().map_or(Usage {
@@ -985,6 +998,7 @@ impl LlmProvider for BedrockProvider {
                 message: Message {
                     role: MessageRole::Assistant,
                     content,
+                    images: vec![],
                     tool_calls: if tool_calls.is_empty() {
                         None
                     } else {
@@ -1038,12 +1052,53 @@ impl LlmProvider for BedrockProvider {
         let mut receiver = output.stream;
 
         let stream = async_stream::stream! {
+            let mut has_text_content = false;
+            let mut reasoning_buffer = String::new();
+
             loop {
                 match receiver.recv().await {
                     Ok(Some(event)) => {
                         match event {
                             ConverseStreamOutput::ContentBlockDelta(delta_event) => {
-                                if let Some(ContentBlockDelta::Text(text)) = delta_event.delta() {
+                                match delta_event.delta() {
+                                    Some(ContentBlockDelta::Text(text)) => {
+                                        has_text_content = true;
+                                        #[allow(clippy::unwrap_used)]
+                                        let created_ts = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap()
+                                            .as_secs();
+                                        yield Ok(StreamingChunk {
+                                            id: format!("stream-{}", uuid::Uuid::new_v4()),
+                                            object: "chat.completion.chunk".to_string(),
+                                            created: created_ts,
+                                            model: model_clone.clone(),
+                                            choices: vec![StreamingChoice {
+                                                index: 0,
+                                                delta: StreamingDelta {
+                                                    role: None,
+                                                    content: Some(text.clone()),
+                                                    tool_calls: None,
+                                                },
+                                                finish_reason: None,
+                                            }],
+                                        });
+                                    }
+                                    Some(ContentBlockDelta::ReasoningContent(rc)) => {
+                                        // Buffer reasoning text; emit as fallback if no
+                                        // Text deltas arrive before the stream ends.
+                                        if let Ok(text) = rc.as_text() {
+                                            reasoning_buffer.push_str(text);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            ConverseStreamOutput::MessageStop(_) => {
+                                // If the model produced only reasoning content (no Text
+                                // deltas), emit the reasoning wrapped in <think> tags so
+                                // the agent's strip_think_blocks can surface it.
+                                if !has_text_content && !reasoning_buffer.is_empty() {
                                     #[allow(clippy::unwrap_used)]
                                     let created_ts = std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
@@ -1058,15 +1113,16 @@ impl LlmProvider for BedrockProvider {
                                             index: 0,
                                             delta: StreamingDelta {
                                                 role: None,
-                                                content: Some(text.clone()),
+                                                content: Some(format!(
+                                                    "<think>{}</think>", reasoning_buffer
+                                                )),
                                                 tool_calls: None,
                                             },
                                             finish_reason: None,
                                         }],
                                     });
                                 }
-                            }
-                            ConverseStreamOutput::MessageStop(_) => {
+
                                 #[allow(clippy::unwrap_used)]
                                 let created_ts = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)

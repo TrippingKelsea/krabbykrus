@@ -21,7 +21,7 @@ pub struct OpenAiProvider {
 #[derive(Debug, Serialize)]
 struct OpenAiRequest {
     model: String,
-    messages: Vec<OpenAiMessage>,
+    messages: Vec<OpenAiOutMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenAiTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,10 +42,44 @@ struct OpenAiResponseFormat {
     json_schema: Option<serde_json::Value>,
 }
 
+/// A single content part for multi-modal OpenAI messages.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OpenAiContentPart {
+    Text { text: String },
+    ImageUrl { image_url: OpenAiImageUrl },
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiImageUrl {
+    /// Data URI: `data:<media_type>;base64,<data>` or a plain URL.
+    url: String,
+}
+
+/// Content field for an outgoing OpenAI message – either plain text or a
+/// multi-part array (used when images are present).
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum OpenAiMessageContent {
+    Text(Option<String>),
+    Parts(Vec<OpenAiContentPart>),
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct OpenAiMessage {
     role: String,
     content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OpenAiToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+}
+
+/// Outgoing message with optional multi-part content.
+#[derive(Debug, Serialize)]
+struct OpenAiOutMessage {
+    role: String,
+    content: OpenAiMessageContent,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<OpenAiToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -172,9 +206,11 @@ impl OpenAiProvider {
             .to_string()
     }
 
-    /// Convert our message format to OpenAI format
+    /// Convert our message format to OpenAI wire format.
+    /// When the message carries images, the content is serialised as a
+    /// multi-part array; otherwise it is a plain string.
     #[allow(clippy::unused_self)]
-    fn convert_message(&self, msg: &Message) -> OpenAiMessage {
+    fn convert_message(&self, msg: &Message) -> OpenAiOutMessage {
         let role = match msg.role {
             MessageRole::User => "user",
             MessageRole::Assistant => "assistant",
@@ -196,11 +232,25 @@ impl OpenAiProvider {
                 .collect()
         });
 
-        OpenAiMessage {
+        let content = if msg.images.is_empty() {
+            OpenAiMessageContent::Text(Some(msg.content.clone()))
+        } else {
+            let mut parts = vec![OpenAiContentPart::Text { text: msg.content.clone() }];
+            for img in &msg.images {
+                parts.push(OpenAiContentPart::ImageUrl {
+                    image_url: OpenAiImageUrl {
+                        url: format!("data:{};base64,{}", img.media_type, img.data),
+                    },
+                });
+            }
+            OpenAiMessageContent::Parts(parts)
+        };
+
+        OpenAiOutMessage {
             role: role.to_string(),
-            content: Some(msg.content.clone()),
+            content,
             tool_calls,
-            tool_call_id: None, // Set for tool responses
+            tool_call_id: msg.tool_call_id.clone(),
         }
     }
 }
@@ -259,7 +309,7 @@ impl LlmProvider for OpenAiProvider {
     async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
         let model = self.normalize_model(&request.model);
 
-        let messages: Vec<OpenAiMessage> = request
+        let messages: Vec<OpenAiOutMessage> = request
             .messages
             .iter()
             .map(|m| self.convert_message(m))
@@ -365,6 +415,7 @@ impl LlmProvider for OpenAiProvider {
                 message: Message {
                     role: MessageRole::Assistant,
                     content: choice.message.content.unwrap_or_default(),
+                    images: vec![],
                     tool_calls,
                     tool_call_id: None,
                 },
@@ -381,7 +432,7 @@ impl LlmProvider for OpenAiProvider {
     async fn stream_completion(&self, request: ChatCompletionRequest) -> Result<CompletionStream> {
         let model = self.normalize_model(&request.model);
 
-        let messages: Vec<OpenAiMessage> = request
+        let messages: Vec<OpenAiOutMessage> = request
             .messages
             .iter()
             .map(|m| self.convert_message(m))
@@ -672,12 +723,44 @@ mod tests {
         let msg = Message {
             role: MessageRole::User,
             content: "Hello".to_string(),
+            images: vec![],
             tool_calls: None,
             tool_call_id: None,
         };
 
         let converted = provider.convert_message(&msg);
         assert_eq!(converted.role, "user");
-        assert_eq!(converted.content, Some("Hello".to_string()));
+        // text-only messages use plain string content
+        assert!(matches!(converted.content, OpenAiMessageContent::Text(Some(ref s)) if s == "Hello"));
+    }
+
+    #[test]
+    fn test_convert_message_with_image() {
+        use crate::ImageContent;
+        let provider = OpenAiProvider {
+            client: reqwest::Client::new(),
+            api_key: "test".to_string(),
+            base_url: "https://api.openai.com".to_string(),
+        };
+
+        let msg = Message {
+            role: MessageRole::User,
+            content: "Describe this image".to_string(),
+            images: vec![ImageContent {
+                data: "abc123".to_string(),
+                media_type: "image/png".to_string(),
+            }],
+            tool_calls: None,
+            tool_call_id: None,
+        };
+
+        let converted = provider.convert_message(&msg);
+        assert_eq!(converted.role, "user");
+        assert!(matches!(converted.content, OpenAiMessageContent::Parts(_)));
+        if let OpenAiMessageContent::Parts(parts) = &converted.content {
+            assert_eq!(parts.len(), 2);
+            assert!(matches!(parts[0], OpenAiContentPart::Text { .. }));
+            assert!(matches!(parts[1], OpenAiContentPart::ImageUrl { .. }));
+        }
     }
 }

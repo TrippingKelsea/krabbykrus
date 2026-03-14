@@ -13,6 +13,8 @@ use rockbot_tools::{ToolRegistry, ToolExecutionContext, ToolExecutionResult, Age
 use rockbot_tools::message::ToolResult;
 use rockbot_security::SecurityManager;
 use crate::hooks::{HookRegistry, HookEvent, HookResult};
+use crate::guardrails::{GuardrailPipeline, GuardrailResult, PiiGuardrail, PromptInjectionGuardrail};
+use crate::trajectory::{Trajectory, TrajectoryEvent, preview};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -20,7 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 // ---------------------------------------------------------------------------
 // Tool loop detection
@@ -233,6 +235,14 @@ pub struct Agent {
     hook_registry: Arc<HookRegistry>,
     /// Agent invoker for subagent delegation
     agent_invoker: Option<Arc<dyn AgentInvoker>>,
+    /// Guardrail pipeline for input/output safety checks
+    guardrail_pipeline: Arc<GuardrailPipeline>,
+    /// Episodic memory store for cross-session recall
+    episodic_store: Option<Arc<rockbot_memory::EpisodicStore>>,
+    /// Blackboard accessor for swarm coordination
+    blackboard: Option<Arc<dyn rockbot_tools::BlackboardAccessor>>,
+    /// Swarm ID (from config) for blackboard scoping
+    swarm_id: Option<String>,
     /// Agent state
     state: Arc<RwLock<AgentState>>,
 }
@@ -324,6 +334,17 @@ pub enum ErrorCategory {
     Network,
 }
 
+/// Signal that the current agent wants to transfer conversation control.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandoffSignal {
+    /// Target agent to hand off to
+    pub target_agent_id: String,
+    /// Context/instructions for the target agent
+    pub context: String,
+    /// Optional override for the user message sent to the target
+    pub message_override: Option<String>,
+}
+
 /// Agent response to a message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentResponse {
@@ -335,6 +356,11 @@ pub struct AgentResponse {
     pub tokens_used: TokenUsage,
     /// Processing time in milliseconds
     pub processing_time_ms: u64,
+    /// Execution trajectory (for debugging/replay)
+    pub trajectory: Option<Trajectory>,
+    /// Handoff signal — if set, the caller should route the conversation to the target agent
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<HandoffSignal>,
 }
 
 /// Token usage breakdown
@@ -344,6 +370,59 @@ pub struct TokenUsage {
     pub completion_tokens: u64,
     pub total_tokens: u64,
 }
+
+/// Progress events emitted during agent processing.
+/// Callers can provide an `mpsc::UnboundedSender<AgentProgressEvent>` to
+/// receive real-time updates while the agent loop is running.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "event")]
+pub enum AgentProgressEvent {
+    /// A tool is about to be executed
+    #[serde(rename = "tool_start")]
+    ToolStart { tool_name: String },
+    /// A tool finished executing
+    #[serde(rename = "tool_done")]
+    ToolDone {
+        tool_name: String,
+        success: bool,
+        duration_ms: u64,
+    },
+    /// An LLM call is starting (with context size info)
+    #[serde(rename = "llm_call")]
+    LlmCall {
+        iteration: usize,
+        message_count: usize,
+    },
+    /// Model produced text content (reasoning, analysis, etc.)
+    #[serde(rename = "text_delta")]
+    TextDelta { text: String },
+    /// A tool produced output (for showing in the chat stream)
+    #[serde(rename = "tool_output")]
+    ToolOutput {
+        tool_name: String,
+        output: String,
+        success: bool,
+        duration_ms: u64,
+    },
+    /// Token usage update after an LLM call
+    #[serde(rename = "token_usage")]
+    TokenUsage {
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        total_tokens: u64,
+        cumulative_total: u64,
+    },
+    /// Conversation control is being handed off to another agent
+    #[serde(rename = "handoff")]
+    Handoff {
+        from_agent: String,
+        to_agent: String,
+        context_preview: String,
+    },
+}
+
+/// Convenience type for a progress sender
+pub type ProgressSender = tokio::sync::mpsc::UnboundedSender<AgentProgressEvent>;
 
 impl Agent {
     /// Create a new agent with the given configuration
@@ -399,6 +478,34 @@ impl Agent {
             }
         }
 
+        // Build guardrail pipeline from config
+        let mut guardrail_pipeline = GuardrailPipeline::new();
+        for name in &config.guardrails {
+            match name.as_str() {
+                "pii" => guardrail_pipeline.add(Arc::new(PiiGuardrail::new())),
+                "prompt_injection" => guardrail_pipeline.add(Arc::new(PromptInjectionGuardrail::new())),
+                other => {
+                    warn!("Unknown guardrail '{}', skipping", other);
+                }
+            }
+        }
+        if !guardrail_pipeline.is_empty() {
+            info!("Agent '{}' has {} guardrail(s) enabled", config.id, guardrail_pipeline.len());
+        }
+
+        // Set up episodic memory store if enabled
+        let episodic_store = if config.episodic_memory {
+            let episodes_dir = workspace.join("episodes");
+            Some(Arc::new(rockbot_memory::EpisodicStore::new(episodes_dir)))
+        } else {
+            None
+        };
+
+        // Extract swarm_id from agent config map
+        let swarm_id = config.config.get("swarm_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         Ok(Self {
             config,
             llm_provider,
@@ -409,11 +516,20 @@ impl Agent {
             credential_accessor,
             hook_registry: hook_registry.unwrap_or_else(|| Arc::new(HookRegistry::new())),
             agent_invoker,
+            guardrail_pipeline: Arc::new(guardrail_pipeline),
+            episodic_store,
+            blackboard: None,
+            swarm_id,
             state: Arc::new(RwLock::new(AgentState {
                 active_contexts: HashMap::new(),
                 stats: AgentStats::default(),
             })),
         })
+    }
+
+    /// Get a reference to this agent's tool registry.
+    pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
+        &self.tool_registry
     }
 
     /// Set the agent invoker for subagent delegation.
@@ -426,6 +542,11 @@ impl Agent {
         self.hook_registry = registry;
     }
 
+    /// Set the blackboard accessor for swarm coordination.
+    pub fn set_blackboard(&mut self, blackboard: Arc<dyn rockbot_tools::BlackboardAccessor>) {
+        self.blackboard = Some(blackboard);
+    }
+
     /// Process an incoming message and generate a response
     ///
     /// `workspace_override` allows the caller to set the working directory for tool execution
@@ -436,9 +557,57 @@ impl Agent {
         message: Message,
         workspace_override: Option<std::path::PathBuf>,
     ) -> Result<AgentResponse> {
+        self.process_message_inner(session_id, message, workspace_override, None).await
+    }
+
+    /// Like `process_message`, but sends real-time progress events to the
+    /// provided channel as tool calls execute and LLM calls are made.
+    pub async fn process_message_with_progress(
+        &self,
+        session_id: String,
+        message: Message,
+        workspace_override: Option<std::path::PathBuf>,
+        progress_tx: ProgressSender,
+    ) -> Result<AgentResponse> {
+        self.process_message_inner(session_id, message, workspace_override, Some(progress_tx)).await
+    }
+
+    async fn process_message_inner(
+        &self,
+        session_id: String,
+        message: Message,
+        workspace_override: Option<std::path::PathBuf>,
+        progress_tx: Option<ProgressSender>,
+    ) -> Result<AgentResponse> {
         let start_time = std::time::Instant::now();
+        let mut trajectory = Trajectory::new(&session_id, &self.config.id);
 
         debug!("Processing message {} in session {}", message.id, session_id);
+
+        // Record user message in trajectory
+        trajectory.record(TrajectoryEvent::UserMessage {
+            content_preview: preview(&message.extract_text().unwrap_or_default(), 200),
+        }, 0, 0);
+
+        // --- Input guardrail check ---
+        if !self.guardrail_pipeline.is_empty() {
+            let guardrail_result = self.guardrail_pipeline.check_input(&message).await;
+            let result_label = match &guardrail_result {
+                GuardrailResult::Pass => "pass".to_string(),
+                GuardrailResult::Warn(msg) => format!("warn: {msg}"),
+                GuardrailResult::Block(msg) => format!("block: {msg}"),
+            };
+            trajectory.record(TrajectoryEvent::Guardrail {
+                name: "pipeline".to_string(),
+                direction: "input".to_string(),
+                result: result_label,
+            }, 0, 0);
+            if let GuardrailResult::Block(reason) = guardrail_result {
+                return Err(AgentError::ExecutionFailed {
+                    message: format!("Input blocked by guardrail: {reason}"),
+                }.into());
+            }
+        }
 
         // Fire PreMessage hook
         let pre_event = HookEvent::PreMessage {
@@ -453,8 +622,6 @@ impl Agent {
         }
 
         // Get or create session — use the session's actual DB ID for all operations
-        // (the passed-in session_id may be a compound key like "agent:session_key",
-        // but the DB session has its own UUID-based id)
         let session = self.get_or_create_session(&session_id, &message).await?;
         let db_session_id = session.id.clone();
 
@@ -465,6 +632,82 @@ impl Agent {
         let available_tools = self.get_available_tools(&session).await?;
         let mut context = self.update_processing_context(db_session_id.clone(), message, available_tools, workspace_override).await?;
 
+        // --- Planning phase ---
+        // If planning_mode is "always" or "auto", ask the model to produce a plan first.
+        // "approval_required" generates the plan but returns it to the user for approval
+        // instead of executing it immediately.
+        let planning_mode = self.config.planning_mode.as_str();
+        if planning_mode == "always" || planning_mode == "auto" || planning_mode == "approval_required" {
+            let plan_result = self.run_planning_phase(&db_session_id, &mut context, &trajectory).await;
+            match plan_result {
+                Ok(Some(plan_text)) => {
+                    trajectory.record(TrajectoryEvent::Reflection {
+                        action: format!("plan: {}", preview(&plan_text, 200)),
+                    }, 0, 0);
+
+                    if planning_mode == "approval_required" {
+                        // Return the plan to the user for approval instead of executing
+                        info!("Plan requires approval, returning plan to user");
+                        let plan_response = Message::text(format!(
+                            "I've created a plan for this task. Please review and approve it \
+                             by replying with \"approved\" or provide feedback:\n\n{plan_text}"
+                        ))
+                            .with_session_id(&db_session_id)
+                            .with_agent_id(&self.config.id)
+                            .with_role(MessageRole::Assistant);
+
+                        trajectory.record(TrajectoryEvent::Complete {
+                            total_iterations: 0,
+                            total_tool_calls: 0,
+                            final_tokens: TokenUsage::default(),
+                            duration_ms: start_time.elapsed().as_millis() as u64,
+                        }, 0, 0);
+
+                        return Ok(AgentResponse {
+                            message: plan_response,
+                            tool_results: vec![],
+                            tokens_used: TokenUsage::default(),
+                            processing_time_ms: start_time.elapsed().as_millis() as u64,
+                            trajectory: Some(trajectory),
+                            handoff: None,
+                        });
+                    }
+
+                    // Inject the plan into context so the model follows it
+                    let plan_msg = Message::text(format!(
+                        "Here is your plan. Follow it step by step:\n\n{plan_text}\n\n\
+                         Now execute the plan. Start with step 1."
+                    ))
+                        .with_session_id(&db_session_id)
+                        .with_agent_id(&self.config.id)
+                        .with_role(MessageRole::User);
+                    context.messages.push(plan_msg);
+                }
+                Ok(None) => {
+                    // Auto mode decided no plan was needed, or plan was empty
+                }
+                Err(e) => {
+                    warn!("Planning phase failed, proceeding without plan: {e}");
+                }
+            }
+        }
+
+        // --- Workflow dispatch ---
+        // If this agent has a workflow definition, execute the DAG instead of LLM.
+        if let Some(ref workflow) = self.config.workflow {
+            let user_msg = context.messages.last().cloned().unwrap_or_else(|| {
+                Message::text("").with_session_id(&db_session_id)
+            });
+            return self.execute_workflow(
+                &db_session_id,
+                &user_msg,
+                workflow,
+                &progress_tx,
+                start_time,
+                trajectory,
+            ).await;
+        }
+
         // Generate LLM request
         let llm_request = self.build_llm_request(&mut context).await?;
 
@@ -472,11 +715,76 @@ impl Agent {
         let llm_response = self.call_llm_with_retry(llm_request).await?;
 
         // Process LLM response and handle tool calls
-        let (response_message, tool_results, token_usage) = self.process_llm_response(
+        let (mut response_message, tool_results, mut token_usage) = self.process_llm_response(
             &db_session_id,
             &mut context,
             llm_response,
+            &progress_tx,
         ).await?;
+
+        // --- Output guardrail check ---
+        if !self.guardrail_pipeline.is_empty() {
+            let response_text = response_message.extract_text().unwrap_or_default();
+            let guardrail_result = self.guardrail_pipeline.check_output(&response_text).await;
+            let result_label = match &guardrail_result {
+                GuardrailResult::Pass => "pass".to_string(),
+                GuardrailResult::Warn(msg) => format!("warn: {msg}"),
+                GuardrailResult::Block(msg) => format!("block: {msg}"),
+            };
+            trajectory.record(TrajectoryEvent::Guardrail {
+                name: "pipeline".to_string(),
+                direction: "output".to_string(),
+                result: result_label,
+            }, 0, token_usage.total_tokens);
+            // For output, we warn but don't block — the response already exists
+        }
+
+        // --- Reflection pass ---
+        if self.config.reflection_enabled && !tool_results.is_empty() {
+            trajectory.record(TrajectoryEvent::Reflection {
+                action: "starting".to_string(),
+            }, 0, token_usage.total_tokens);
+
+            let reflection_result = self.run_reflection(
+                &db_session_id,
+                &mut context,
+                &response_message,
+                &progress_tx,
+            ).await;
+
+            match reflection_result {
+                Ok(Some((new_msg, extra_results, extra_tokens))) => {
+                    trajectory.record(TrajectoryEvent::Reflection {
+                        action: "corrected".to_string(),
+                    }, 0, token_usage.total_tokens + extra_tokens.total_tokens);
+                    response_message = new_msg;
+                    token_usage.prompt_tokens += extra_tokens.prompt_tokens;
+                    token_usage.completion_tokens += extra_tokens.completion_tokens;
+                    token_usage.total_tokens += extra_tokens.total_tokens;
+                    // Extend tool results if reflection made more calls
+                    let _ = extra_results; // tool_results already consumed upstream
+                }
+                Ok(None) => {
+                    trajectory.record(TrajectoryEvent::Reflection {
+                        action: "no_changes".to_string(),
+                    }, 0, token_usage.total_tokens);
+                }
+                Err(e) => {
+                    warn!("Reflection pass failed: {e}");
+                    trajectory.record(TrajectoryEvent::Reflection {
+                        action: format!("error: {e}"),
+                    }, 0, token_usage.total_tokens);
+                }
+            }
+        }
+
+        // Record completion in trajectory
+        trajectory.record(TrajectoryEvent::Complete {
+            total_iterations: tool_results.len(),
+            total_tool_calls: tool_results.len(),
+            final_tokens: token_usage.clone(),
+            duration_ms: start_time.elapsed().as_millis() as u64,
+        }, 0, token_usage.total_tokens);
 
         // Store response message
         self.session_manager.add_message(&db_session_id, response_message.clone()).await?;
@@ -504,6 +812,33 @@ impl Agent {
             token_usage.completion_tokens as u64,
         );
 
+        // Store episodic memory entry if enabled and tool work was done
+        if let Some(ref store) = self.episodic_store {
+            if !tool_results.is_empty() {
+                let response_text = response_message.extract_text().unwrap_or_default();
+                let summary = if response_text.len() > 200 {
+                    format!("{}...", &response_text[..200])
+                } else {
+                    response_text
+                };
+                let episode = rockbot_memory::Episode {
+                    session_id: db_session_id.clone(),
+                    timestamp: chrono::Utc::now(),
+                    summary,
+                    outcome: if tool_results.iter().all(|r| r.success) {
+                        "success".to_string()
+                    } else {
+                        "partial".to_string()
+                    },
+                    tools_used: tool_results.iter().map(|r| r.tool_name.clone()).collect(),
+                    tokens_used: token_usage.total_tokens,
+                };
+                if let Err(e) = store.store(&self.config.id, &episode).await {
+                    debug!("Failed to store episode: {e}");
+                }
+            }
+        }
+
         // Fire PostMessage hook
         let post_event = HookEvent::PostMessage {
             agent_id: self.config.id.clone(),
@@ -518,11 +853,26 @@ impl Agent {
             state.active_contexts.remove(&db_session_id);
         }
 
+        // Check if any tool result was a handoff signal
+        let handoff = tool_results.iter().find_map(|tr| {
+            if let ToolResult::Handoff { ref target_agent_id, ref context, ref message_override } = tr.result {
+                Some(HandoffSignal {
+                    target_agent_id: target_agent_id.clone(),
+                    context: context.clone(),
+                    message_override: message_override.clone(),
+                })
+            } else {
+                None
+            }
+        });
+
         Ok(AgentResponse {
             message: response_message,
             tool_results,
             tokens_used: token_usage,
             processing_time_ms,
+            trajectory: Some(trajectory),
+            handoff,
         })
     }
 
@@ -556,10 +906,15 @@ impl Agent {
             }.into());
         }
 
+        let mut trajectory = Trajectory::new(&session_id, &self.config.id);
         let session = self.get_or_create_session(&session_id, &message).await?;
         let db_session_id = session.id.clone();
 
         self.session_manager.add_message(&db_session_id, message.clone()).await?;
+
+        trajectory.record(TrajectoryEvent::UserMessage {
+            content_preview: preview(&message.extract_text().unwrap_or_default(), 200),
+        }, 0, 0);
 
         let available_tools = self.get_available_tools(&session).await?;
         let mut context = self.update_processing_context(
@@ -568,6 +923,12 @@ impl Agent {
 
         // Build initial streaming request
         let llm_request = self.build_llm_request_streaming(&mut context).await?;
+
+        trajectory.record(TrajectoryEvent::LlmRequest {
+            model: llm_request.model.clone(),
+            message_count: llm_request.messages.len(),
+            tools_available: llm_request.tools.as_ref().map_or(0, |t| t.len()),
+        }, 0, 0);
 
         // Use streaming for the initial LLM call
         let (initial_response, _streamed_text) = self.call_llm_streaming(
@@ -581,6 +942,12 @@ impl Agent {
             initial_response,
             &stream_tx,
         ).await?;
+
+        trajectory.record(TrajectoryEvent::LlmResponse {
+            content_preview: preview(&response_message.extract_text().unwrap_or_default(), 200),
+            tool_call_names: tool_results.iter().map(|r| r.tool_name.clone()).collect(),
+            tokens: token_usage.clone(),
+        }, 1, token_usage.total_tokens as u64);
 
         self.session_manager.add_message(&db_session_id, response_message.clone()).await?;
 
@@ -613,6 +980,13 @@ impl Agent {
         };
         self.hook_registry.fire(&post_event).await;
 
+        trajectory.record(TrajectoryEvent::Complete {
+            total_iterations: 1,
+            total_tool_calls: tool_results.len(),
+            final_tokens: token_usage.clone(),
+            duration_ms: processing_time_ms,
+        }, 1, token_usage.total_tokens as u64);
+
         {
             let mut state = self.state.write().await;
             state.active_contexts.remove(&db_session_id);
@@ -623,6 +997,8 @@ impl Agent {
             tool_results,
             tokens_used: token_usage,
             processing_time_ms,
+            trajectory: Some(trajectory),
+            handoff: None,
         })
     }
 
@@ -699,6 +1075,7 @@ impl Agent {
                 message: rockbot_llm::Message {
                     role: rockbot_llm::MessageRole::Assistant,
                     content: accumulated_text.clone(),
+                    images: vec![],
                     tool_calls: tool_calls_option,
                     tool_call_id: None,
                 },
@@ -805,9 +1182,20 @@ impl Agent {
             }
 
             let effective_workspace = self.resolve_workspace(context);
-            let (tool_results, tool_messages) = self.execute_tool_calls(
+            let (tool_results, tool_messages, handoff_signal) = self.execute_tool_calls(
                 session_id, &current_response, &effective_workspace,
             ).await?;
+
+            // If handoff detected in streaming path, break immediately
+            if handoff_signal.is_some() {
+                all_tool_results.extend(tool_results);
+                for tool_message in tool_messages {
+                    self.session_manager.add_message(session_id, tool_message.clone()).await?;
+                    context.messages.push(tool_message);
+                }
+                final_response_content = "[Handoff signalled]".to_string();
+                break;
+            }
 
             for (tr, tm) in tool_results.iter().zip(tool_messages.iter()) {
                 let result_text = tm.extract_text().unwrap_or_default();
@@ -835,6 +1223,7 @@ impl Agent {
                 let assistant_message = rockbot_llm::Message {
                     role: rockbot_llm::MessageRole::Assistant,
                     content: choice.message.content.clone(),
+                    images: vec![],
                     tool_calls: choice.message.tool_calls.clone(),
                     tool_call_id: None,
                 };
@@ -972,13 +1361,14 @@ impl Agent {
         context.messages.push(message);
         context.available_tools = available_tools;
 
-        // Estimate token count (rough approximation)
+        // Count tokens using BPE tokenizer
         context.token_count = context.messages.iter()
-            .map(|m| m.extract_text().unwrap_or_default().len() / 4) // ~4 chars per token
+            .map(|m| crate::tokenizer::count_tokens(&m.extract_text().unwrap_or_default()))
             .sum();
-        
+
         // If context is too large, perform compaction
-        if context.token_count > 80_000 { // Trigger compaction before context overflow
+        let compaction_threshold = self.config.max_context_tokens * 80 / 100;
+        if context.token_count > compaction_threshold {
             self.compact_context(context).await?;
         }
         
@@ -996,7 +1386,14 @@ impl Agent {
 
         // Keep the last N messages untouched so the model retains recent state.
         // We preserve tool-use/result pairs by keeping a generous tail.
-        let keep_recent = 20usize;
+        // Scale keep_recent with context budget — smaller budgets keep fewer recent messages.
+        let keep_recent = if self.config.max_context_tokens <= 16_000 {
+            8usize
+        } else if self.config.max_context_tokens <= 32_000 {
+            12usize
+        } else {
+            20usize
+        };
         if context.messages.len() <= keep_recent + 2 {
             // Not enough messages to compact
             return Ok(());
@@ -1035,12 +1432,14 @@ impl Agent {
                               made, files or resources accessed, tool results and their outcomes, \
                               errors encountered, and any commitments or plans. Be factual and brief."
                         .to_string(),
+                    images: vec![],
                     tool_calls: None,
                     tool_call_id: None,
                 },
                 rockbot_llm::Message {
                     role: rockbot_llm::MessageRole::User,
                     content: summary_input.clone(),
+                    images: vec![],
                     tool_calls: None,
                     tool_call_id: None,
                 },
@@ -1087,9 +1486,9 @@ impl Agent {
 
         context.messages.insert(0, summary_message);
 
-        // Recalculate token count
+        // Recalculate token count using BPE tokenizer
         context.token_count = context.messages.iter()
-            .map(|m| m.extract_text().unwrap_or_default().len() / 4)
+            .map(|m| crate::tokenizer::count_tokens(&m.extract_text().unwrap_or_default()))
             .sum();
 
         info!("Compacted context for session {}: {} messages removed, {} remaining ({} est. tokens)",
@@ -1121,18 +1520,19 @@ impl Agent {
             messages.push(rockbot_llm::Message {
                 role: rockbot_llm::MessageRole::System,
                 content: system_prompt,
+                images: vec![],
                 tool_calls: None,
                 tool_call_id: None,
             });
         }
-        
+
         // Add conversation messages
         for message in &context.messages {
             // Skip system messages from conversation (they're handled above)
             if matches!(message.metadata.role, MessageRole::System) {
                 continue;
             }
-            
+
             // Reconstruct structured tool data from metadata
             let tool_calls = message.metadata.extra.get("tool_calls")
                 .and_then(|v| serde_json::from_value::<Vec<rockbot_llm::ToolCall>>(v.clone()).ok());
@@ -1148,6 +1548,7 @@ impl Agent {
                     MessageRole::Tool => rockbot_llm::MessageRole::Tool,
                 },
                 content: message.extract_text().unwrap_or_default(),
+                images: vec![],
                 tool_calls,
                 tool_call_id,
             });
@@ -1209,7 +1610,12 @@ impl Agent {
         if let Ok(agents_content) = self.load_context_file("AGENTS.md").await {
             prompt_parts.push(format!("# Operational Guidelines\n\n{agents_content}"));
         }
-        
+
+        // Load and inject memory guidelines (MEMORY.md)
+        if let Ok(memory_content) = self.load_context_file("MEMORY.md").await {
+            prompt_parts.push(format!("# Memory Guidelines\n\n{memory_content}"));
+        }
+
         // Inject skills/tools information
         if !context.available_tools.is_empty() {
             let skills_section = self.build_skills_section(&context.available_tools).await?;
@@ -1227,6 +1633,35 @@ impl Agent {
         );
         prompt_parts.push(context_section);
         
+        // Inject relevant past episodes from episodic memory
+        if let Some(ref store) = self.episodic_store {
+            let user_msg = context.messages.last()
+                .map(|m| m.extract_text().unwrap_or_default())
+                .unwrap_or_default();
+            if !user_msg.is_empty() {
+                match store.recall(&self.config.id, &user_msg, 3).await {
+                    Ok(episodes) if !episodes.is_empty() => {
+                        let mut section = String::from("# Relevant Past Interactions\n\n");
+                        for (i, ep) in episodes.iter().enumerate() {
+                            section.push_str(&format!(
+                                "{}. [{}] {}\n   Tools: {}, Outcome: {}\n",
+                                i + 1,
+                                ep.timestamp.format("%Y-%m-%d"),
+                                ep.summary,
+                                ep.tools_used.join(", "),
+                                ep.outcome,
+                            ));
+                        }
+                        prompt_parts.push(section);
+                    }
+                    Ok(_) => {} // No relevant episodes
+                    Err(e) => {
+                        debug!("Episodic recall failed: {e}");
+                    }
+                }
+            }
+        }
+
         // Add agentic behavior directives
         prompt_parts.push(Self::agentic_behavior_prompt().to_string());
 
@@ -1237,44 +1672,43 @@ impl Agent {
         Ok(prompt_parts.join("\n\n---\n\n"))
     }
     
-    /// Load a context file from the agent's config directory
+    /// Load a context file from the agent's config directory.
+    ///
+    /// Tries the agent directory first, then fallback locations.
+    /// Returns `Err` if the file is not found anywhere — callers use
+    /// `if let Ok(...)` to treat missing files as optional.
     async fn load_context_file(&self, filename: &str) -> Result<String> {
         let agent_dir = self.get_agent_directory();
         let file_path = agent_dir.join(filename);
-        
+
         match tokio::fs::read_to_string(&file_path).await {
-            Ok(content) => Ok(content),
+            Ok(content) => return Ok(content),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                trace!("Context file {} not found in agent dir, checking fallbacks", filename);
+            }
             Err(e) => {
                 debug!("Could not load context file {}: {}", filename, e);
-                // Try loading from default locations
-                self.load_context_file_fallback(filename).await
             }
         }
-    }
-    
-    /// Try loading context files from fallback locations
-    async fn load_context_file_fallback(&self, filename: &str) -> Result<String> {
-        // Try standard locations for agent context files
+
+        // Try standard fallback locations
         let fallback_paths = [
-            // Check if it exists in the global workspace
             dirs::config_dir()
                 .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
                 .join("rockbot")
                 .join(filename),
-            // Check current directory (for development/testing)
             std::env::current_dir().unwrap_or_default().join(filename),
-            // Check home directory
             dirs::home_dir().unwrap_or_default().join(".openclaw").join(filename),
         ];
-        
+
         for path in fallback_paths {
             if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                debug!("Loaded context file {} from fallback location: {}", filename, path.display());
+                debug!("Loaded context file {} from fallback: {}", filename, path.display());
                 return Ok(content);
             }
         }
-        
-        debug!("No fallback location found for context file: {}", filename);
+
+        trace!("Optional context file {} not found in any location", filename);
         Err(crate::error::RockBotError::Agent(AgentError::ExecutionFailed {
             message: format!("Context file {filename} not found"),
         }))
@@ -1510,6 +1944,7 @@ The user wants me to explore the codebase. I should start by listing the directo
         session_id: &str,
         context: &mut ProcessingContext,
         initial_llm_response: ChatCompletionResponse,
+        progress_tx: &Option<ProgressSender>,
     ) -> Result<(Message, Vec<ToolExecutionResult>, TokenUsage)> {
         let mut all_tool_results = Vec::new();
         let mut cumulative_token_usage = TokenUsage {
@@ -1533,9 +1968,12 @@ The user wants me to explore the codebase. I should start by listing the directo
             scaled_max.clamp(32, 160)
         };
 
-        // Continuation nudge budget (re-prompts when model produces text without tools)
-        let max_continuation_nudges = 3u32;
-        let mut continuation_nudge_count = 0u32;
+        // Continuation nudge budget (re-prompts when model produces text without tools).
+        // Budget resets after each successful tool-call iteration — a nudge that causes
+        // the model to use tools is a success, not a permanent deduction.
+        // "Consecutive" tracks nudges since the last tool-call iteration.
+        let max_consecutive_nudges = 3u32;
+        let mut consecutive_nudge_count = 0u32;
 
         // Tool loop detector
         let mut loop_detector = ToolLoopDetector::new();
@@ -1561,6 +1999,36 @@ The user wants me to explore the codebase. I should start by listing the directo
                 .and_then(|c| c.message.tool_calls.as_ref())
                 .is_some_and(|tc| !tc.is_empty());
 
+            // Stream the model's text content to the client in real time.
+            // This shows reasoning, analysis, and chain-of-thought as the model works.
+            if let Some(ref tx) = progress_tx {
+                let response_text = current_response.choices
+                    .first()
+                    .map(|c| c.message.content.as_str())
+                    .unwrap_or("");
+                if !response_text.trim().is_empty() {
+                    let display_text = Self::strip_think_blocks(response_text);
+                    if !display_text.is_empty() {
+                        let _ = tx.send(AgentProgressEvent::TextDelta {
+                            text: display_text,
+                        });
+                    }
+                }
+                // Send token usage after each LLM call
+                let _ = tx.send(AgentProgressEvent::TokenUsage {
+                    prompt_tokens: current_response.usage.prompt_tokens,
+                    completion_tokens: current_response.usage.completion_tokens,
+                    total_tokens: current_response.usage.total_tokens,
+                    cumulative_total: cumulative_token_usage.total_tokens,
+                });
+            }
+
+            if has_tool_calls {
+                // Model is making tool calls — reset the consecutive nudge counter
+                // because any prior nudges succeeded in getting the model to act.
+                consecutive_nudge_count = 0;
+            }
+
             if !has_tool_calls {
                 let response_text = current_response.choices
                     .first()
@@ -1571,46 +2039,85 @@ The user wants me to explore the codebase. I should start by listing the directo
                 let clean_text = Self::strip_think_blocks(response_text);
 
                 // --- Continuation nudge ---
-                // If the model hasn't used any tools yet and its response looks
-                // like an acknowledgment / plan, nudge it to take action.
+                // If the model's response looks like an acknowledgment / plan
+                // rather than a final answer, nudge it to take action.
+                // Also nudge when the model produced empty visible output after
+                // doing work (common with models that use <think> blocks).
                 // Skip nudging for conversational questions — the model's text
                 // response IS the correct answer.
                 let user_is_asking_question = Self::is_conversational_question(context);
-                if all_tool_results.is_empty()
-                    && continuation_nudge_count < max_continuation_nudges
+                let is_mid_task_pause = !all_tool_results.is_empty()
                     && !clean_text.is_empty()
+                    && Self::looks_like_continuation_intent(&clean_text);
+                let is_initial_ack = all_tool_results.is_empty()
+                    && !clean_text.is_empty()
+                    && Self::looks_like_acknowledgment(&clean_text);
+                // Model did work (tools were called) but produced no visible output —
+                // only <think> blocks or truly empty response. Nudge it to answer.
+                // Limit empty_after_work nudges to 1 since models that structurally
+                // separate reasoning from text rarely recover with repeated nudges.
+                let is_empty_after_work = !all_tool_results.is_empty()
+                    && clean_text.is_empty();
+                let nudge_limit = if is_empty_after_work { 1 } else { max_consecutive_nudges };
+                if (is_initial_ack || is_mid_task_pause || is_empty_after_work)
+                    && consecutive_nudge_count < nudge_limit
                     && !user_is_asking_question
-                    && Self::looks_like_acknowledgment(&clean_text)
                 {
-                    continuation_nudge_count += 1;
+                    consecutive_nudge_count += 1;
                     info!(
-                        "Continuation nudge {}/{} for session {} — model responded without tool use",
-                        continuation_nudge_count, max_continuation_nudges, session_id
+                        "Continuation nudge {}/{} for session {} — model responded without tool use \
+                         (mid_task={}, empty_after_work={})",
+                        consecutive_nudge_count, max_consecutive_nudges, session_id,
+                        is_mid_task_pause, is_empty_after_work
                     );
 
-                    // Add the assistant's text to context
-                    let assistant_message = rockbot_llm::Message {
-                        role: rockbot_llm::MessageRole::Assistant,
-                        content: response_text.to_string(),
-                        tool_calls: None,
-                        tool_call_id: None,
-                    };
-                    let assistant_msg = Message::from_llm_message(
-                        assistant_message, session_id, &self.config.id
-                    )?;
-                    context.messages.push(assistant_msg);
+                    // Add the assistant's text to context (may include <think> blocks)
+                    if !response_text.is_empty() {
+                        let assistant_message = rockbot_llm::Message {
+                            role: rockbot_llm::MessageRole::Assistant,
+                            content: response_text.to_string(),
+                            images: vec![],
+                            tool_calls: None,
+                            tool_call_id: None,
+                        };
+                        let assistant_msg = Message::from_llm_message(
+                            assistant_message, session_id, &self.config.id
+                        )?;
+                        context.messages.push(assistant_msg);
+                    }
 
-                    // Escalating nudge messages
-                    let nudge_text = match continuation_nudge_count {
-                        1 => "You described what you would do but did not take action. \
-                              Use your tools now to accomplish the task. \
-                              Do not describe steps — execute them.",
-                        2 => "You are still not using tools. You MUST call a tool right now. \
-                              Start with the first concrete action needed. \
-                              Do not output any text — only tool calls.",
-                        _ => "FINAL WARNING: Call a tool immediately or this task will be \
-                              considered failed. Pick the single most important action \
-                              and execute it now.",
+                    // Escalating nudge messages — tone differs by situation
+                    let nudge_text = if is_empty_after_work {
+                        match consecutive_nudge_count {
+                            1 => "You executed tools but did not provide a visible response. \
+                                  You MUST respond with your findings, analysis, or next actions. \
+                                  Do not only think internally — produce visible output for the user.",
+                            2 => "You MUST provide a response NOW. Summarize what you found from \
+                                  the tool calls you made. The user cannot see your internal reasoning.",
+                            _ => "FINAL WARNING: Produce a visible response immediately. \
+                                  Summarize your findings or continue working with tool calls.",
+                        }
+                    } else if is_mid_task_pause {
+                        match consecutive_nudge_count {
+                            1 => "You indicated you want to continue but stopped calling tools. \
+                                  Continue working — use your tools now to take the next step.",
+                            2 => "You MUST continue executing. Call a tool right now to make progress. \
+                                  Do not describe what you plan to do — just do it.",
+                            _ => "FINAL WARNING: You have tools available and work remaining. \
+                                  Call a tool immediately or this task will be considered complete.",
+                        }
+                    } else {
+                        match consecutive_nudge_count {
+                            1 => "You described what you would do but did not take action. \
+                                  Use your tools now to accomplish the task. \
+                                  Do not describe steps — execute them.",
+                            2 => "You are still not using tools. You MUST call a tool right now. \
+                                  Start with the first concrete action needed. \
+                                  Do not output any text — only tool calls.",
+                            _ => "FINAL WARNING: Call a tool immediately or this task will be \
+                                  considered failed. Pick the single most important action \
+                                  and execute it now.",
+                        }
                     };
 
                     let nudge = Message::text(nudge_text)
@@ -1631,15 +2138,48 @@ The user wants me to explore the codebase. I should start by listing the directo
                         }
                         Err(e) => {
                             error!("LLM error during continuation nudge: {}", e);
-                            final_response_content = clean_text;
+                            if !clean_text.is_empty() {
+                                final_response_content = clean_text;
+                            }
+                            // If clean_text is empty, fall through to post-loop fallback
                             break;
                         }
                     }
                 }
 
-                // Genuine completion — no tool calls and not an acknowledgment
+                // Nudge budget exhausted or no nudge condition matched.
+                // If we have visible text, use it as the final response.
                 if !clean_text.is_empty() {
                     final_response_content = clean_text;
+                } else if !all_tool_results.is_empty() {
+                    // Model never produced visible output despite nudges.
+                    // Synthesize a summary from tool results including output previews.
+                    let tool_summary: Vec<String> = all_tool_results.iter().map(|tr: &ToolExecutionResult| {
+                        let status = if tr.success { "✓" } else { "✗" };
+                        let preview = match &tr.result {
+                            rockbot_tools::message::ToolResult::Text { content } => {
+                                let trimmed = content.trim();
+                                if trimmed.len() > 200 {
+                                    format!(": {}…", &trimmed[..200])
+                                } else if !trimmed.is_empty() {
+                                    format!(": {trimmed}")
+                                } else {
+                                    String::new()
+                                }
+                            }
+                            rockbot_tools::message::ToolResult::Error { message, .. } => {
+                                format!(": {message}")
+                            }
+                            _ => String::new(),
+                        };
+                        format!("  {status} {}{preview}", tr.tool_name)
+                    }).collect();
+                    final_response_content = format!(
+                        "Completed {} tool call(s). The model did not produce a visible summary.\n\
+                         Tools executed:\n{}",
+                        all_tool_results.len(),
+                        tool_summary.join("\n")
+                    );
                 }
                 break;
             }
@@ -1653,16 +2193,84 @@ The user wants me to explore the codebase. I should start by listing the directo
                 if let Some(ref tool_calls) = choice.message.tool_calls {
                     for tc in tool_calls {
                         loop_detector.record_call(&tc.function.name, &tc.function.arguments);
+                        // Notify progress listener of each tool about to run
+                        if let Some(ref tx) = progress_tx {
+                            let _ = tx.send(AgentProgressEvent::ToolStart {
+                                tool_name: tc.function.name.clone(),
+                            });
+                        }
                     }
                 }
             }
 
             let effective_workspace = self.resolve_workspace(context);
-            let (tool_results, tool_messages) = self.execute_tool_calls(
+            let (tool_results, tool_messages, handoff_signal) = self.execute_tool_calls(
                 session_id,
                 &current_response,
                 &effective_workspace,
             ).await?;
+
+            // Notify progress listener of completed tool calls with output
+            if let Some(ref tx) = progress_tx {
+                for (tr, tm) in tool_results.iter().zip(tool_messages.iter()) {
+                    let output = tm.extract_text().unwrap_or_default();
+                    let _ = tx.send(AgentProgressEvent::ToolOutput {
+                        tool_name: tr.tool_name.clone(),
+                        output,
+                        success: tr.success,
+                        duration_ms: tr.execution_time_ms,
+                    });
+                }
+            }
+
+            // If a handoff was signalled, break the loop immediately
+            if let Some(ref signal) = handoff_signal {
+                if let Some(ref tx) = progress_tx {
+                    let preview = if signal.context.len() > 100 {
+                        format!("{}...", &signal.context[..100])
+                    } else {
+                        signal.context.clone()
+                    };
+                    let _ = tx.send(AgentProgressEvent::Handoff {
+                        from_agent: self.config.id.clone(),
+                        to_agent: signal.target_agent_id.clone(),
+                        context_preview: preview,
+                    });
+                }
+
+                // Persist assistant message + tool messages before breaking
+                if let Some(choice) = current_response.choices.first() {
+                    let assistant_message = rockbot_llm::Message {
+                        role: rockbot_llm::MessageRole::Assistant,
+                        content: choice.message.content.clone(),
+                        images: vec![],
+                        tool_calls: choice.message.tool_calls.clone(),
+                        tool_call_id: None,
+                    };
+                    let assistant_msg = Message::from_llm_message(
+                        assistant_message, session_id, &self.config.id
+                    )?;
+                    self.session_manager.add_message(session_id, assistant_msg.clone()).await?;
+                    context.messages.push(assistant_msg);
+                }
+                for tool_message in tool_messages {
+                    self.session_manager.add_message(session_id, tool_message.clone()).await?;
+                    context.messages.push(tool_message);
+                }
+                all_tool_results.extend(tool_results);
+
+                // Return with handoff info embedded in the response
+                let handoff_msg = format!(
+                    "[Handing off to agent '{}']",
+                    signal.target_agent_id,
+                );
+                let response_message = Message::text(&handoff_msg)
+                    .with_session_id(session_id)
+                    .with_agent_id(&self.config.id)
+                    .with_role(MessageRole::Assistant);
+
+                return Ok((response_message, all_tool_results, cumulative_token_usage));
+            }
 
             // Record results in loop detector
             for (tr, tm) in tool_results.iter().zip(tool_messages.iter()) {
@@ -1687,6 +2295,7 @@ The user wants me to explore the codebase. I should start by listing the directo
                         let assistant_message = rockbot_llm::Message {
                             role: rockbot_llm::MessageRole::Assistant,
                             content: choice.message.content.clone(),
+                            images: vec![],
                             tool_calls: choice.message.tool_calls.clone(),
                             tool_call_id: None,
                         };
@@ -1707,6 +2316,7 @@ The user wants me to explore the codebase. I should start by listing the directo
                         let assistant_message = rockbot_llm::Message {
                             role: rockbot_llm::MessageRole::Assistant,
                             content: choice.message.content.clone(),
+                            images: vec![],
                             tool_calls: choice.message.tool_calls.clone(),
                             tool_call_id: None,
                         };
@@ -1754,6 +2364,7 @@ The user wants me to explore the codebase. I should start by listing the directo
                 let assistant_message = rockbot_llm::Message {
                     role: rockbot_llm::MessageRole::Assistant,
                     content: choice.message.content.clone(),
+                    images: vec![],
                     tool_calls: choice.message.tool_calls.clone(),
                     tool_call_id: None,
                 };
@@ -1769,9 +2380,10 @@ The user wants me to explore the codebase. I should start by listing the directo
 
             // --- Check if context needs compaction before next LLM call ---
             let estimated_tokens: usize = context.messages.iter()
-                .map(|m| m.extract_text().unwrap_or_default().len() / 4)
+                .map(|m| crate::tokenizer::count_tokens(&m.extract_text().unwrap_or_default()))
                 .sum();
-            if estimated_tokens > 80_000 {
+            let compaction_threshold = self.config.max_context_tokens * 80 / 100;
+            if estimated_tokens > compaction_threshold {
                 info!("Context approaching limit ({} est. tokens), compacting for session {}",
                       estimated_tokens, session_id);
                 self.compact_context(context).await?;
@@ -1794,11 +2406,6 @@ The user wants me to explore the codebase. I should start by listing the directo
             }
         }
 
-        // If we didn't get a final response, use the last assistant content
-        if final_response_content.is_empty() && !all_tool_results.is_empty() {
-            final_response_content = format!("Executed {} tool(s) successfully.", all_tool_results.len());
-        }
-
         // Strip any remaining <think> blocks from the final output
         final_response_content = Self::strip_think_blocks(&final_response_content);
 
@@ -1808,19 +2415,343 @@ The user wants me to explore the codebase. I should start by listing the directo
             .with_agent_id(&self.config.id)
             .with_role(MessageRole::Assistant);
 
-        info!("Completed tool execution loop: {} iterations, {} tool calls, max was {}",
-              iteration_count, all_tool_results.len(), max_tool_iterations);
+        info!(
+            "Completed tool execution loop: {} iterations, {} tool calls, {} prompt + {} completion = {} total tokens",
+            iteration_count, all_tool_results.len(),
+            cumulative_token_usage.prompt_tokens,
+            cumulative_token_usage.completion_tokens,
+            cumulative_token_usage.total_tokens,
+        );
 
         Ok((response_message, all_tool_results, cumulative_token_usage))
     }
     
-    /// Execute tool calls from an LLM response
+    /// Run the planning phase: ask the model to produce a step-by-step plan
+    /// before executing. Returns the plan text if one was produced.
+    async fn run_planning_phase(
+        &self,
+        session_id: &str,
+        context: &mut ProcessingContext,
+        _trajectory: &Trajectory,
+    ) -> Result<Option<String>> {
+        let planning_mode = self.config.planning_mode.as_str();
+
+        // In "auto" mode, check if the message is complex enough to warrant planning
+        if planning_mode == "auto" {
+            let user_msg = context.messages.last()
+                .map(|m| m.extract_text().unwrap_or_default())
+                .unwrap_or_default();
+            // Simple heuristic: only plan for messages > 100 chars or containing
+            // task-like keywords
+            let needs_plan = user_msg.len() > 100
+                || user_msg.contains("implement")
+                || user_msg.contains("create")
+                || user_msg.contains("refactor")
+                || user_msg.contains("fix")
+                || user_msg.contains("build");
+            if !needs_plan {
+                return Ok(None);
+            }
+        }
+
+        info!("Running planning phase for session {}", session_id);
+
+        // Ask the model to produce a plan (without tools — pure text response)
+        let plan_prompt = Message::text(
+            "Before executing, produce a concise numbered plan (3-8 steps) for this task. \
+             Each step should describe one concrete action. Do not execute anything yet — \
+             only output the plan. Format:\n\
+             1. [action]\n\
+             2. [action]\n\
+             ..."
+        )
+            .with_session_id(session_id)
+            .with_agent_id(&self.config.id)
+            .with_role(MessageRole::User);
+        context.messages.push(plan_prompt);
+
+        // Build request WITHOUT tools so the model produces only text
+        let system_prompt = self.assemble_system_prompt(context).await?;
+        let mut messages = Vec::new();
+        if !system_prompt.is_empty() {
+            messages.push(rockbot_llm::Message {
+                role: rockbot_llm::MessageRole::System,
+                content: system_prompt,
+                images: vec![],
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+        for msg in &context.messages {
+            if matches!(msg.metadata.role, MessageRole::System) { continue; }
+            let tool_calls = msg.metadata.extra.get("tool_calls")
+                .and_then(|v| serde_json::from_value::<Vec<rockbot_llm::ToolCall>>(v.clone()).ok());
+            let tool_call_id = msg.metadata.extra.get("tool_call_id")
+                .and_then(|v| v.as_str()).map(|s| s.to_string());
+            messages.push(rockbot_llm::Message {
+                role: match msg.metadata.role {
+                    MessageRole::User => rockbot_llm::MessageRole::User,
+                    MessageRole::Assistant => rockbot_llm::MessageRole::Assistant,
+                    MessageRole::System => rockbot_llm::MessageRole::System,
+                    MessageRole::Tool => rockbot_llm::MessageRole::Tool,
+                },
+                content: msg.extract_text().unwrap_or_default(),
+                images: vec![],
+                tool_calls,
+                tool_call_id,
+            });
+        }
+
+        let model = self.config.model.as_ref()
+            .unwrap_or(&"anthropic/claude-sonnet-4-20250514".to_string())
+            .clone();
+
+        let plan_request = ChatCompletionRequest {
+            model,
+            messages,
+            tools: None, // No tools for planning
+            temperature: Some(0.3),
+            max_tokens: Some(2000), // Plans should be concise
+            stream: false,
+            response_format: None,
+        };
+
+        let plan_response = self.call_llm_with_retry(plan_request).await?;
+        let plan_text = plan_response.choices.first()
+            .map(|c| c.message.content.clone())
+            .unwrap_or_default();
+
+        let clean_plan = Self::strip_think_blocks(&plan_text);
+        if clean_plan.is_empty() {
+            return Ok(None);
+        }
+
+        // Add the plan as assistant message in context
+        let plan_assistant = rockbot_llm::Message {
+            role: rockbot_llm::MessageRole::Assistant,
+            content: clean_plan.clone(),
+            images: vec![],
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let plan_msg = Message::from_llm_message(plan_assistant, session_id, &self.config.id)?;
+        context.messages.push(plan_msg);
+
+        info!("Planning phase produced {} char plan for session {}", clean_plan.len(), session_id);
+        Ok(Some(clean_plan))
+    }
+
+    /// Run a reflection/self-critique pass after the tool loop completes.
+    ///
+    /// Asks the model to review its own response for errors or omissions.
+    /// If the model identifies corrections, it gets one more tool-loop pass.
+    /// Returns `Ok(Some(...))` with the corrected response, or `Ok(None)` if
+    /// the model is satisfied with its original answer.
+    async fn run_reflection(
+        &self,
+        session_id: &str,
+        context: &mut ProcessingContext,
+        response: &Message,
+        progress_tx: &Option<ProgressSender>,
+    ) -> Result<Option<(Message, Vec<ToolExecutionResult>, TokenUsage)>> {
+        let response_text = response.extract_text().unwrap_or_default();
+        if response_text.is_empty() {
+            return Ok(None);
+        }
+
+        debug!("Running reflection pass for session {}", session_id);
+
+        // Add the response to context, then ask for reflection
+        let assistant_msg = rockbot_llm::Message {
+            role: rockbot_llm::MessageRole::Assistant,
+            content: response_text.clone(),
+            images: vec![],
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let assistant = Message::from_llm_message(assistant_msg, session_id, &self.config.id)?;
+        context.messages.push(assistant);
+
+        let reflection_prompt = Message::text(
+            "Review your response above. Did you fully address the request? \
+             Are there errors, omissions, or improvements needed? \
+             If corrections are needed, make them now using your tools. \
+             If your response is complete and correct, say LGTM."
+        )
+            .with_session_id(session_id)
+            .with_agent_id(&self.config.id)
+            .with_role(MessageRole::User);
+        context.messages.push(reflection_prompt);
+
+        let llm_request = self.build_llm_request(context).await?;
+        let llm_response = self.call_llm_with_retry(llm_request).await?;
+
+        let has_tool_calls = llm_response.choices
+            .first()
+            .and_then(|c| c.message.tool_calls.as_ref())
+            .is_some_and(|tc| !tc.is_empty());
+
+        let reflection_text = llm_response.choices
+            .first()
+            .map(|c| c.message.content.as_str())
+            .unwrap_or("");
+
+        // If reflection says LGTM (or similar), no corrections needed
+        let clean = reflection_text.to_uppercase();
+        if !has_tool_calls && (clean.contains("LGTM") || clean.contains("COMPLETE") || clean.contains("CORRECT")) {
+            info!("Reflection pass: no corrections needed for session {}", session_id);
+            return Ok(None);
+        }
+
+        // If the model wants to make corrections (tool calls), give it one pass
+        if has_tool_calls {
+            info!("Reflection pass: model making corrections for session {}", session_id);
+            let (corrected_msg, extra_results, extra_tokens) = self.process_llm_response(
+                session_id, context, llm_response, progress_tx,
+            ).await?;
+            return Ok(Some((corrected_msg, extra_results, extra_tokens)));
+        }
+
+        // Model produced text (not LGTM, not tool calls) — use it as the corrected response
+        let corrected_text = Self::strip_think_blocks(reflection_text);
+        if !corrected_text.is_empty() && corrected_text != response_text {
+            info!("Reflection pass: model revised response for session {}", session_id);
+            let corrected_msg = Message::text(corrected_text)
+                .with_session_id(session_id)
+                .with_agent_id(&self.config.id)
+                .with_role(MessageRole::Assistant);
+            let token_usage = TokenUsage {
+                prompt_tokens: llm_response.usage.prompt_tokens,
+                completion_tokens: llm_response.usage.completion_tokens,
+                total_tokens: llm_response.usage.total_tokens,
+            };
+            return Ok(Some((corrected_msg, Vec::new(), token_usage)));
+        }
+
+        Ok(None)
+    }
+
+    /// Execute a workflow DAG instead of the normal LLM tool loop.
+    ///
+    /// Each node invokes an agent via the gateway's `AgentInvoker`. Nodes in the
+    /// same topological layer run concurrently. Progress events map to the existing
+    /// `ToolStart`/`ToolOutput`/`TextDelta` events so the TUI renders them.
+    async fn execute_workflow(
+        &self,
+        session_id: &str,
+        user_message: &Message,
+        workflow: &crate::orchestration::WorkflowDefinition,
+        progress_tx: &Option<ProgressSender>,
+        start_time: std::time::Instant,
+        mut trajectory: Trajectory,
+    ) -> Result<AgentResponse> {
+        use crate::orchestration::{WorkflowExecutor, WorkflowProgressEvent};
+
+        let invoker = self.agent_invoker.as_ref().ok_or_else(|| {
+            crate::error::AgentError::ExecutionFailed {
+                message: "Workflow agent requires an agent_invoker but none is configured".to_string(),
+            }
+        })?;
+
+        let input_text = user_message.extract_text().unwrap_or_default();
+        trajectory.record(TrajectoryEvent::UserMessage {
+            content_preview: crate::trajectory::preview(&input_text, 200),
+        }, 0, 0);
+
+        // Set up workflow progress forwarding
+        let (wf_progress_tx, mut wf_progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let agent_progress_tx = progress_tx.clone();
+        let agent_id = self.config.id.clone();
+        let progress_handle = tokio::spawn(async move {
+            while let Some(event) = wf_progress_rx.recv().await {
+                if let Some(ref tx) = agent_progress_tx {
+                    match event {
+                        WorkflowProgressEvent::NodeStarted { node_id, agent_id } => {
+                            let _ = tx.send(AgentProgressEvent::ToolStart {
+                                tool_name: format!("workflow:{node_id}@{agent_id}"),
+                            });
+                        }
+                        WorkflowProgressEvent::NodeCompleted { node_id, output_preview } => {
+                            let _ = tx.send(AgentProgressEvent::ToolOutput {
+                                tool_name: format!("workflow:{node_id}"),
+                                output: output_preview,
+                                success: true,
+                                duration_ms: 0,
+                            });
+                        }
+                        WorkflowProgressEvent::NodeFailed { node_id, error } => {
+                            let _ = tx.send(AgentProgressEvent::TextDelta {
+                                text: format!("Node '{node_id}' failed: {error}"),
+                            });
+                        }
+                    }
+                }
+            }
+        });
+
+        let executor = WorkflowExecutor::new(Arc::clone(invoker));
+        let result = executor.execute(workflow, &input_text, session_id, Some(wf_progress_tx)).await;
+
+        progress_handle.abort();
+
+        let processing_time_ms = start_time.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(output) => {
+                trajectory.record(TrajectoryEvent::Complete {
+                    total_iterations: workflow.nodes.len(),
+                    total_tool_calls: workflow.nodes.len(),
+                    final_tokens: TokenUsage::default(),
+                    duration_ms: processing_time_ms,
+                }, 0, 0);
+
+                let response_message = Message::text(output)
+                    .with_session_id(session_id)
+                    .with_agent_id(&agent_id)
+                    .with_role(MessageRole::Assistant);
+
+                self.session_manager.add_message(session_id, response_message.clone()).await?;
+
+                Ok(AgentResponse {
+                    message: response_message,
+                    tool_results: vec![],
+                    tokens_used: TokenUsage::default(),
+                    processing_time_ms,
+                    trajectory: Some(trajectory),
+                    handoff: None,
+                })
+            }
+            Err(error) => {
+                let response_message = Message::text(format!("Workflow failed: {error}"))
+                    .with_session_id(session_id)
+                    .with_agent_id(&agent_id)
+                    .with_role(MessageRole::Assistant);
+
+                self.session_manager.add_message(session_id, response_message.clone()).await?;
+
+                Ok(AgentResponse {
+                    message: response_message,
+                    tool_results: vec![],
+                    tokens_used: TokenUsage::default(),
+                    processing_time_ms,
+                    trajectory: Some(trajectory),
+                    handoff: None,
+                })
+            }
+        }
+    }
+
+    /// Execute tool calls from an LLM response.
+    ///
+    /// Returns `(tool_results, tool_messages, handoff_signal)`. If a handoff is
+    /// detected, the signal is set and execution stops early — only tool calls
+    /// before the handoff are included in the results.
     async fn execute_tool_calls(
         &self,
         session_id: &str,
         llm_response: &ChatCompletionResponse,
         workspace: &std::path::Path,
-    ) -> Result<(Vec<ToolExecutionResult>, Vec<Message>)> {
+    ) -> Result<(Vec<ToolExecutionResult>, Vec<Message>, Option<HandoffSignal>)> {
         let mut tool_results = Vec::new();
         let mut tool_messages = Vec::new();
 
@@ -1848,6 +2779,25 @@ The user wants me to explore the codebase. I should start by listing the directo
                         continue;
                     }
 
+                    // Check breakpoint tools — require approval before execution
+                    if self.config.breakpoint_tools.contains(&tool_call.function.name) {
+                        info!("Breakpoint hit: tool '{}' requires approval", tool_call.function.name);
+                        // If no approval callback is configured, skip with an explanation
+                        // (The TUI/API layer should set up the callback for interactive sessions)
+                        let error_message = Message::tool_result(
+                            tool_call.id.clone(),
+                            tool_call.function.name.clone(),
+                            format!(
+                                "Tool '{}' is a breakpoint tool and requires human approval. \
+                                 The user has not yet approved this call. Try an alternative approach \
+                                 or ask the user for permission.",
+                                tool_call.function.name
+                            ),
+                        ).with_session_id(session_id);
+                        tool_messages.push(error_message);
+                        continue;
+                    }
+
                     let execution_context = ToolExecutionContext {
                         session_id: session_id.to_string(),
                         agent_id: self.config.id.clone(),
@@ -1860,6 +2810,8 @@ The user wants me to explore the codebase. I should start by listing the directo
                         approval_callback: None,
                         agent_invoker: self.agent_invoker.clone(),
                         delegation_depth: 0,
+                        blackboard: self.blackboard.clone(),
+                        swarm_id: self.swarm_id.clone(),
                     };
 
                     let tool_start = std::time::Instant::now();
@@ -1888,6 +2840,30 @@ The user wants me to explore the codebase. I should start by listing the directo
                             };
                             self.hook_registry.fire(&post_tool_event).await;
 
+                            // Check for handoff signal before processing normally
+                            if let ToolResult::Handoff { ref target_agent_id, ref context, ref message_override } = result.result {
+                                info!("Handoff detected: {} -> {}", self.config.id, target_agent_id);
+                                let handoff_msg = Message::tool_result(
+                                    tool_call.id.clone(),
+                                    tool_call.function.name.clone(),
+                                    format!("Transferring conversation to agent '{target_agent_id}'..."),
+                                ).with_session_id(session_id);
+                                tool_messages.push(handoff_msg);
+                                tool_results.push(result.clone());
+
+                                // Update stats before returning
+                                {
+                                    let mut state = self.state.write().await;
+                                    state.stats.tool_executions += 1;
+                                }
+
+                                return Ok((tool_results, tool_messages, Some(HandoffSignal {
+                                    target_agent_id: target_agent_id.clone(),
+                                    context: context.clone(),
+                                    message_override: message_override.clone(),
+                                })));
+                            }
+
                             tool_results.push(result.clone());
 
                             // Create tool result message for conversation
@@ -1906,6 +2882,10 @@ The user wants me to explore the codebase. I should start by listing the directo
                                 }
                                 ToolResult::File { path, .. } => {
                                     format!("[File: {path}]")
+                                }
+                                ToolResult::Handoff { .. } => {
+                                    // Already handled above — unreachable
+                                    unreachable!()
                                 }
                             };
 
@@ -1957,8 +2937,8 @@ The user wants me to explore the codebase. I should start by listing the directo
                 }
             }
         }
-        
-        Ok((tool_results, tool_messages))
+
+        Ok((tool_results, tool_messages, None))
     }
     
     /// Truncate content to a maximum character count, appending a notice if truncated
@@ -2080,6 +3060,49 @@ The user wants me to explore the codebase. I should start by listing the directo
         false
     }
 
+    /// Detect when a model response signals intent to continue working but
+    /// didn't attach tool calls. This catches the common pattern where a model
+    /// says "Let me explore..." or "Now I'll read..." mid-task and then stops.
+    fn looks_like_continuation_intent(text: &str) -> bool {
+        // Only short-ish responses — long responses are likely genuine final answers
+        if text.len() > 1000 {
+            return false;
+        }
+
+        let lower = text.to_lowercase();
+
+        let continuation_phrases = [
+            "let me ", "now i'll ", "now i will ", "next i'll ", "next i will ",
+            "i'll now ", "i will now ", "i need to ", "i should ",
+            "let's ", "moving on to ", "continuing with ",
+            "i'm going to ", "first let me ", "now let's ",
+            "let me also ", "i'll also ", "i also need to ",
+            "more thoroughly", "more closely", "in more detail",
+            "let me check", "let me look", "let me read", "let me search",
+            "let me explore", "let me examine", "let me investigate",
+        ];
+
+        // Must end with a continuation marker (colon, ellipsis) or contain
+        // one of the intent phrases
+        let ends_with_continuation = text.trim_end().ends_with(':')
+            || text.trim_end().ends_with("...")
+            || text.trim_end().ends_with("…");
+
+        if ends_with_continuation && continuation_phrases.iter().any(|p| lower.contains(p)) {
+            return true;
+        }
+
+        // Even without trailing punctuation, strong intent phrases are enough
+        let strong_intent = [
+            "let me ", "now i'll ", "i need to ", "i'm going to ",
+        ];
+        if strong_intent.iter().any(|p| lower.contains(p)) && text.len() < 500 {
+            return true;
+        }
+
+        false
+    }
+
     /// Get the agent's config/data directory (for SOUL.md, SYSTEM-PROMPT.md, etc.)
     fn get_agent_directory(&self) -> std::path::PathBuf {
         dirs::config_dir()
@@ -2189,6 +3212,8 @@ mod tests {
             tool_results: Vec::new(),
             tokens_used: TokenUsage::default(),
             processing_time_ms: 100,
+            trajectory: None,
+            handoff: None,
         };
         
         // Should be serializable
@@ -2341,6 +3366,48 @@ mod tests {
     fn test_step_list_is_acknowledgment() {
         let steps = "Here's what I would do:\n1. Read the files\n- Analyze the structure\n- Report findings\n* Check for errors";
         assert!(Agent::looks_like_acknowledgment(steps));
+    }
+
+    // --- looks_like_continuation_intent tests ---
+
+    #[test]
+    fn test_continuation_with_colon() {
+        assert!(Agent::looks_like_continuation_intent(
+            "This is a Rust project. Let me explore the structure more thoroughly:"
+        ));
+    }
+
+    #[test]
+    fn test_continuation_with_ellipsis() {
+        assert!(Agent::looks_like_continuation_intent(
+            "Let me read the main configuration file..."
+        ));
+    }
+
+    #[test]
+    fn test_continuation_strong_intent() {
+        assert!(Agent::looks_like_continuation_intent(
+            "Now I'll look at the gateway module"
+        ));
+        assert!(Agent::looks_like_continuation_intent(
+            "I need to check the error handling"
+        ));
+        assert!(Agent::looks_like_continuation_intent(
+            "I'm going to analyze the test suite"
+        ));
+    }
+
+    #[test]
+    fn test_long_response_not_continuation() {
+        let long = "a ".repeat(600);
+        assert!(!Agent::looks_like_continuation_intent(&long));
+    }
+
+    #[test]
+    fn test_final_answer_not_continuation() {
+        assert!(!Agent::looks_like_continuation_intent(
+            "The function handles errors by returning a Result type with custom error variants."
+        ));
     }
 
     // --- is_conversational_question tests ---
