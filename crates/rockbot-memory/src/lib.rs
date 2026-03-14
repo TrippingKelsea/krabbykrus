@@ -1,11 +1,13 @@
 //! Memory management system for RockBot
 //!
-//! Provides document storage, keyword search, and TF-IDF vector semantic search.
+//! Provides document storage, keyword search, TF-IDF vector semantic search,
+//! and optional embedding-based hybrid search when an embedding provider is available.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use thiserror::Error;
 
 /// Memory system errors
@@ -33,11 +35,23 @@ pub enum MemoryError {
 /// Result type for memory operations
 pub type Result<T> = std::result::Result<T, MemoryError>;
 
+/// Trait for providing text embeddings (e.g. from an LLM API).
+///
+/// When set on a [`MemoryManager`], enables hybrid search that combines
+/// TF-IDF scoring with dense embedding cosine similarity.
+#[async_trait::async_trait]
+pub trait EmbeddingProvider: Send + Sync {
+    /// Generate a dense embedding vector for the given text.
+    async fn embed(&self, text: &str) -> Result<Vec<f32>>;
+}
+
 /// Memory manager handles file-based memory storage and vector search
 pub struct MemoryManager {
     workspace_path: PathBuf,
     documents: tokio::sync::RwLock<HashMap<String, MemoryDocument>>,
     vector_index: tokio::sync::RwLock<VectorIndex>,
+    /// Optional embedding provider for hybrid search
+    embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
 }
 
 /// A document stored in memory
@@ -67,6 +81,8 @@ pub struct MemoryChunk {
 struct VectorIndex {
     /// TF-IDF vectors keyed by chunk ID
     vectors: HashMap<String, SparseVector>,
+    /// Dense embedding vectors keyed by chunk ID (populated when embedding provider available)
+    embeddings: HashMap<String, DenseVector>,
     /// Chunk data keyed by chunk ID
     chunks: HashMap<String, MemoryChunk>,
     /// Document frequency: how many chunks contain each term
@@ -75,6 +91,28 @@ struct VectorIndex {
     total_chunks: usize,
     /// Whether the index needs rebuilding
     dirty: bool,
+}
+
+/// Dense embedding vector for cosine similarity
+#[derive(Debug, Clone)]
+struct DenseVector {
+    values: Vec<f32>,
+    norm: f32,
+}
+
+impl DenseVector {
+    fn new(values: Vec<f32>) -> Self {
+        let norm = values.iter().map(|v| v * v).sum::<f32>().sqrt();
+        Self { values, norm }
+    }
+
+    fn cosine_similarity(&self, other: &DenseVector) -> f32 {
+        if self.norm == 0.0 || other.norm == 0.0 || self.values.len() != other.values.len() {
+            return 0.0;
+        }
+        let dot: f32 = self.values.iter().zip(&other.values).map(|(a, b)| a * b).sum();
+        dot / (self.norm * other.norm)
+    }
 }
 
 /// Sparse TF-IDF vector (only stores non-zero entries)
@@ -206,12 +244,20 @@ impl MemoryManager {
             documents: tokio::sync::RwLock::new(HashMap::new()),
             vector_index: tokio::sync::RwLock::new(VectorIndex {
                 vectors: HashMap::new(),
+                embeddings: HashMap::new(),
                 chunks: HashMap::new(),
                 doc_freq: HashMap::new(),
                 total_chunks: 0,
                 dirty: false,
             }),
+            embedding_provider: None,
         })
+    }
+
+    /// Set an embedding provider for hybrid search.
+    /// When set, search results combine TF-IDF and embedding similarity scores.
+    pub fn set_embedding_provider(&mut self, provider: Arc<dyn EmbeddingProvider>) {
+        self.embedding_provider = Some(provider);
     }
 
     /// Load memory files from the workspace
@@ -353,9 +399,26 @@ impl MemoryManager {
             chunk_map.insert(chunk_id, chunk);
         }
 
-        // Phase 3: Store the index
+        // Phase 3: Optionally compute dense embeddings
+        let mut embeddings: HashMap<String, DenseVector> = HashMap::new();
+        if let Some(ref provider) = self.embedding_provider {
+            for (chunk_id, chunk) in &chunk_map {
+                match provider.embed(&chunk.content).await {
+                    Ok(vec) => {
+                        embeddings.insert(chunk_id.clone(), DenseVector::new(vec));
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to embed chunk {chunk_id}: {e}");
+                    }
+                }
+            }
+            tracing::debug!("Computed {} embeddings for {} chunks", embeddings.len(), total_chunks);
+        }
+
+        // Phase 4: Store the index
         let mut idx = self.vector_index.write().await;
         idx.vectors = vectors;
+        idx.embeddings = embeddings;
         idx.chunks = chunk_map;
         idx.doc_freq = global_doc_freq;
         idx.total_chunks = total_chunks;
@@ -423,7 +486,11 @@ impl MemoryManager {
         })
     }
 
-    /// Perform TF-IDF cosine similarity search
+    /// Perform TF-IDF cosine similarity search with optional embedding hybrid scoring.
+    ///
+    /// When an embedding provider is available and embeddings have been computed,
+    /// the final score is `0.3 * tfidf_score + 0.7 * embedding_score`.
+    /// Otherwise, falls back to pure TF-IDF scoring.
     async fn semantic_search(&self, query: MemoryQuery) -> Result<MemoryResult> {
         let idx = self.vector_index.read().await;
 
@@ -441,13 +508,43 @@ impl MemoryManager {
             return self.keyword_search(query).await;
         }
 
-        // Score every chunk by cosine similarity
+        // Compute query embedding if provider is available and index has embeddings
+        let query_embedding = if !idx.embeddings.is_empty() {
+            if let Some(ref provider) = self.embedding_provider {
+                match provider.embed(&query.query).await {
+                    Ok(vec) => Some(DenseVector::new(vec)),
+                    Err(e) => {
+                        tracing::warn!("Failed to embed query: {e}");
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let use_hybrid = query_embedding.is_some();
+
+        // Score every chunk
         let mut scored: Vec<(String, f32)> = idx.vectors.iter()
             .map(|(chunk_id, chunk_vec)| {
-                let sim = query_vec.cosine_similarity(chunk_vec);
-                (chunk_id.clone(), sim)
+                let tfidf_sim = query_vec.cosine_similarity(chunk_vec);
+
+                let score = if use_hybrid {
+                    let emb_sim = query_embedding.as_ref()
+                        .and_then(|qe| idx.embeddings.get(chunk_id).map(|ce| qe.cosine_similarity(ce)))
+                        .unwrap_or(0.0);
+                    // Hybrid: weight embeddings higher since they capture semantic similarity
+                    0.3 * tfidf_sim + 0.7 * emb_sim
+                } else {
+                    tfidf_sim
+                };
+
+                (chunk_id.clone(), score)
             })
-            .filter(|(_, sim)| *sim > 0.01) // Minimum relevance threshold
+            .filter(|(_, sim)| *sim > 0.01)
             .collect();
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -545,6 +642,7 @@ impl Default for VectorIndex {
     fn default() -> Self {
         Self {
             vectors: HashMap::new(),
+            embeddings: HashMap::new(),
             chunks: HashMap::new(),
             doc_freq: HashMap::new(),
             total_chunks: 0,
@@ -763,6 +861,101 @@ mod tests {
         // Verify overlap: chunk 0 ends at 10, chunk 1 starts at 7
         assert_eq!(doc.chunks[0].start_offset, 0);
         assert_eq!(doc.chunks[1].start_offset, 7);
+    }
+
+    /// Mock embedding provider that returns simple hash-based vectors
+    struct MockEmbeddingProvider;
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for MockEmbeddingProvider {
+        async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+            // Simple deterministic embedding: 8-dimensional vector based on character distribution
+            let mut vec = vec![0.0_f32; 8];
+            for (i, ch) in text.chars().enumerate() {
+                let idx = (ch as usize + i) % 8;
+                vec[idx] += 1.0;
+            }
+            // Normalize
+            let norm: f32 = vec.iter().map(|v| v * v).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                for v in &mut vec {
+                    *v /= norm;
+                }
+            }
+            Ok(vec)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hybrid_search_with_embeddings() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut mm = MemoryManager::new(temp_dir.path().to_path_buf()).await.unwrap();
+        mm.set_embedding_provider(Arc::new(MockEmbeddingProvider));
+
+        let file1 = temp_dir.path().join("memory").join("rust.md");
+        tokio::fs::write(&file1, "Rust programming language memory safety ownership borrowing compiler").await.unwrap();
+
+        let file2 = temp_dir.path().join("memory").join("cooking.md");
+        tokio::fs::write(&file2, "Recipe for chocolate cake flour sugar eggs butter baking oven temperature").await.unwrap();
+
+        mm.load_document(&file1).await.unwrap();
+        mm.load_document(&file2).await.unwrap();
+        mm.rebuild_index().await.unwrap();
+
+        // Verify embeddings were computed
+        {
+            let idx = mm.vector_index.read().await;
+            assert!(!idx.embeddings.is_empty(), "Embeddings should have been computed");
+        }
+
+        let query = MemoryQuery {
+            query: "programming".to_string(),
+            limit: Some(3),
+            filters: HashMap::new(),
+            semantic: true,
+        };
+
+        let results = mm.search(query).await.unwrap();
+        assert!(results.total_results > 0);
+    }
+
+    #[tokio::test]
+    async fn test_fallback_to_tfidf_without_embeddings() {
+        let temp_dir = TempDir::new().unwrap();
+        let mm = MemoryManager::new(temp_dir.path().to_path_buf()).await.unwrap();
+        // No embedding provider set
+
+        let file = temp_dir.path().join("memory").join("test.md");
+        tokio::fs::write(&file, "Some searchable content about programming").await.unwrap();
+        mm.load_document(&file).await.unwrap();
+        mm.rebuild_index().await.unwrap();
+
+        // Embeddings should be empty
+        {
+            let idx = mm.vector_index.read().await;
+            assert!(idx.embeddings.is_empty());
+        }
+
+        let query = MemoryQuery {
+            query: "programming".to_string(),
+            limit: Some(3),
+            filters: HashMap::new(),
+            semantic: true,
+        };
+
+        // Should still work via TF-IDF only
+        let results = mm.search(query).await.unwrap();
+        assert!(results.total_results > 0);
+    }
+
+    #[test]
+    fn test_dense_vector_cosine_similarity() {
+        let v1 = DenseVector::new(vec![1.0, 0.0, 0.0]);
+        let v2 = DenseVector::new(vec![1.0, 0.0, 0.0]);
+        assert!((v1.cosine_similarity(&v2) - 1.0).abs() < 0.001);
+
+        let v3 = DenseVector::new(vec![0.0, 1.0, 0.0]);
+        assert!(v1.cosine_similarity(&v3).abs() < 0.001);
     }
 
     #[tokio::test]
