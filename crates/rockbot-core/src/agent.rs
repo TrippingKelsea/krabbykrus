@@ -1725,6 +1725,8 @@ The user wants me to explore the codebase. I should start by listing the directo
                         credential_accessor: self.credential_accessor.clone(),
                         command_allowlist: vec![],
                         approval_callback: None,
+                        agent_invoker: None,
+                        delegation_depth: 0,
                     };
                     
                     match self.tool_registry

@@ -109,6 +109,10 @@ pub struct ToolExecutionContext {
     pub command_allowlist: Vec<String>,
     /// Optional callback for requesting human approval
     pub approval_callback: Option<ApprovalCallback>,
+    /// Optional agent invoker for subagent delegation
+    pub agent_invoker: Option<Arc<dyn AgentInvoker>>,
+    /// Current delegation depth (0 = top-level, incremented for subagent calls)
+    pub delegation_depth: u32,
 }
 
 impl std::fmt::Debug for ToolExecutionContext {
@@ -121,8 +125,26 @@ impl std::fmt::Debug for ToolExecutionContext {
             .field("has_credential_accessor", &self.credential_accessor.is_some())
             .field("command_allowlist", &self.command_allowlist)
             .field("has_approval_callback", &self.approval_callback.is_some())
+            .field("has_agent_invoker", &self.agent_invoker.is_some())
+            .field("delegation_depth", &self.delegation_depth)
             .finish()
     }
+}
+
+/// Agent invoker trait for delegating work to other agents (subagent pattern).
+///
+/// Implemented by the Gateway which has access to all registered agents.
+#[async_trait::async_trait]
+pub trait AgentInvoker: Send + Sync {
+    /// Invoke another agent with a message, returning the response text.
+    /// `depth` tracks delegation depth to prevent infinite recursion.
+    async fn invoke_agent(
+        &self,
+        agent_id: &str,
+        message: &str,
+        session_id: &str,
+        depth: u32,
+    ) -> Result<String>;
 }
 
 /// Credential accessor trait for tools to request credentials from the vault
@@ -288,8 +310,8 @@ impl ToolRegistry {
     async fn register_builtin_tools(&self) -> Result<()> {
         let tools_to_register = match self.config.profile.as_str() {
             "minimal" => vec!["read", "write"],
-            "standard" => vec!["read", "write", "edit", "exec", "glob", "grep", "patch"],
-            "full" => vec!["read", "write", "edit", "exec", "glob", "grep", "patch", "memory_get", "memory_search"],
+            "standard" => vec!["read", "write", "edit", "exec", "glob", "grep", "patch", "invoke_agent"],
+            "full" => vec!["read", "write", "edit", "exec", "glob", "grep", "patch", "memory_get", "memory_search", "invoke_agent"],
             _ => vec!["read", "write", "edit", "exec", "glob", "grep", "patch"],
         };
         
@@ -318,6 +340,7 @@ impl ToolRegistry {
             "patch" => Ok(Some(Arc::new(builtin::PatchTool::new()))),
             "memory_get" => Ok(Some(Arc::new(builtin::MemoryGetTool::new()))),
             "memory_search" => Ok(Some(Arc::new(builtin::MemorySearchTool::new()))),
+            "invoke_agent" => Ok(Some(Arc::new(builtin::InvokeAgentTool::new()))),
             _ => Ok(None),
         }
     }
@@ -571,6 +594,8 @@ mod tests {
             approval_callback: Some(Arc::new(|_tool, _agent, _params| {
                 Box::pin(async { ApprovalResult::Denied { reason: "not allowed".to_string() } })
             })),
+            agent_invoker: None,
+            delegation_depth: 0,
         };
 
         let result = registry.execute_tool(
@@ -617,6 +642,8 @@ mod tests {
                 // Should never be called for allowlisted commands
                 Box::pin(async { ApprovalResult::Denied { reason: "should not reach".to_string() } })
             })),
+            agent_invoker: None,
+            delegation_depth: 0,
         };
 
         let result = registry.execute_tool(
@@ -653,5 +680,145 @@ mod tests {
         let tools = registry.tools.read().await;
         let read_tool = tools.get("read").unwrap();
         assert!(!read_tool.requires_approval());
+    }
+
+    /// Mock agent invoker for testing
+    struct MockAgentInvoker;
+
+    #[async_trait::async_trait]
+    impl AgentInvoker for MockAgentInvoker {
+        async fn invoke_agent(
+            &self,
+            agent_id: &str,
+            message: &str,
+            _session_id: &str,
+            _depth: u32,
+        ) -> Result<String> {
+            Ok(format!("Response from {agent_id}: processed '{message}'"))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_invoke_agent_tool_success() {
+        let config = ToolConfig {
+            profile: "standard".to_string(),
+            deny: vec![],
+            configs: HashMap::new(),
+        };
+        let registry = ToolRegistry::new(config).await.unwrap();
+
+        let context = ToolExecutionContext {
+            session_id: "test".to_string(),
+            agent_id: "agent1".to_string(),
+            workspace_path: std::path::PathBuf::from("/tmp"),
+            security_context: rockbot_security::SecurityContext {
+                session_id: "test".to_string(),
+                capabilities: rockbot_security::Capabilities::new(),
+                sandbox_enabled: false,
+                restrictions: rockbot_security::SecurityRestrictions::default(),
+            },
+            credential_accessor: None,
+            command_allowlist: vec![],
+            approval_callback: None,
+            agent_invoker: Some(Arc::new(MockAgentInvoker)),
+            delegation_depth: 0,
+        };
+
+        let result = registry.execute_tool(
+            "invoke_agent",
+            r#"{"agent_id": "agent2", "message": "do something"}"#,
+            context,
+        ).await.unwrap();
+
+        assert!(result.success);
+        match &result.result {
+            crate::message::ToolResult::Text { content } => {
+                assert!(content.contains("agent2"));
+                assert!(content.contains("do something"));
+            }
+            other => panic!("Expected Text result, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_invoke_agent_depth_limit() {
+        let config = ToolConfig {
+            profile: "standard".to_string(),
+            deny: vec![],
+            configs: HashMap::new(),
+        };
+        let registry = ToolRegistry::new(config).await.unwrap();
+
+        let context = ToolExecutionContext {
+            session_id: "test".to_string(),
+            agent_id: "agent1".to_string(),
+            workspace_path: std::path::PathBuf::from("/tmp"),
+            security_context: rockbot_security::SecurityContext {
+                session_id: "test".to_string(),
+                capabilities: rockbot_security::Capabilities::new(),
+                sandbox_enabled: false,
+                restrictions: rockbot_security::SecurityRestrictions::default(),
+            },
+            credential_accessor: None,
+            command_allowlist: vec![],
+            approval_callback: None,
+            agent_invoker: Some(Arc::new(MockAgentInvoker)),
+            delegation_depth: 3, // At max depth
+        };
+
+        let result = registry.execute_tool(
+            "invoke_agent",
+            r#"{"agent_id": "agent2", "message": "do something"}"#,
+            context,
+        ).await.unwrap();
+
+        // Tool returns an error message via ToolResult::Error (not Err)
+        match &result.result {
+            crate::message::ToolResult::Error { message, .. } => {
+                assert!(message.contains("depth"));
+            }
+            other => panic!("Expected Error result, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_invoke_agent_self_delegation_blocked() {
+        let config = ToolConfig {
+            profile: "standard".to_string(),
+            deny: vec![],
+            configs: HashMap::new(),
+        };
+        let registry = ToolRegistry::new(config).await.unwrap();
+
+        let context = ToolExecutionContext {
+            session_id: "test".to_string(),
+            agent_id: "agent1".to_string(),
+            workspace_path: std::path::PathBuf::from("/tmp"),
+            security_context: rockbot_security::SecurityContext {
+                session_id: "test".to_string(),
+                capabilities: rockbot_security::Capabilities::new(),
+                sandbox_enabled: false,
+                restrictions: rockbot_security::SecurityRestrictions::default(),
+            },
+            credential_accessor: None,
+            command_allowlist: vec![],
+            approval_callback: None,
+            agent_invoker: Some(Arc::new(MockAgentInvoker)),
+            delegation_depth: 0,
+        };
+
+        let result = registry.execute_tool(
+            "invoke_agent",
+            r#"{"agent_id": "agent1", "message": "do something"}"#,
+            context,
+        ).await.unwrap();
+
+        // Tool returns an error message via ToolResult::Error (not Err)
+        match &result.result {
+            crate::message::ToolResult::Error { message, .. } => {
+                assert!(message.contains("self"));
+            }
+            other => panic!("Expected Error result, got: {other:?}"),
+        }
     }
 }

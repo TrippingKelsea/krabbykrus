@@ -1001,3 +1001,102 @@ impl Tool for MemorySearchTool {
         })
     }
 }
+
+/// Tool for delegating work to another agent (subagent pattern)
+pub struct InvokeAgentTool;
+
+impl Default for InvokeAgentTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InvokeAgentTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+/// Maximum delegation depth to prevent infinite recursion
+const MAX_DELEGATION_DEPTH: u32 = 3;
+
+impl Tool for InvokeAgentTool {
+    fn name(&self) -> &str {
+        "invoke_agent"
+    }
+
+    fn description(&self) -> &str {
+        "Delegate a task to another agent by ID. The target agent processes the message and returns its response."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "The ID of the agent to invoke"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "The message/task to send to the target agent"
+                }
+            },
+            "required": ["agent_id", "message"]
+        })
+    }
+
+    fn required_capabilities(&self) -> Capabilities {
+        Capabilities::new()
+    }
+
+    fn execute(&self, params: serde_json::Value, context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+        Box::pin(async move {
+            let agent_id: String = params.get("agent_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "agent_id is required".to_string()
+                })?
+                .to_string();
+
+            let message: String = params.get("message")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "message is required".to_string()
+                })?
+                .to_string();
+
+            // Prevent self-delegation
+            if agent_id == context.agent_id {
+                return Ok(ToolResult::error("Cannot invoke self — would cause infinite recursion"));
+            }
+
+            // Check delegation depth
+            if context.delegation_depth >= MAX_DELEGATION_DEPTH {
+                return Ok(ToolResult::error(format!(
+                    "Maximum delegation depth ({MAX_DELEGATION_DEPTH}) exceeded. Cannot delegate further."
+                )));
+            }
+
+            // Check if we have an agent invoker
+            let invoker = match &context.agent_invoker {
+                Some(inv) => inv.clone(),
+                None => {
+                    return Ok(ToolResult::error(
+                        "Agent delegation is not available in this context"
+                    ));
+                }
+            };
+
+            match invoker.invoke_agent(
+                &agent_id,
+                &message,
+                &context.session_id,
+                context.delegation_depth + 1,
+            ).await {
+                Ok(response) => Ok(ToolResult::text(response)),
+                Err(e) => Ok(ToolResult::error(format!("Agent invocation failed: {e}"))),
+            }
+        })
+    }
+}
