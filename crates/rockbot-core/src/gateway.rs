@@ -2785,7 +2785,10 @@ impl Gateway {
             }
         };
 
-        let dispatcher = crate::a2a::A2ADispatcher::new(Arc::clone(&self.a2a_task_store));
+        let dispatcher = crate::a2a::A2ADispatcher::with_invoker(
+            Arc::clone(&self.a2a_task_store),
+            self.agent_invoker(),
+        );
         let rpc_response = dispatcher.dispatch(rpc_request).await;
         let json = serde_json::to_string(&rpc_response).unwrap_or_default();
 

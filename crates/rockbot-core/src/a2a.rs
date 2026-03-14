@@ -261,11 +261,17 @@ impl TaskStore {
 /// Dispatches JSON-RPC requests to the appropriate A2A handlers.
 pub struct A2ADispatcher {
     task_store: Arc<TaskStore>,
+    agent_invoker: Option<Arc<dyn rockbot_tools::AgentInvoker>>,
 }
 
 impl A2ADispatcher {
     pub fn new(task_store: Arc<TaskStore>) -> Self {
-        Self { task_store }
+        Self { task_store, agent_invoker: None }
+    }
+
+    /// Create a dispatcher with an agent invoker for processing tasks.
+    pub fn with_invoker(task_store: Arc<TaskStore>, invoker: Arc<dyn rockbot_tools::AgentInvoker>) -> Self {
+        Self { task_store, agent_invoker: Some(invoker) }
     }
 
     /// Dispatch a JSON-RPC request and return the response.
@@ -310,9 +316,44 @@ impl A2ADispatcher {
             .create_task(agent_id, message)
             .await;
 
-        // Mark as working (actual processing would be triggered externally)
         self.task_store.update_status(&task_id, TaskStatus::Working).await;
 
+        // If we have an agent invoker, process the message synchronously
+        if let Some(ref invoker) = self.agent_invoker {
+            let session_id = format!("a2a:{task_id}");
+            match invoker.invoke_agent(agent_id, message_text, &session_id, 0).await {
+                Ok(response_text) => {
+                    let response_msg = A2AMessage {
+                        role: "agent".to_string(),
+                        parts: vec![Part::Text { text: response_text }],
+                    };
+                    self.task_store.add_message(&task_id, response_msg).await;
+                    self.task_store.update_status(&task_id, TaskStatus::Completed).await;
+
+                    let task = self.task_store.get_task(&task_id).await;
+                    return JsonRpcResponse::success(
+                        id,
+                        serde_json::to_value(&task).unwrap_or_default(),
+                    );
+                }
+                Err(e) => {
+                    let error_msg = A2AMessage {
+                        role: "agent".to_string(),
+                        parts: vec![Part::Text { text: format!("Error: {e}") }],
+                    };
+                    self.task_store.add_message(&task_id, error_msg).await;
+                    self.task_store.update_status(&task_id, TaskStatus::Failed).await;
+
+                    let task = self.task_store.get_task(&task_id).await;
+                    return JsonRpcResponse::success(
+                        id,
+                        serde_json::to_value(&task).unwrap_or_default(),
+                    );
+                }
+            }
+        }
+
+        // No invoker — return task in working state (caller must poll tasks/get)
         JsonRpcResponse::success(
             id,
             serde_json::json!({
