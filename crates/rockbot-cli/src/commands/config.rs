@@ -105,6 +105,7 @@ fn create_default_config() -> Config {
                     parent_id: None,
                     system_prompt: None,
                     enabled: true,
+                    mcp_servers: HashMap::new(),
                     config: HashMap::new(),
                 },
             ],

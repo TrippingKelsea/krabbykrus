@@ -369,7 +369,36 @@ impl Agent {
         let workspace = config.workspace.as_ref().unwrap_or(&default_workspace);
         
         tokio::fs::create_dir_all(workspace).await?;
-        
+
+        // Start MCP servers and register discovered tools
+        #[cfg(feature = "tools-mcp")]
+        if !config.mcp_servers.is_empty() {
+            let mcp_manager = Arc::new(rockbot_tools_mcp::McpServerManager::new());
+            for (name, entry) in &config.mcp_servers {
+                let mcp_config = rockbot_tools_mcp::McpServerConfig {
+                    command: entry.command.clone(),
+                    args: entry.args.clone(),
+                    env: entry.env.clone(),
+                };
+                match mcp_manager.start_server(name, &mcp_config).await {
+                    Ok(tools) => {
+                        info!("MCP server '{}' started with {} tools", name, tools.len());
+                        for tool_def in tools {
+                            let proxy = Arc::new(rockbot_tools_mcp::McpProxyTool::new(
+                                name.clone(),
+                                tool_def,
+                                Arc::clone(&mcp_manager),
+                            ));
+                            tool_registry.register_tool(proxy).await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to start MCP server '{}': {e}", name);
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             config,
             llm_provider,

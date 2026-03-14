@@ -290,6 +290,71 @@ impl Drop for McpServerManager {
     }
 }
 
+/// Dynamic proxy tool that forwards execution to an MCP server via `McpServerManager`.
+///
+/// One `McpProxyTool` is created per discovered MCP tool during `McpServerManager::start_server()`.
+pub struct McpProxyTool {
+    /// Namespaced name: "mcp_<server>_<tool>" to avoid collisions
+    qualified_name: String,
+    server_name: String,
+    tool_def: McpToolDef,
+    manager: Arc<McpServerManager>,
+}
+
+impl McpProxyTool {
+    pub fn new(server_name: String, tool_def: McpToolDef, manager: Arc<McpServerManager>) -> Self {
+        let qualified_name = format!("mcp_{}_{}", server_name, tool_def.name);
+        Self { qualified_name, server_name, tool_def, manager }
+    }
+}
+
+impl Tool for McpProxyTool {
+    fn name(&self) -> &str {
+        &self.qualified_name
+    }
+
+    fn description(&self) -> &str {
+        self.tool_def.description.as_deref().unwrap_or("MCP tool")
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        self.tool_def.input_schema.clone().unwrap_or(serde_json::json!({"type": "object"}))
+    }
+
+    fn required_capabilities(&self) -> Capabilities {
+        Capabilities::new()
+    }
+
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        _context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + '_>> {
+        Box::pin(async move {
+            let result = self.manager.call_tool(&self.server_name, &self.tool_def.name, params).await?;
+
+            // MCP tools/call returns { content: [{ type, text }] }
+            if let Some(content) = result.get("content").and_then(|c| c.as_array()) {
+                let text_parts: Vec<&str> = content.iter()
+                    .filter_map(|part| {
+                        if part.get("type").and_then(|t| t.as_str()) == Some("text") {
+                            part.get("text").and_then(|t| t.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !text_parts.is_empty() {
+                    return Ok(ToolResult::text(text_parts.join("\n")));
+                }
+            }
+
+            // Fallback: return raw JSON
+            Ok(ToolResult::json(result))
+        })
+    }
+}
+
 /// MCP server connection tool — proxies tool calls to MCP servers
 pub struct McpTool;
 
@@ -471,5 +536,31 @@ mod tests {
             let defs = manager.get_tool_defs().await;
             assert!(defs.is_empty());
         });
+    }
+
+    #[test]
+    fn test_mcp_proxy_tool_naming() {
+        let manager = Arc::new(McpServerManager::new());
+        let tool_def = McpToolDef {
+            name: "read_file".to_string(),
+            description: Some("Read a file".to_string()),
+            input_schema: Some(serde_json::json!({"type": "object"})),
+        };
+        let proxy = McpProxyTool::new("filesystem".to_string(), tool_def, manager);
+        assert_eq!(proxy.name(), "mcp_filesystem_read_file");
+        assert_eq!(proxy.description(), "Read a file");
+    }
+
+    #[test]
+    fn test_mcp_proxy_tool_no_description() {
+        let manager = Arc::new(McpServerManager::new());
+        let tool_def = McpToolDef {
+            name: "list".to_string(),
+            description: None,
+            input_schema: None,
+        };
+        let proxy = McpProxyTool::new("server".to_string(), tool_def, manager);
+        assert_eq!(proxy.name(), "mcp_server_list");
+        assert_eq!(proxy.description(), "MCP tool");
     }
 }

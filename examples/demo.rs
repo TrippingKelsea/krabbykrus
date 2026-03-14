@@ -91,6 +91,7 @@ async fn main() -> Result<()> {
         parent_id: None,
         system_prompt: None,
         enabled: true,
+        mcp_servers: HashMap::new(),
         config: HashMap::new(),
     };
 

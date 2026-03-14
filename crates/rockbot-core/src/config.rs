@@ -115,9 +115,25 @@ pub struct AgentInstance {
     /// Whether this agent is enabled (default: true)
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// MCP server configurations for this agent
+    #[serde(default)]
+    pub mcp_servers: HashMap<String, McpServerEntry>,
     /// Agent-specific configuration
     #[serde(default)]
     pub config: HashMap<String, serde_json::Value>,
+}
+
+/// MCP server entry in agent config
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerEntry {
+    /// Command to run the MCP server
+    pub command: String,
+    /// Command arguments
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment variables
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 /// Tool system configuration

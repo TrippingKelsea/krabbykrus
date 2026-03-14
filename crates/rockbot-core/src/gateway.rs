@@ -2219,6 +2219,7 @@ impl Gateway {
             parent_id: req.parent_id,
             system_prompt: req.system_prompt.clone(),
             enabled: req.enabled,
+            mcp_servers: std::collections::HashMap::new(),
             config: std::collections::HashMap::new(),
         };
 
