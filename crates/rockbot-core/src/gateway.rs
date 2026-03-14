@@ -449,7 +449,10 @@ impl Gateway {
             let agent_id = config.id.clone();
             
             match factory(config).await {
-                Ok(agent) => {
+                Ok(mut agent) => {
+                    if let Some(a) = Arc::get_mut(&mut agent) {
+                        a.set_agent_invoker(self.agent_invoker());
+                    }
                     let mut agents = self.agents.write().await;
                     agents.insert(agent_id.clone(), agent);
                     info!("Created agent '{}' on reload", agent_id);
@@ -2239,7 +2242,11 @@ impl Gateway {
         // Try to create the agent via factory
         let status = if let Some(ref factory) = self.agent_factory {
             match factory(config.clone()).await {
-                Ok(agent) => {
+                Ok(mut agent) => {
+                    // Inject agent invoker so invoke_agent tool works
+                    if let Some(a) = Arc::get_mut(&mut agent) {
+                        a.set_agent_invoker(self.agent_invoker());
+                    }
                     self.agents.write().await.insert(req.id.clone(), agent);
                     "created"
                 }
@@ -2352,7 +2359,10 @@ impl Gateway {
         // Recreate the running agent instance so it picks up config changes (e.g. model)
         if let (Some(ref factory), Some(cfg)) = (&self.agent_factory, updated_config) {
             match factory(cfg).await {
-                Ok(new_agent) => {
+                Ok(mut new_agent) => {
+                    if let Some(a) = Arc::get_mut(&mut new_agent) {
+                        a.set_agent_invoker(self.agent_invoker());
+                    }
                     let mut agents = self.agents.write().await;
                     agents.insert(agent_id.clone(), new_agent);
                     info!("Recreated agent '{}' with updated config", agent_id);
