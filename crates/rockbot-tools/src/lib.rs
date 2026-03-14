@@ -350,7 +350,31 @@ impl ToolRegistry {
                 message: "Insufficient capabilities for tool execution".to_string(),
             });
         }
-        
+
+        // Enforce sandbox restrictions
+        let restrictions = &context.security_context.restrictions;
+
+        // Check file path restrictions for file-related tools
+        if let Some(path_val) = params.get("path").and_then(|v| v.as_str()) {
+            let path = std::path::Path::new(path_val);
+            if let rockbot_security::EnforcementResult::Denied { reason } =
+                rockbot_security::enforce_path(path, restrictions)
+            {
+                return Err(ToolError::SecurityError { message: reason });
+            }
+        }
+
+        // Check executable restrictions for exec-like tools
+        if let Some(cmd_val) = params.get("command").and_then(|v| v.as_str()) {
+            // Extract the executable name (first word of the command)
+            let executable = cmd_val.split_whitespace().next().unwrap_or(cmd_val);
+            if let rockbot_security::EnforcementResult::Denied { reason } =
+                rockbot_security::enforce_executable(executable, restrictions)
+            {
+                return Err(ToolError::SecurityError { message: reason });
+            }
+        }
+
         // Execute tool
         let result = tool.execute(params, context).await;
         let execution_time_ms = start_time.elapsed().as_millis() as u64;

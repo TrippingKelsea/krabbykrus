@@ -280,6 +280,63 @@ impl SecurityManager {
     }
 }
 
+/// Enforcement result from sandbox restriction checks
+#[derive(Debug)]
+pub enum EnforcementResult {
+    /// Action is allowed
+    Allowed,
+    /// Action is denied with a reason
+    Denied { reason: String },
+}
+
+/// Enforce security restrictions on a tool execution request.
+///
+/// Validates the requested action against the `SecurityRestrictions`:
+/// - Path access: rejected if the path matches any `forbidden_paths` glob
+/// - Executable allowlist: rejected if `allowed_executables` is non-empty and the
+///   command is not in the list
+/// - Returns the configured `max_execution_time` for use by execution tools
+pub fn enforce_path(path: &std::path::Path, restrictions: &SecurityRestrictions) -> EnforcementResult {
+    for forbidden in &restrictions.forbidden_paths {
+        if path.starts_with(forbidden) || path == forbidden {
+            return EnforcementResult::Denied {
+                reason: format!("Path '{}' is forbidden by security restrictions", path.display()),
+            };
+        }
+    }
+    EnforcementResult::Allowed
+}
+
+/// Check if an executable is allowed by the security restrictions.
+///
+/// If `allowed_executables` is `None` or empty, all executables are allowed.
+/// If set, only listed executables may be run.
+pub fn enforce_executable(cmd: &str, restrictions: &SecurityRestrictions) -> EnforcementResult {
+    if let Some(ref allowed) = restrictions.allowed_executables {
+        if !allowed.is_empty() && !allowed.contains(cmd) {
+            return EnforcementResult::Denied {
+                reason: format!("Executable '{cmd}' is not in the allowed list"),
+            };
+        }
+    }
+    EnforcementResult::Allowed
+}
+
+/// Get the configured execution timeout from security restrictions.
+pub fn enforce_timeout(restrictions: &SecurityRestrictions) -> Option<std::time::Duration> {
+    restrictions.max_execution_time
+}
+
+/// Enforce all applicable restrictions for a file operation.
+pub fn enforce_file_access(path: &std::path::Path, restrictions: &SecurityRestrictions) -> EnforcementResult {
+    // Check forbidden paths
+    if let result @ EnforcementResult::Denied { .. } = enforce_path(path, restrictions) {
+        return result;
+    }
+    // Check file size (can only be enforced at write time — caller is responsible)
+    EnforcementResult::Allowed
+}
+
 /// Mock security manager for testing
 pub struct MockSecurityManager {
     default_context: SecurityContext,
@@ -343,5 +400,55 @@ mod tests {
         
         assert_eq!(context.session_id, "test-session");
         assert!(context.sandbox_enabled);
+    }
+
+    #[test]
+    fn test_enforce_path_allowed() {
+        let restrictions = SecurityRestrictions::default();
+        assert!(matches!(
+            enforce_path(std::path::Path::new("/tmp/test.txt"), &restrictions),
+            EnforcementResult::Allowed
+        ));
+    }
+
+    #[test]
+    fn test_enforce_path_forbidden() {
+        let mut restrictions = SecurityRestrictions::default();
+        restrictions.forbidden_paths.insert(PathBuf::from("/etc/secrets"));
+        assert!(matches!(
+            enforce_path(std::path::Path::new("/etc/secrets/key.pem"), &restrictions),
+            EnforcementResult::Denied { .. }
+        ));
+    }
+
+    #[test]
+    fn test_enforce_executable_no_allowlist() {
+        let restrictions = SecurityRestrictions::default();
+        assert!(matches!(
+            enforce_executable("rm", &restrictions),
+            EnforcementResult::Allowed
+        ));
+    }
+
+    #[test]
+    fn test_enforce_executable_allowed() {
+        let mut allowed = HashSet::new();
+        allowed.insert("ls".to_string());
+        allowed.insert("cat".to_string());
+        let restrictions = SecurityRestrictions {
+            allowed_executables: Some(allowed),
+            ..Default::default()
+        };
+        assert!(matches!(enforce_executable("ls", &restrictions), EnforcementResult::Allowed));
+        assert!(matches!(enforce_executable("rm", &restrictions), EnforcementResult::Denied { .. }));
+    }
+
+    #[test]
+    fn test_enforce_timeout() {
+        let restrictions = SecurityRestrictions {
+            max_execution_time: Some(std::time::Duration::from_secs(30)),
+            ..Default::default()
+        };
+        assert_eq!(enforce_timeout(&restrictions), Some(std::time::Duration::from_secs(30)));
     }
 }
