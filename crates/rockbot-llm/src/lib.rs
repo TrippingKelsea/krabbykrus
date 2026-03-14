@@ -57,6 +57,7 @@
 //!         temperature: Some(0.7),
 //!         max_tokens: Some(1000),
 //!         stream: false,
+//!         response_format: None,
 //!     };
 //!
 //!     let response = provider.chat_completion(request).await?;
@@ -167,6 +168,21 @@ pub struct ProviderCapabilities {
     pub context_window: u32,
 }
 
+/// Requested response format for structured output
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseFormat {
+    /// Default text output
+    Text,
+    /// Force JSON object output
+    JsonObject,
+    /// Force output conforming to a JSON schema
+    JsonSchema {
+        /// JSON Schema definition the output must conform to
+        schema: serde_json::Value,
+    },
+}
+
 /// Chat completion request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatCompletionRequest {
@@ -176,6 +192,9 @@ pub struct ChatCompletionRequest {
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     pub stream: bool,
+    /// Optional response format for structured output (JSON mode)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
 }
 
 /// Chat completion response
@@ -592,6 +611,7 @@ mod tests {
             temperature: Some(0.7),
             max_tokens: Some(100),
             stream: false,
+            response_format: None,
         };
 
         let response = provider.chat_completion(request).await.unwrap();
@@ -604,5 +624,46 @@ mod tests {
         let registry = LlmProviderRegistry::new().await.unwrap();
         let provider = registry.get_provider_for_model("mock-model").await.unwrap();
         assert_eq!(provider.id(), "mock");
+    }
+
+    #[test]
+    fn test_response_format_serialization() {
+        let text = ResponseFormat::Text;
+        let json = serde_json::to_string(&text).unwrap();
+        assert!(json.contains("\"type\":\"text\""));
+
+        let json_obj = ResponseFormat::JsonObject;
+        let json = serde_json::to_string(&json_obj).unwrap();
+        assert!(json.contains("\"type\":\"json_object\""));
+
+        let schema = ResponseFormat::JsonSchema {
+            schema: serde_json::json!({"type": "object", "properties": {"name": {"type": "string"}}}),
+        };
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(json.contains("\"type\":\"json_schema\""));
+        assert!(json.contains("\"schema\""));
+    }
+
+    #[test]
+    fn test_response_format_in_request() {
+        let request = ChatCompletionRequest {
+            model: "test".to_string(),
+            messages: vec![],
+            tools: None,
+            temperature: None,
+            max_tokens: None,
+            stream: false,
+            response_format: Some(ResponseFormat::JsonObject),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("json_object"));
+
+        // None should be omitted
+        let request2 = ChatCompletionRequest {
+            response_format: None,
+            ..request
+        };
+        let json2 = serde_json::to_string(&request2).unwrap();
+        assert!(!json2.contains("response_format"));
     }
 }

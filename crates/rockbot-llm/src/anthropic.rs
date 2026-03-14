@@ -184,11 +184,11 @@ impl LlmProvider for AnthropicProvider {
 
     async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
         let model = self.normalize_model(&request.model);
-        
+
         // Build the prompt from messages
         let mut system_prompt = None;
         let mut conversation = String::new();
-        
+
         for msg in &request.messages {
             match msg.role {
                 MessageRole::System => {
@@ -215,10 +215,32 @@ impl LlmProvider for AnthropicProvider {
                 }
             }
         }
-        
+
+        // Inject JSON mode hint into system prompt (Anthropic has no native json_mode)
+        if let Some(ref response_format) = request.response_format {
+            let json_hint = match response_format {
+                crate::ResponseFormat::Text => None,
+                crate::ResponseFormat::JsonObject => Some(
+                    "IMPORTANT: You MUST respond with valid JSON only. No markdown, no explanation, no text outside the JSON object.".to_string()
+                ),
+                crate::ResponseFormat::JsonSchema { schema } => Some(
+                    format!(
+                        "IMPORTANT: You MUST respond with valid JSON conforming to this schema:\n```json\n{}\n```\nNo markdown, no explanation, no text outside the JSON object.",
+                        serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string())
+                    )
+                ),
+            };
+            if let Some(hint) = json_hint {
+                system_prompt = Some(match system_prompt {
+                    Some(existing) => format!("{existing}\n\n{hint}"),
+                    None => hint,
+                });
+            }
+        }
+
         // Build options
         let mut options_builder = ClaudeAgentOptions::builder();
-        
+
         if let Some(system) = system_prompt {
             options_builder = options_builder.system_prompt(system);
         }

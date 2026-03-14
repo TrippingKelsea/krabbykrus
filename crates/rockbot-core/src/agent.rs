@@ -939,6 +939,7 @@ impl Agent {
             temperature: Some(0.2),
             max_tokens: Some(1000),
             stream: false,
+            response_format: None,
         };
 
         let summary_text = match self.llm_provider.chat_completion(summary_request).await {
@@ -1081,6 +1082,7 @@ impl Agent {
             temperature: Some(self.config.temperature.unwrap_or(0.3)),
             max_tokens: Some(self.config.max_tokens.unwrap_or(16000)),
             stream,
+            response_format: None,
         })
     }
     
@@ -2172,6 +2174,7 @@ mod tests {
             temperature: Some(0.3),
             max_tokens: Some(1000),
             stream: true,
+            response_format: None,
         };
         assert!(req.stream);
 

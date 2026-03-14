@@ -30,6 +30,16 @@ struct OpenAiRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<OpenAiResponseFormat>,
+}
+
+/// OpenAI response_format field
+#[derive(Debug, Serialize)]
+struct OpenAiResponseFormat {
+    r#type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    json_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -268,6 +278,21 @@ impl LlmProvider for OpenAiProvider {
                 .collect()
         });
 
+        let response_format = request.response_format.as_ref().map(|rf| match rf {
+            crate::ResponseFormat::Text => OpenAiResponseFormat {
+                r#type: "text".to_string(),
+                json_schema: None,
+            },
+            crate::ResponseFormat::JsonObject => OpenAiResponseFormat {
+                r#type: "json_object".to_string(),
+                json_schema: None,
+            },
+            crate::ResponseFormat::JsonSchema { schema } => OpenAiResponseFormat {
+                r#type: "json_schema".to_string(),
+                json_schema: Some(schema.clone()),
+            },
+        });
+
         let api_request = OpenAiRequest {
             model: model.clone(),
             messages,
@@ -275,6 +300,7 @@ impl LlmProvider for OpenAiProvider {
             temperature: request.temperature,
             max_tokens: request.max_tokens,
             stream: if request.stream { Some(true) } else { None },
+            response_format,
         };
 
         let response = self
@@ -381,6 +407,7 @@ impl LlmProvider for OpenAiProvider {
             temperature: request.temperature,
             max_tokens: request.max_tokens,
             stream: Some(true),
+            response_format: None,
         };
 
         let response = self

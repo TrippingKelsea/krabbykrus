@@ -873,7 +873,30 @@ impl LlmProvider for BedrockProvider {
         request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse> {
         let model = self.normalize_model(&request.model);
-        let (system, messages) = self.convert_messages(&request.messages);
+        let (mut system, messages) = self.convert_messages(&request.messages);
+
+        // Inject JSON mode hint into system blocks (Bedrock Converse has no native json_mode)
+        if let Some(ref response_format) = request.response_format {
+            let json_hint = match response_format {
+                crate::ResponseFormat::Text => None,
+                crate::ResponseFormat::JsonObject => Some(
+                    "IMPORTANT: You MUST respond with valid JSON only. No markdown, no explanation, no text outside the JSON object.".to_string()
+                ),
+                crate::ResponseFormat::JsonSchema { schema } => Some(
+                    format!(
+                        "IMPORTANT: You MUST respond with valid JSON conforming to this schema:\n{}\nNo markdown, no explanation, no text outside the JSON object.",
+                        serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string())
+                    )
+                ),
+            };
+            if let Some(hint) = json_hint {
+                let hint_block = SystemContentBlock::Text(hint);
+                match &mut system {
+                    Some(blocks) => blocks.push(hint_block),
+                    None => system = Some(vec![hint_block]),
+                }
+            }
+        }
 
         let mut req = self.client.converse().model_id(&model);
 
