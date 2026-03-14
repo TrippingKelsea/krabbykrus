@@ -14,6 +14,9 @@
 //! - [`skills`] - Skill discovery, loading, and context injection
 //! - [`cron`] - Scheduled job execution (SPEC Section 13)
 //! - [`web_ui`] - Embedded web dashboard
+//! - [`metrics`] - Observability metrics via the `metrics` crate facade
+//! - [`hooks`] - Hook/middleware system for agent lifecycle events
+//! - [`a2a`] - A2A (Agent-to-Agent) protocol implementation
 
 pub mod config;
 pub mod credential_bridge;
@@ -31,7 +34,7 @@ pub mod hooks;
 pub mod a2a;
 
 pub use config::{
-    Config, GatewayConfig, AgentConfig, ProvidersConfig, 
+    Config, GatewayConfig, AgentConfig, ProvidersConfig, McpServerEntry,
     AnthropicProviderConfig, OpenAiProviderConfig, BedrockProviderConfig, OllamaProviderConfig
 };
 pub use credential_bridge::VaultCredentialAccessor;
@@ -43,3 +46,5 @@ pub use message::{Message, MessageContent, MessageMetadata};
 pub use routing::{RoutingEngine, ResolvedAgentRoute, SessionScope, MatchedByType};
 pub use skills::{SkillManager, Skill, SkillMetadata, SkillInvocationPolicy};
 pub use cron::{CronJob, CronSchedule, CronPayload, CronScheduler, CronExecutor};
+pub use hooks::{Hook, HookEvent, HookResult, HookRegistry};
+pub use gateway::GatewayInvoker;
