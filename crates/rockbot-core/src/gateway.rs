@@ -548,6 +548,9 @@ impl Gateway {
             (&Method::GET, "/health") | (&Method::GET, "/api/status") => {
                 self.handle_health_check().await
             }
+            (&Method::GET, "/api/metrics") => {
+                self.handle_metrics().await
+            }
             (&Method::GET, "/api/agents") => {
                 self.handle_list_agents().await
             }
@@ -2028,6 +2031,29 @@ impl Gateway {
             .unwrap())
     }
     
+    /// `GET /api/metrics` — return basic runtime metrics as JSON.
+    async fn handle_metrics(
+        &self,
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        let agents = self.agents.read().await;
+        let agent_count = agents.len() as u64;
+        drop(agents);
+
+        crate::metrics::set_active_agents(agent_count);
+
+        // Return a simple JSON snapshot of key counts
+        let body = serde_json::to_string(&serde_json::json!({
+            "active_agents": agent_count,
+            "note": "Install a metrics recorder (e.g. metrics-exporter-prometheus) for full Prometheus-format metrics at this endpoint."
+        })).unwrap_or_default();
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(GatewayBody::Left(Full::new(body.into())))
+            .unwrap())
+    }
+
     /// Handle list agents endpoint — returns full agent info by merging
     /// active agents, pending agents, and config-declared agents.
     async fn handle_list_agents(

@@ -26,6 +26,7 @@ pub mod session;
 pub mod skills;
 pub mod message;
 pub mod web_ui;
+pub mod metrics;
 
 pub use config::{
     Config, GatewayConfig, AgentConfig, ProvidersConfig, 

@@ -433,6 +433,17 @@ impl Agent {
         let processing_time_ms = start_time.elapsed().as_millis() as u64;
         self.update_stats(token_usage.total_tokens, processing_time_ms).await;
 
+        // Record observability metrics
+        crate::metrics::record_agent_message(&self.config.id);
+        let model_label = self.config.model.as_deref().unwrap_or("default");
+        crate::metrics::record_llm_request(
+            &self.config.id,
+            model_label,
+            start_time.elapsed(),
+            token_usage.prompt_tokens as u64,
+            token_usage.completion_tokens as u64,
+        );
+
         // Clean up processing context
         {
             let mut state = self.state.write().await;
@@ -1729,6 +1740,7 @@ The user wants me to explore the codebase. I should start by listing the directo
                         delegation_depth: 0,
                     };
                     
+                    let tool_start = std::time::Instant::now();
                     match self.tool_registry
                         .execute_tool(
                             &tool_call.function.name,
@@ -1738,6 +1750,11 @@ The user wants me to explore the codebase. I should start by listing the directo
                         .await
                     {
                         Ok(result) => {
+                            crate::metrics::record_tool_call(
+                                &tool_call.function.name,
+                                result.success,
+                                tool_start.elapsed(),
+                            );
                             tool_results.push(result.clone());
 
                             // Create tool result message for conversation

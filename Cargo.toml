@@ -93,6 +93,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Async traits
 async-trait = "0.1"
 
+# Metrics
+metrics = "0.24"
+
 # Shared dev dependencies
 [workspace.dependencies.tempfile]
 version = "3.0"
