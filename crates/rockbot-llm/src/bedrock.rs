@@ -55,7 +55,7 @@ use aws_sdk_bedrockruntime::{
         Message as BedrockMessage, SystemContentBlock,
         Tool, ToolConfiguration, ToolInputSchema, ToolSpecification,
         ToolResultBlock, ToolResultContentBlock, ToolUseBlock,
-        ContentBlockDelta, ConverseStreamOutput,
+        ContentBlockDelta, ContentBlockStart, ConverseStreamOutput,
     },
 };
 
@@ -1095,10 +1095,55 @@ impl LlmProvider for BedrockProvider {
             let mut has_text_content = false;
             let mut reasoning_buffer = String::new();
 
+            // Track in-progress tool use blocks from ContentBlockStart/Delta
+            // Each entry: (content_block_index, tool_use_id, tool_name, accumulated_input)
+            let mut pending_tool_uses: Vec<(i32, String, String, String)> = Vec::new();
+            let mut tool_call_index: usize = 0;
+
             loop {
                 match receiver.recv().await {
                     Ok(Some(event)) => {
                         match event {
+                            ConverseStreamOutput::ContentBlockStart(start_event) => {
+                                if let Some(ContentBlockStart::ToolUse(tool_start)) = start_event.start() {
+                                    pending_tool_uses.push((
+                                        start_event.content_block_index(),
+                                        tool_start.tool_use_id().to_string(),
+                                        tool_start.name().to_string(),
+                                        String::new(),
+                                    ));
+                                    // Emit initial tool call chunk with name and id
+                                    let tc_idx = tool_call_index;
+                                    #[allow(clippy::unwrap_used)]
+                                    let created_ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_secs();
+                                    yield Ok(StreamingChunk {
+                                        id: format!("stream-{}", uuid::Uuid::new_v4()),
+                                        object: "chat.completion.chunk".to_string(),
+                                        created: created_ts,
+                                        model: model_clone.clone(),
+                                        choices: vec![StreamingChoice {
+                                            index: 0,
+                                            delta: StreamingDelta {
+                                                role: None,
+                                                content: None,
+                                                tool_calls: Some(vec![ToolCall {
+                                                    id: tool_start.tool_use_id().to_string(),
+                                                    r#type: "function".to_string(),
+                                                    function: FunctionCall {
+                                                        name: tool_start.name().to_string(),
+                                                        arguments: String::new(),
+                                                    },
+                                                }]),
+                                            },
+                                            finish_reason: None,
+                                        }],
+                                    });
+                                    tool_call_index = tc_idx + 1;
+                                }
+                            }
                             ConverseStreamOutput::ContentBlockDelta(delta_event) => {
                                 match delta_event.delta() {
                                     Some(ContentBlockDelta::Text(text)) => {
@@ -1123,6 +1168,43 @@ impl LlmProvider for BedrockProvider {
                                                 finish_reason: None,
                                             }],
                                         });
+                                    }
+                                    Some(ContentBlockDelta::ToolUse(tool_delta)) => {
+                                        let cb_index = delta_event.content_block_index();
+                                        // Find the pending tool use by block index and append input
+                                        if let Some(pending) = pending_tool_uses.iter_mut()
+                                            .find(|(idx, _, _, _)| *idx == cb_index)
+                                        {
+                                            pending.3.push_str(tool_delta.input());
+                                            // Emit argument fragment for streaming merge
+                                            #[allow(clippy::unwrap_used)]
+                                            let created_ts = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap()
+                                                .as_secs();
+                                            yield Ok(StreamingChunk {
+                                                id: format!("stream-{}", uuid::Uuid::new_v4()),
+                                                object: "chat.completion.chunk".to_string(),
+                                                created: created_ts,
+                                                model: model_clone.clone(),
+                                                choices: vec![StreamingChoice {
+                                                    index: 0,
+                                                    delta: StreamingDelta {
+                                                        role: None,
+                                                        content: None,
+                                                        tool_calls: Some(vec![ToolCall {
+                                                            id: pending.1.clone(),
+                                                            r#type: "function".to_string(),
+                                                            function: FunctionCall {
+                                                                name: String::new(),
+                                                                arguments: tool_delta.input().to_string(),
+                                                            },
+                                                        }]),
+                                                    },
+                                                    finish_reason: None,
+                                                }],
+                                            });
+                                        }
                                     }
                                     Some(ContentBlockDelta::ReasoningContent(rc)) => {
                                         // Buffer reasoning text; emit as fallback if no
@@ -1163,6 +1245,11 @@ impl LlmProvider for BedrockProvider {
                                     });
                                 }
 
+                                let finish = if pending_tool_uses.is_empty() {
+                                    "stop"
+                                } else {
+                                    "tool_use"
+                                };
                                 #[allow(clippy::unwrap_used)]
                                 let created_ts = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
@@ -1180,7 +1267,7 @@ impl LlmProvider for BedrockProvider {
                                             content: None,
                                             tool_calls: None,
                                         },
-                                        finish_reason: Some("stop".to_string()),
+                                        finish_reason: Some(finish.to_string()),
                                     }],
                                 });
                                 break;

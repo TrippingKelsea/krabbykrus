@@ -6,6 +6,8 @@ use anyhow::Result;
 use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
+    style::{Color, Style},
+    widgets::{Block, Borders},
     Frame,
 };
 use std::path::PathBuf;
@@ -2947,9 +2949,15 @@ impl App {
         render_sidebar(frame, top[0], &self.state, &self.effect_state);
 
         let cards_area = top[2];
-        let detail_area = rows[1];
 
-        // Content: page cards in top strip, detail in main area (borderless)
+        // Render a top border on the main content pane for visual separation
+        let border_block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(Color::DarkGray));
+        let detail_area = border_block.inner(rows[1]);
+        frame.render_widget(border_block, rows[1]);
+
+        // Content: page cards in top strip, detail in main area
         match self.state.menu_item {
             MenuItem::Dashboard => render_dashboard(frame, cards_area, detail_area, &self.state, &self.effect_state),
             MenuItem::Credentials => render_credentials(frame, cards_area, detail_area, &self.state, self.state.credentials_tab, &self.effect_state),
