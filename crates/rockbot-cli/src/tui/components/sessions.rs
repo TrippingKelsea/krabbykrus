@@ -416,19 +416,11 @@ fn render_chat_messages(
                 Span::styled(duration, Style::default().fg(Color::DarkGray)),
                 Span::styled(expand_hint, Style::default().fg(Color::DarkGray)),
             ]));
-            if !tc.result.is_empty() {
-                let max_preview = if tc.expanded { usize::MAX } else { 4 };
-                for result_line in tc.result.lines().take(max_preview) {
+            if tc.expanded && !tc.result.is_empty() {
+                for result_line in tc.result.lines() {
                     lines.push(Line::from(Span::styled(
                         format!("    {result_line}"),
                         Style::default().fg(Color::DarkGray),
-                    )));
-                }
-                let line_count = tc.result.lines().count();
-                if !tc.expanded && line_count > 4 {
-                    lines.push(Line::from(Span::styled(
-                        format!("    ... ({} more lines)", line_count - 4),
-                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
                     )));
                 }
             }
