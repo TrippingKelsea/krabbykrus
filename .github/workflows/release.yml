@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -12,8 +12,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Gate: only release from main
+  check-branch:
+    name: Verify main branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Ensure tag is on main
+        run: |
+          if ! git branch -r --contains ${{ github.sha }} | grep -q 'origin/main'; then
+            echo "::error::Release tags must be on the main branch"
+            exit 1
+          fi
+
   build-release:
     name: Build (${{ matrix.target }})
+    needs: check-branch
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -76,10 +92,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: Extract version
-        id: version
-        run: echo "version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
 
       - name: Create release
         uses: softprops/action-gh-release@v2

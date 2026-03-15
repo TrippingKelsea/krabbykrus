@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+    tags:
+      - "pv*"
+      - "v*"
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,7 +18,7 @@ jobs:
     strategy:
       matrix:
         features:
-          - ""  # default features
+          - "" # default features
           - "--no-default-features"
           - "--features all-providers,all-channels,all-tools"
     steps:

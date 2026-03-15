@@ -3,10 +3,9 @@ name: Build
 on:
   push:
     branches: [main]
-    paths:
-      - 'Cargo.toml'
-      - 'crates/**'
-      - '.github/workflows/build.yml'
+    tags:
+      - "pv*"
+      - "v*"
 
 env:
   CARGO_TERM_COLOR: always
