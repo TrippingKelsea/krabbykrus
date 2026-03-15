@@ -378,18 +378,50 @@ pub enum MigrateCommands {
 
 /// Main CLI entry point
 pub async fn run(cli: Cli) -> Result<()> {
-    // Initialize logging based on verbosity
+    // Initialize logging based on verbosity and command
     let log_level = match cli.verbose {
         0 => "info",
         1 => "debug",
         _ => "trace",
     };
-    
+
+    let is_tui = matches!(cli.command, Commands::Tui { .. });
+
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(format!("rockbot={log_level}")));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .init();
+
+    if is_tui {
+        // TUI mode: write logs to a file so they don't corrupt the terminal
+        let log_dir = dirs::state_dir()
+            .or_else(dirs::cache_dir)
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/state"))
+            .join("rockbot")
+            .join("logs");
+        let _ = std::fs::create_dir_all(&log_dir);
+
+        // Clean up log files older than 7 days
+        sweep_old_logs(&log_dir, 7);
+
+        let log_file = log_dir.join(format!(
+            "tui-{}.log",
+            chrono::Local::now().format("%Y-%m-%d")
+        ));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_file)?;
+
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::sync::Mutex::new(file))
+            .with_ansi(false)
+            .init();
+    } else {
+        // CLI mode: write logs to stderr as usual
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .init();
+    }
     
     // Load configuration
     let config_path = cli.config.unwrap_or_else(|| {
@@ -446,8 +478,32 @@ pub async fn load_config(path: &PathBuf) -> Result<Config> {
     if !path.exists() {
         anyhow::bail!("Configuration file not found: {}", path.display());
     }
-    
+
     let config = Config::from_file(path).await?;
     info!("Loaded configuration from {}", path.display());
     Ok(config)
+}
+
+/// Remove log files older than `max_age_days` from the given directory.
+fn sweep_old_logs(log_dir: &std::path::Path, max_age_days: u64) {
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(max_age_days * 86400);
+
+    let entries = match std::fs::read_dir(log_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("log") {
+            continue;
+        }
+        if let Ok(meta) = path.metadata() {
+            let modified = meta.modified().unwrap_or(std::time::SystemTime::now());
+            if modified < cutoff {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
 }
