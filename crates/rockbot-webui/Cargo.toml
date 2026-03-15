@@ -1,0 +1,9 @@
+[package]
+name = "rockbot-webui"
+version.workspace = true
+edition = "2021"
+description = "Embedded web dashboard for RockBot gateway"
+license = "MIT"
+
+[lints]
+workspace = true
