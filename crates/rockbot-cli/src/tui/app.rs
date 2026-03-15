@@ -3667,7 +3667,7 @@ async fn send_chat_message(
     }
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
+        .timeout(Duration::from_secs(60))
         .build()?;
 
     let response = client
@@ -3716,7 +3716,7 @@ async fn send_agent_message(
     });
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(600)) // Agent tool loops can take several minutes
+        .timeout(Duration::from_secs(90)) // HTTP fallback; primary path uses streaming WS
         .build()?;
 
     let url = format!("http://127.0.0.1:18080/api/agents/{agent_id}/message");
