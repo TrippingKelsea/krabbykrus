@@ -2207,13 +2207,36 @@ impl AppState {
 
             Message::ChatResponse(session_key, content) => {
                 let chat = self.session_chats.entry(session_key).or_default();
-                chat.messages.push(ChatMessage::assistant(content));
+                // If streaming already created an assistant message, finalize it
+                // instead of creating a duplicate
+                let has_streamed = chat.messages.last()
+                    .is_some_and(|m| m.role == ChatRole::Assistant && chat.loading);
+                if has_streamed {
+                    if let Some(last) = chat.messages.last_mut() {
+                        if content.len() > last.content.len() {
+                            last.content = content;
+                        }
+                    }
+                } else {
+                    chat.messages.push(ChatMessage::assistant(content));
+                }
                 chat.loading = false;
                 chat.thinking = ThinkingState::default();
             }
             Message::ChatAgentResponse(session_key, content, tool_calls) => {
                 let chat = self.session_chats.entry(session_key).or_default();
-                chat.messages.push(ChatMessage::assistant_with_tools(content, tool_calls));
+                let has_streamed = chat.messages.last()
+                    .is_some_and(|m| m.role == ChatRole::Assistant && chat.loading);
+                if has_streamed {
+                    if let Some(last) = chat.messages.last_mut() {
+                        if content.len() > last.content.len() {
+                            last.content = content;
+                        }
+                        last.tool_calls = tool_calls;
+                    }
+                } else {
+                    chat.messages.push(ChatMessage::assistant_with_tools(content, tool_calls));
+                }
                 chat.loading = false;
                 chat.thinking = ThinkingState::default();
             }

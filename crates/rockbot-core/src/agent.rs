@@ -1985,6 +1985,11 @@ The user wants me to explore the codebase. I should start by listing the directo
                 } else {
                     Some(accumulated_tool_calls)
                 };
+                // Estimate tokens since streaming chunks don't carry usage data
+                let est_completion = crate::tokenizer::count_tokens(&accumulated_text) as u64;
+                let est_prompt = request.messages.iter()
+                    .map(|m| crate::tokenizer::count_tokens(&m.content) as u64)
+                    .sum::<u64>();
                 return Ok(ChatCompletionResponse {
                     id: if response_id.is_empty() { format!("stream-{}", uuid::Uuid::new_v4()) } else { response_id },
                     object: "chat.completion".to_string(),
@@ -2005,9 +2010,9 @@ The user wants me to explore the codebase. I should start by listing the directo
                         finish_reason,
                     }],
                     usage: rockbot_llm::Usage {
-                        prompt_tokens: 0,
-                        completion_tokens: 0,
-                        total_tokens: 0,
+                        prompt_tokens: est_prompt,
+                        completion_tokens: est_completion,
+                        total_tokens: est_prompt + est_completion,
                     },
                 });
             }
@@ -2170,26 +2175,14 @@ The user wants me to explore the codebase. I should start by listing the directo
                 .and_then(|c| c.message.tool_calls.as_ref())
                 .is_some_and(|tc| !tc.is_empty());
 
-            // Stream the model's text content to the client in real time.
-            // This shows reasoning, analysis, and chain-of-thought as the model works.
+            // Send token usage update after each LLM call.
+            // Text content was already streamed via TextDelta events during
+            // call_llm_streaming_with_retry, so we don't re-send it here.
             if let Some(ref tx) = progress_tx {
-                let response_text = current_response.choices
-                    .first()
-                    .map(|c| c.message.content.as_str())
-                    .unwrap_or("");
-                if !response_text.trim().is_empty() {
-                    let display_text = Self::strip_think_blocks(response_text);
-                    if !display_text.is_empty() {
-                        let _ = tx.send(AgentProgressEvent::TextDelta {
-                            text: display_text,
-                        });
-                    }
-                }
-                // Send token usage after each LLM call
                 let _ = tx.send(AgentProgressEvent::TokenUsage {
-                    prompt_tokens: current_response.usage.prompt_tokens,
-                    completion_tokens: current_response.usage.completion_tokens,
-                    total_tokens: current_response.usage.total_tokens,
+                    prompt_tokens: cumulative_token_usage.prompt_tokens,
+                    completion_tokens: cumulative_token_usage.completion_tokens,
+                    total_tokens: cumulative_token_usage.total_tokens,
                     cumulative_total: cumulative_token_usage.total_tokens,
                 });
             }
