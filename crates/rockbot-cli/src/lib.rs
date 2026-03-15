@@ -457,6 +457,10 @@ pub enum MigrateCommands {
 
 /// Main CLI entry point
 pub async fn run(cli: Cli) -> Result<()> {
+    // Install the rustls crypto provider once, before any TLS operations
+    // (gateway, TUI https requests, cert commands, etc.)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // Initialize logging based on verbosity and command
     let log_level = match cli.verbose {
         0 => "info",

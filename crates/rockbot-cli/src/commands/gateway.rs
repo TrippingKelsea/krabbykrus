@@ -32,9 +32,6 @@ pub async fn run(command: &GatewayCommands, config_path: &PathBuf) -> Result<()>
 
 /// Run the gateway server in foreground
 async fn run_server(config_path: &PathBuf) -> Result<()> {
-    // Install the rustls crypto provider before any TLS operations
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
     // Load configuration
     let config = Config::from_file(config_path).await?;
     
