@@ -41,6 +41,8 @@ pub mod sandbox;
 pub mod telemetry;
 pub mod tokenizer;
 pub mod orchestration;
+#[cfg(feature = "remote-exec")]
+pub mod remote_exec;
 
 pub use config::{
     Config, GatewayConfig, AgentConfig, ProvidersConfig, McpServerEntry,

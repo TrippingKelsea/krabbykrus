@@ -1,0 +1,77 @@
+#!/bin/sh
+# pre-commit hook: increment patch version in [workspace.package] section of Cargo.toml
+
+CARGO_TOML="$(git rev-parse --show-toplevel)/Cargo.toml"
+
+# Extract the current version from the [workspace.package] section only.
+# Strategy: read the file, find [workspace.package], then grab the version line
+# that immediately follows within that section (before the next section header).
+current_version=$(awk '
+    /^\[workspace\.package\]/ { in_section=1; next }
+    in_section && /^\[/ { in_section=0 }
+    in_section && /^version[[:space:]]*=/ {
+        match($0, /"([0-9]+\.[0-9]+\.[0-9]+)"/, arr)
+        print arr[1]
+        exit
+    }
+' "$CARGO_TOML")
+
+if [ -z "$current_version" ]; then
+    echo "pre-commit: could not find version in [workspace.package] section of Cargo.toml" >&2
+    exit 1
+fi
+
+# Split version into major, minor, patch
+major=$(printf '%s' "$current_version" | cut -d. -f1)
+minor=$(printf '%s' "$current_version" | cut -d. -f2)
+patch=$(printf '%s' "$current_version" | cut -d. -f3)
+
+# Increment patch
+new_patch=$((patch + 1))
+new_version="${major}.${minor}.${new_patch}"
+
+# Check if Cargo.toml is already staged with the new version (no-op guard).
+# If the staged version of Cargo.toml already has the bumped version, skip.
+staged_version=$(git show :Cargo.toml 2>/dev/null | awk '
+    /^\[workspace\.package\]/ { in_section=1; next }
+    in_section && /^\[/ { in_section=0 }
+    in_section && /^version[[:space:]]*=/ {
+        match($0, /"([0-9]+\.[0-9]+\.[0-9]+)"/, arr)
+        print arr[1]
+        exit
+    }
+')
+
+if [ "$staged_version" = "$new_version" ]; then
+    # Already bumped in the staged index; nothing to do.
+    exit 0
+fi
+
+# Rewrite Cargo.toml in place using a temp file (portable; no sed -i).
+# Only replace the version line inside [workspace.package], leaving all
+# other version lines (workspace.dependencies, crate Cargo.tomls, etc.) untouched.
+tmp_file="${CARGO_TOML}.pre-commit-tmp"
+
+awk -v old="\"${current_version}\"" -v new="\"${new_version}\"" '
+    /^\[workspace\.package\]/ { in_section=1; print; next }
+    in_section && /^\[/ { in_section=0 }
+    in_section && /^version[[:space:]]*=/ && !replaced {
+        sub(old, new)
+        replaced=1
+    }
+    { print }
+' "$CARGO_TOML" > "$tmp_file"
+
+# Verify the temp file looks sane before clobbering the original.
+if [ ! -s "$tmp_file" ]; then
+    echo "pre-commit: version bump produced an empty file; aborting" >&2
+    rm -f "$tmp_file"
+    exit 1
+fi
+
+cp "$tmp_file" "$CARGO_TOML"
+rm -f "$tmp_file"
+
+git add "$CARGO_TOML"
+
+echo "pre-commit: version bumped ${current_version} -> ${new_version}"

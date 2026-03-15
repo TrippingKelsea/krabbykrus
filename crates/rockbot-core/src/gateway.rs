@@ -7,6 +7,32 @@ use crate::agent::{Agent, AgentResponse};
 use crate::config::{Config, CredentialsConfig, GatewayConfig};
 use rockbot_credentials::{CredentialManager, MasterKey, generate_salt};
 
+/// Simple base64 encoding (using standard alphabet)
+#[cfg(feature = "remote-exec")]
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        output.push(ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
+        output.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(ALPHABET[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(ALPHABET[(triple & 0x3F) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+    output
+}
+
 /// Simple base64 decoding (using standard alphabet)
 fn base64_decode(input: &str) -> std::result::Result<Vec<u8>, &'static str> {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -165,6 +191,12 @@ pub struct Gateway {
     /// Embedded overseer for agent behavior monitoring
     #[cfg(feature = "overseer")]
     overseer: Option<Arc<rockbot_overseer::Overseer>>,
+    /// Remote executor registry for Noise-encrypted tool dispatch
+    #[cfg(feature = "remote-exec")]
+    remote_exec_registry: Arc<crate::remote_exec::RemoteExecutorRegistry>,
+    /// Noise Protocol static keypair (gateway side)
+    #[cfg(feature = "remote-exec")]
+    noise_keypair: Arc<snow::Keypair>,
     /// Shutdown broadcast channel
     shutdown_tx: broadcast::Sender<()>,
 }
@@ -235,6 +267,32 @@ enum WsMessageType {
         success: bool,
         error: Option<String>,
         output: Option<String>,
+    },
+    /// Noise Protocol handshake message from the client.
+    #[serde(rename = "noise_handshake")]
+    NoiseHandshake {
+        /// Base64-encoded handshake payload.
+        payload: String,
+        /// Handshake step (1 or 3 for the XX pattern).
+        step: u8,
+    },
+    /// Client advertises tool execution capabilities after Noise handshake.
+    #[serde(rename = "remote_capabilities")]
+    RemoteCapabilities {
+        /// Capability categories this client supports.
+        capabilities: Vec<String>,
+        /// Client type (e.g. "tui", "browser").
+        client_type: String,
+        /// Working directory on the client.
+        working_dir: Option<String>,
+    },
+    /// Tool execution result from a remote client.
+    #[serde(rename = "remote_tool_response")]
+    RemoteToolResponse {
+        request_id: String,
+        success: bool,
+        output: String,
+        execution_time_ms: u64,
     },
 }
 
@@ -316,6 +374,30 @@ enum WsResponseType {
         job_name: String,
         agent_id: Option<String>,
         payload: crate::cron::CronPayload,
+    },
+    /// Noise Protocol handshake response from the server.
+    #[serde(rename = "noise_handshake")]
+    NoiseHandshake {
+        /// Base64-encoded handshake payload.
+        payload: String,
+        /// Handshake step (2 for the XX pattern).
+        step: u8,
+    },
+    /// Server acknowledges remote execution capabilities.
+    #[serde(rename = "remote_capabilities_ack")]
+    RemoteCapabilitiesAck {
+        accepted: bool,
+        message: String,
+    },
+    /// Tool execution request dispatched to the remote client.
+    #[serde(rename = "remote_tool_request")]
+    RemoteToolRequest {
+        request_id: String,
+        tool_name: String,
+        params: String,
+        agent_id: String,
+        session_id: String,
+        workspace_path: String,
     },
 }
 
@@ -497,6 +579,11 @@ impl Gateway {
             },
             #[cfg(feature = "overseer")]
             overseer,
+            #[cfg(feature = "remote-exec")]
+            remote_exec_registry: Arc::new(crate::remote_exec::RemoteExecutorRegistry::new()),
+            #[cfg(feature = "remote-exec")]
+            noise_keypair: Arc::new(crate::remote_exec::generate_keypair()
+                .expect("Noise keypair generation should not fail")),
             shutdown_tx,
         })
     }
@@ -2756,6 +2843,10 @@ impl Gateway {
             let mut conns = self.ws_connections.write().await;
             conns.remove(&conn_id);
         }
+        #[cfg(feature = "remote-exec")]
+        {
+            self.remote_exec_registry.remove(&conn_id).await;
+        }
         writer_handle.abort();
         info!("WebSocket disconnected: {} (remaining: {})", conn_id,
               self.ws_connections.read().await.len());
@@ -2838,6 +2929,52 @@ impl Gateway {
                 // State is already updated by the CronExecutor before dispatch;
                 // if we want to record the remote result, we'd update the job state here.
                 // For now just log it — the scheduler handles its own state tracking.
+            }
+            #[cfg(feature = "remote-exec")]
+            WsMessageType::NoiseHandshake { payload, step } => {
+                self.handle_noise_handshake(conn_id, outbound_tx, &payload, step).await;
+            }
+            #[cfg(not(feature = "remote-exec"))]
+            WsMessageType::NoiseHandshake { .. } => {
+                let resp = WsResponseType::Error {
+                    message: "Remote execution not enabled on this gateway".to_string(),
+                };
+                let _ = outbound_tx.send(WsMessage::Text(
+                    serde_json::to_string(&resp).unwrap_or_default(),
+                ));
+            }
+            WsMessageType::RemoteCapabilities { capabilities, client_type, working_dir } => {
+                #[cfg(feature = "remote-exec")]
+                {
+                    self.handle_remote_capabilities(conn_id, outbound_tx, capabilities, client_type, working_dir).await;
+                }
+                #[cfg(not(feature = "remote-exec"))]
+                {
+                    let _ = (capabilities, client_type, working_dir);
+                    let resp = WsResponseType::Error {
+                        message: "Remote execution not enabled on this gateway".to_string(),
+                    };
+                    let _ = outbound_tx.send(WsMessage::Text(
+                        serde_json::to_string(&resp).unwrap_or_default(),
+                    ));
+                }
+            }
+            WsMessageType::RemoteToolResponse { request_id, success, output, execution_time_ms } => {
+                #[cfg(feature = "remote-exec")]
+                {
+                    let response = crate::remote_exec::RemoteToolResponse {
+                        request_id,
+                        success,
+                        output,
+                        execution_time_ms,
+                    };
+                    self.remote_exec_registry.deliver_response(response).await;
+                }
+                #[cfg(not(feature = "remote-exec"))]
+                {
+                    let _ = (request_id, success, output, execution_time_ms);
+                    warn!("Received remote tool response but remote-exec feature is disabled");
+                }
             }
         }
     }
@@ -3122,6 +3259,274 @@ impl Gateway {
         }
     }
     
+    /// Handle a Noise Protocol handshake message from a client.
+    ///
+    /// The XX pattern has 3 messages: client->server (step 1), server->client (step 2),
+    /// client->server (step 3). After step 3 both sides have an encrypted transport.
+    #[cfg(feature = "remote-exec")]
+    async fn handle_noise_handshake(
+        &self,
+        conn_id: &str,
+        outbound_tx: &tokio::sync::mpsc::UnboundedSender<WsMessage>,
+        payload_b64: &str,
+        step: u8,
+    ) {
+        use crate::remote_exec;
+
+        // Decode the incoming handshake payload
+        let payload = match base64_decode(payload_b64) {
+            Ok(p) => p,
+            Err(e) => {
+                let resp = WsResponseType::Error {
+                    message: format!("Invalid base64 in Noise handshake: {e}"),
+                };
+                let _ = outbound_tx.send(WsMessage::Text(
+                    serde_json::to_string(&resp).unwrap_or_default(),
+                ));
+                return;
+            }
+        };
+
+        // For step 1: create a new responder, read msg 1, write msg 2
+        // For step 3: read msg 3, complete handshake
+        // We store in-progress handshake states keyed by conn_id in a thread-local-like map.
+        // For simplicity, we use a static lazy map guarded by a mutex.
+        use std::sync::OnceLock;
+        static HANDSHAKE_STATES: OnceLock<tokio::sync::Mutex<HashMap<String, snow::HandshakeState>>> = OnceLock::new();
+        let states = HANDSHAKE_STATES.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()));
+
+        let mut states_lock = states.lock().await;
+
+        match step {
+            1 => {
+                // Create a new responder and process the first message
+                let mut responder = match remote_exec::create_responder(&self.noise_keypair) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let resp = WsResponseType::Error {
+                            message: format!("Failed to create Noise responder: {e}"),
+                        };
+                        let _ = outbound_tx.send(WsMessage::Text(
+                            serde_json::to_string(&resp).unwrap_or_default(),
+                        ));
+                        return;
+                    }
+                };
+
+                let mut buf = vec![0u8; 65535];
+                if let Err(e) = responder.read_message(&payload, &mut buf) {
+                    let resp = WsResponseType::Error {
+                        message: format!("Noise handshake step 1 failed: {e}"),
+                    };
+                    let _ = outbound_tx.send(WsMessage::Text(
+                        serde_json::to_string(&resp).unwrap_or_default(),
+                    ));
+                    return;
+                }
+
+                // Write message 2 (server -> client)
+                match responder.write_message(&[], &mut buf) {
+                    Ok(len) => {
+                        let response_b64 = base64_encode(&buf[..len]);
+                        let resp = WsResponseType::NoiseHandshake {
+                            payload: response_b64,
+                            step: 2,
+                        };
+                        let _ = outbound_tx.send(WsMessage::Text(
+                            serde_json::to_string(&resp).unwrap_or_default(),
+                        ));
+                        // Store the in-progress handshake
+                        states_lock.insert(conn_id.to_string(), responder);
+                        info!("Noise handshake step 1+2 complete for {conn_id}");
+                    }
+                    Err(e) => {
+                        let resp = WsResponseType::Error {
+                            message: format!("Noise handshake step 2 write failed: {e}"),
+                        };
+                        let _ = outbound_tx.send(WsMessage::Text(
+                            serde_json::to_string(&resp).unwrap_or_default(),
+                        ));
+                    }
+                }
+            }
+            3 => {
+                // Read the final handshake message
+                if let Some(mut responder) = states_lock.remove(conn_id) {
+                    let mut buf = vec![0u8; 65535];
+                    if let Err(e) = responder.read_message(&payload, &mut buf) {
+                        let resp = WsResponseType::Error {
+                            message: format!("Noise handshake step 3 failed: {e}"),
+                        };
+                        let _ = outbound_tx.send(WsMessage::Text(
+                            serde_json::to_string(&resp).unwrap_or_default(),
+                        ));
+                        return;
+                    }
+
+                    if responder.is_handshake_finished() {
+                        info!("Noise handshake complete for {conn_id} — awaiting capability advertisement");
+                        // Transport state is ready; we store it temporarily until capabilities arrive.
+                        // We re-insert with a sentinel key to signal "handshake done, awaiting caps".
+                        // The transport will be consumed when RemoteCapabilities arrives.
+                        let transport = match responder.into_transport_mode() {
+                            Ok(t) => t,
+                            Err(e) => {
+                                let resp = WsResponseType::Error {
+                                    message: format!("Noise transport init failed: {e}"),
+                                };
+                                let _ = outbound_tx.send(WsMessage::Text(
+                                    serde_json::to_string(&resp).unwrap_or_default(),
+                                ));
+                                return;
+                            }
+                        };
+
+                        // Store the transport in the connection metadata via a separate map
+                        static TRANSPORT_STATES: OnceLock<tokio::sync::Mutex<HashMap<String, snow::TransportState>>> = OnceLock::new();
+                        let transports = TRANSPORT_STATES.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()));
+                        transports.lock().await.insert(conn_id.to_string(), transport);
+
+                        // Acknowledge the handshake completion
+                        let resp = WsResponseType::RemoteCapabilitiesAck {
+                            accepted: true,
+                            message: "Noise handshake complete. Send remote_capabilities to register.".to_string(),
+                        };
+                        let _ = outbound_tx.send(WsMessage::Text(
+                            serde_json::to_string(&resp).unwrap_or_default(),
+                        ));
+                    } else {
+                        warn!("Noise handshake not finished after step 3 for {conn_id}");
+                    }
+                } else {
+                    let resp = WsResponseType::Error {
+                        message: "No pending Noise handshake for this connection".to_string(),
+                    };
+                    let _ = outbound_tx.send(WsMessage::Text(
+                        serde_json::to_string(&resp).unwrap_or_default(),
+                    ));
+                }
+            }
+            _ => {
+                let resp = WsResponseType::Error {
+                    message: format!("Invalid Noise handshake step: {step} (expected 1 or 3)"),
+                };
+                let _ = outbound_tx.send(WsMessage::Text(
+                    serde_json::to_string(&resp).unwrap_or_default(),
+                ));
+            }
+        }
+    }
+
+    /// Handle capability advertisement from a remote client.
+    ///
+    /// Called after the Noise handshake completes. Creates a `NoiseSession` and
+    /// registers it in the `RemoteExecutorRegistry`.
+    #[cfg(feature = "remote-exec")]
+    async fn handle_remote_capabilities(
+        &self,
+        conn_id: &str,
+        outbound_tx: &tokio::sync::mpsc::UnboundedSender<WsMessage>,
+        capabilities: Vec<String>,
+        client_type: String,
+        working_dir: Option<String>,
+    ) {
+        use crate::remote_exec::{NoiseSession, ToolCapability, ClientCapabilities};
+        use std::sync::OnceLock;
+
+        // Parse capability strings into ToolCapability enums
+        let mut cap_set = std::collections::HashSet::new();
+        for cap_str in &capabilities {
+            match cap_str.as_str() {
+                "filesystem" => { cap_set.insert(ToolCapability::Filesystem); }
+                "shell" => { cap_set.insert(ToolCapability::Shell); }
+                "browser" => { cap_set.insert(ToolCapability::Browser); }
+                "network" => { cap_set.insert(ToolCapability::Network); }
+                "agent" => { cap_set.insert(ToolCapability::Agent); }
+                "memory" => { cap_set.insert(ToolCapability::Memory); }
+                "full" => { cap_set.insert(ToolCapability::Full); }
+                other => {
+                    warn!("Unknown capability '{}' from client {}", other, conn_id);
+                }
+            }
+        }
+
+        // Retrieve the transport state from the handshake
+        static TRANSPORT_STATES: OnceLock<tokio::sync::Mutex<HashMap<String, snow::TransportState>>> = OnceLock::new();
+        let transports = TRANSPORT_STATES.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()));
+        let transport = transports.lock().await.remove(conn_id);
+
+        let Some(transport) = transport else {
+            let resp = WsResponseType::Error {
+                message: "No completed Noise handshake found. Complete handshake first.".to_string(),
+            };
+            let _ = outbound_tx.send(WsMessage::Text(
+                serde_json::to_string(&resp).unwrap_or_default(),
+            ));
+            return;
+        };
+
+        // Create a channel for sending tool requests to this client
+        let (tool_tx, mut tool_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let client_caps = ClientCapabilities {
+            capabilities: cap_set,
+            client_type: client_type.clone(),
+            client_name: None,
+            working_dir,
+        };
+
+        let session = NoiseSession {
+            conn_id: conn_id.to_string(),
+            transport,
+            capabilities: client_caps,
+            tool_tx,
+        };
+
+        self.remote_exec_registry.register(session).await;
+
+        // Spawn a task that forwards tool requests from the registry to the WS connection
+        let outbound_clone = outbound_tx.clone();
+        let conn_id_clone = conn_id.to_string();
+        tokio::spawn(async move {
+            while let Some(request) = tool_rx.recv().await {
+                let msg = WsResponseType::RemoteToolRequest {
+                    request_id: request.request_id,
+                    tool_name: request.tool_name,
+                    params: request.params,
+                    agent_id: request.agent_id,
+                    session_id: request.session_id,
+                    workspace_path: request.workspace_path,
+                };
+                if outbound_clone.send(WsMessage::Text(
+                    serde_json::to_string(&msg).unwrap_or_default(),
+                )).is_err() {
+                    debug!("WS connection closed for remote executor {conn_id_clone}");
+                    break;
+                }
+            }
+        });
+
+        let count = self.remote_exec_registry.executor_count().await;
+        let resp = WsResponseType::RemoteCapabilitiesAck {
+            accepted: true,
+            message: format!("Registered as remote executor ({client_type}). Total executors: {count}"),
+        };
+        let _ = outbound_tx.send(WsMessage::Text(
+            serde_json::to_string(&resp).unwrap_or_default(),
+        ));
+
+        info!(
+            "Remote executor registered: conn={}, type={}, capabilities={:?}",
+            conn_id, client_type, capabilities
+        );
+    }
+
+    /// Get the remote executor registry (for agents to dispatch tool calls).
+    #[cfg(feature = "remote-exec")]
+    pub fn remote_exec_registry(&self) -> &Arc<crate::remote_exec::RemoteExecutorRegistry> {
+        &self.remote_exec_registry
+    }
+
     /// Handle health check endpoint
     async fn handle_health_check(
         &self,
@@ -4179,6 +4584,10 @@ impl Clone for Gateway {
             cron_scheduler: Arc::clone(&self.cron_scheduler),
             #[cfg(feature = "overseer")]
             overseer: self.overseer.clone(),
+            #[cfg(feature = "remote-exec")]
+            remote_exec_registry: Arc::clone(&self.remote_exec_registry),
+            #[cfg(feature = "remote-exec")]
+            noise_keypair: Arc::clone(&self.noise_keypair),
             shutdown_tx: self.shutdown_tx.clone(),
         }
     }

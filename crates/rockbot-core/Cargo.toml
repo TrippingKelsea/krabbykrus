@@ -24,6 +24,8 @@ tools-markdown = ["dep:rockbot-tools-markdown"]
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 # Embedded overseer
 overseer = ["dep:rockbot-overseer"]
+# Remote tool execution over Noise Protocol
+remote-exec = ["dep:snow"]
 
 [lints]
 workspace = true
@@ -85,6 +87,9 @@ tracing-opentelemetry = { workspace = true, optional = true }
 
 # Embedded overseer (optional)
 rockbot-overseer = { path = "../rockbot-overseer", optional = true }
+
+# Noise Protocol for remote execution (optional)
+snow = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

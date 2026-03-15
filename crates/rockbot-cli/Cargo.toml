@@ -22,6 +22,8 @@ tools-mcp = ["rockbot-core/tools-mcp"]
 tools-markdown = ["rockbot-core/tools-markdown"]
 # Embedded overseer
 overseer = ["rockbot-core/overseer"]
+# Remote tool execution
+remote-exec = ["rockbot-core/remote-exec"]
 
 [lints]
 workspace = true

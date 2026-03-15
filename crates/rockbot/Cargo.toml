@@ -33,6 +33,8 @@ all-tools = ["tools-credentials", "tools-mcp", "tools-markdown"]
 otel = ["rockbot-core/otel"]
 # Embedded overseer
 overseer = ["rockbot-cli/overseer", "rockbot-core/overseer"]
+# Remote tool execution
+remote-exec = ["rockbot-cli/remote-exec", "rockbot-core/remote-exec"]
 
 [lints]
 workspace = true

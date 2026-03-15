@@ -1648,12 +1648,23 @@ impl Agent {
         
         // Add session and agent context
         let effective_workspace = self.resolve_workspace(context);
+        let agent_dir = self.get_agent_directory();
         let context_section = format!(
-            "# Current Context\n\n- Agent ID: {}\n- Session ID: {}\n- Available tools: {}\n- Working directory: {}",
+            "# Current Context\n\n\
+             - Agent ID: {}\n\
+             - Session ID: {}\n\
+             - Available tools: {}\n\
+             - Working directory: {}\n\
+             - Agent context directory: {}\n\n\
+             You have read/write access to your context directory. Your SOUL.md file at \
+             `{}/SOUL.md` defines your identity — you may read and update it to refine \
+             your behavior over time.",
             self.config.id,
             context.session_id,
             context.available_tools.join(", "),
-            effective_workspace.display()
+            effective_workspace.display(),
+            agent_dir.display(),
+            agent_dir.display(),
         );
         prompt_parts.push(context_section);
         
