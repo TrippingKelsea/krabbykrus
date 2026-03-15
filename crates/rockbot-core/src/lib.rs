@@ -1,55 +1,58 @@
-//! RockBot Core Framework
+//! RockBot Core — Re-export Facade
 //!
-//! This crate provides the core functionality for the RockBot AI agent framework,
-//! including the gateway server, session management, and agent execution engine.
+//! This crate re-exports types from the focused subcrates for backward
+//! compatibility. New code should depend on the specific subcrate directly:
 //!
-//! Configuration, message, and error types are provided by `rockbot-config` and
-//! re-exported here for backward compatibility.
+//! - `rockbot-config` — Config, message, and error sub-enum types
+//! - `rockbot-session` — Session management and persistence
+//! - `rockbot-agent` — Agent execution engine, hooks, guardrails, tools
+//! - `rockbot-client` — Gateway WS client, ACP, remote execution
+//! - `rockbot-gateway` — HTTP/WS server, A2A, cron, routing
+//! - `rockbot-webui` — Embedded web dashboard HTML
 
-pub mod config;
-pub mod credential_bridge;
-pub mod cron;
-pub mod error;
-pub mod gateway;
-pub mod agent;
-pub mod routing;
-pub mod session;
-pub mod skills;
-pub mod message;
-pub mod web_ui;
-pub mod metrics;
-pub mod hooks;
-pub mod a2a;
-pub mod acp;
-pub mod guardrails;
-pub mod trajectory;
-pub mod indexer;
-pub mod sandbox;
-pub mod telemetry;
-pub mod tokenizer;
-pub mod orchestration;
-pub mod slash_commands;
+// Module re-exports (thin wrappers for backward compat)
+pub mod config { pub use rockbot_config::config::*; }
+pub mod message { pub use rockbot_config::message::*; pub use rockbot_agent::from_llm_message; }
+pub mod error { pub use rockbot_gateway::error::*; }
+pub mod session { pub use rockbot_session::*; }
+pub mod agent { pub use rockbot_agent::agent::*; }
+pub mod gateway { pub use rockbot_gateway::gateway::*; }
+pub mod routing { pub use rockbot_gateway::routing::*; }
+pub mod hooks { pub use rockbot_agent::hooks::*; }
+pub mod guardrails { pub use rockbot_agent::guardrails::*; }
+pub mod trajectory { pub use rockbot_agent::trajectory::*; }
+pub mod orchestration { pub use rockbot_agent::orchestration::*; }
+pub mod metrics { pub use rockbot_agent::metrics::*; }
+pub mod skills { pub use rockbot_agent::skills::*; }
+pub mod credential_bridge { pub use rockbot_agent::credential_bridge::*; }
+pub mod tokenizer { pub use rockbot_agent::tokenizer::*; }
+pub mod indexer { pub use rockbot_agent::indexer::*; }
+pub mod sandbox { pub use rockbot_agent::sandbox::*; }
+pub mod telemetry { pub use rockbot_agent::telemetry::*; }
+pub mod a2a { pub use rockbot_gateway::a2a::*; }
+pub mod acp { pub use rockbot_client::acp::*; }
+pub mod cron { pub use rockbot_gateway::cron::*; }
+// slash_commands: pub(crate) in rockbot-gateway, not re-exported
+pub mod web_ui { pub use rockbot_webui::*; }
 #[cfg(feature = "remote-exec")]
-pub mod remote_exec;
+pub mod remote_exec { pub use rockbot_client::remote_exec::*; }
 
-pub use config::{
+// Top-level convenience re-exports
+pub use rockbot_config::{
     Config, GatewayConfig, AgentConfig, ProvidersConfig, McpServerEntry,
     AnthropicProviderConfig, OpenAiProviderConfig, BedrockProviderConfig, OllamaProviderConfig,
     WorkflowDefinition, WorkflowNode, WorkflowEdge, EdgeCondition,
 };
-pub use credential_bridge::VaultCredentialAccessor;
-pub use error::{RockBotError, Result};
-pub use gateway::Gateway;
-pub use agent::Agent;
-pub use session::{Session, SessionManager};
-pub use message::{Message, MessageContent, MessageMetadata, ContentPart};
-pub use routing::{RoutingEngine, ResolvedAgentRoute, SessionScope, MatchedByType};
-pub use skills::{SkillManager, Skill, SkillMetadata, SkillInvocationPolicy, SlashCommandInfo};
-pub use cron::{CronJob, CronSchedule, CronPayload, CronScheduler, CronExecutor};
-pub use hooks::{Hook, HookEvent, HookResult, HookRegistry};
-pub use gateway::GatewayInvoker;
-pub use guardrails::{Guardrail, GuardrailResult, GuardrailPipeline, PiiGuardrail, PromptInjectionGuardrail};
-pub use trajectory::{Trajectory, TrajectoryEvent, TrajectoryEntry};
-pub use telemetry::{TelemetryConfig, init_telemetry};
-pub use orchestration::{SwarmBlackboard, WorkflowExecutor};
-pub use agent::HandoffSignal;
+pub use rockbot_gateway::{RockBotError, Result, Gateway, GatewayInvoker};
+pub use rockbot_gateway::{RoutingEngine, ResolvedAgentRoute, SessionScope, MatchedByType};
+pub use rockbot_gateway::{CronJob, CronSchedule, CronPayload, CronScheduler, CronExecutor};
+pub use rockbot_agent::agent::{Agent, HandoffSignal};
+pub use rockbot_agent::credential_bridge::VaultCredentialAccessor;
+pub use rockbot_agent::hooks::{Hook, HookEvent, HookResult, HookRegistry};
+pub use rockbot_agent::guardrails::{Guardrail, GuardrailResult, GuardrailPipeline, PiiGuardrail, PromptInjectionGuardrail};
+pub use rockbot_agent::trajectory::{Trajectory, TrajectoryEvent, TrajectoryEntry};
+pub use rockbot_agent::telemetry::{TelemetryConfig, init_telemetry};
+pub use rockbot_agent::orchestration::{SwarmBlackboard, WorkflowExecutor};
+pub use rockbot_agent::skills::{SkillManager, Skill, SkillMetadata, SkillInvocationPolicy, SlashCommandInfo};
+pub use rockbot_session::{Session, SessionManager};
+pub use rockbot_config::{Message, MessageContent, MessageMetadata, ContentPart};
