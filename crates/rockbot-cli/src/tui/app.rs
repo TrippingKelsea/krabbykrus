@@ -3322,6 +3322,36 @@ fn handle_ws_response(tx: &mpsc::UnboundedSender<Message>, text: &str) {
             let error = json.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error").to_string();
             let _ = tx.send(Message::ChatError(session_key, error));
         }
+        "token_usage" => {
+            let session_key = json.get("session_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let prompt = json.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let completion = json.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let total = json.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let cumulative = json.get("cumulative_total").and_then(|v| v.as_u64()).unwrap_or(0);
+            if !session_key.is_empty() {
+                let _ = tx.send(Message::ChatTokenUsage {
+                    session_key,
+                    prompt_tokens: prompt,
+                    completion_tokens: completion,
+                    total_tokens: total,
+                    cumulative_total: cumulative,
+                });
+            }
+        }
+        "thinking_status" => {
+            let session_key = json.get("session_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let phase = json.get("phase").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let tool_name = json.get("tool_name").and_then(|v| v.as_str()).map(String::from);
+            let iteration = json.get("iteration").and_then(|v| v.as_u64()).map(|v| v as usize);
+            if !session_key.is_empty() {
+                let _ = tx.send(Message::ChatThinkingStatus {
+                    session_key,
+                    phase,
+                    tool_name,
+                    iteration,
+                });
+            }
+        }
         "pong" => {
             // Silently handle keepalive responses
         }

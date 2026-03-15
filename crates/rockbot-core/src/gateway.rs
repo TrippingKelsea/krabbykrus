@@ -288,6 +288,23 @@ enum WsResponseType {
         hostname: String,
         label: Option<String>,
     },
+    /// Structured token usage update (separate from stream_chunk).
+    #[serde(rename = "token_usage")]
+    TokenUsageMsg {
+        session_key: String,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        total_tokens: u64,
+        cumulative_total: u64,
+    },
+    /// Thinking/processing status update with phase information.
+    #[serde(rename = "thinking_status")]
+    ThinkingStatus {
+        session_key: String,
+        phase: String,         // "llm", "tool", "planning", etc.
+        tool_name: Option<String>,
+        iteration: Option<usize>,
+    },
     /// Dispatched to a specific client to execute a cron job remotely.
     /// The client should process the job and reply with `cron_result`.
     #[serde(rename = "cron_dispatch")]
@@ -2837,11 +2854,19 @@ impl Gateway {
             while let Some(event) = progress_rx.recv().await {
                 let messages: Vec<WsResponseType> = match event {
                     crate::agent::AgentProgressEvent::ToolStart { ref tool_name } => {
-                        vec![WsResponseType::ToolCall {
-                            session_key: progress_sk.clone(),
-                            tool_name: tool_name.clone(),
-                            arguments: String::new(),
-                        }]
+                        vec![
+                            WsResponseType::ToolCall {
+                                session_key: progress_sk.clone(),
+                                tool_name: tool_name.clone(),
+                                arguments: String::new(),
+                            },
+                            WsResponseType::ThinkingStatus {
+                                session_key: progress_sk.clone(),
+                                phase: "tool".to_string(),
+                                tool_name: Some(tool_name.clone()),
+                                iteration: None,
+                            },
+                        ]
                     }
                     crate::agent::AgentProgressEvent::ToolDone { ref tool_name, success, duration_ms } => {
                         vec![WsResponseType::ToolResult {
@@ -2855,51 +2880,46 @@ impl Gateway {
                     crate::agent::AgentProgressEvent::ToolOutput {
                         ref tool_name, ref output, success, duration_ms
                     } => {
-                        // Send tool result with output as a stream chunk so the
-                        // user sees what each tool produced in the chat.
-                        let status = if success { "✓" } else { "✗" };
+                        // Send structured tool result (not injected into chat stream)
                         let truncated = if output.len() > 500 {
                             format!("{}…", &output[..500])
                         } else {
                             output.clone()
                         };
-                        let chunk = format!(
-                            "\n{status} **{tool_name}** ({duration_ms}ms)\n```\n{truncated}\n```\n"
-                        );
-                        vec![
-                            WsResponseType::ToolResult {
-                                session_key: progress_sk.clone(),
-                                tool_name: tool_name.clone(),
-                                result: truncated.clone(),
-                                success,
-                                duration_ms,
-                            },
-                            WsResponseType::StreamChunk {
-                                session_key: progress_sk.clone(),
-                                delta: chunk,
-                            },
-                        ]
+                        vec![WsResponseType::ToolResult {
+                            session_key: progress_sk.clone(),
+                            tool_name: tool_name.clone(),
+                            result: truncated,
+                            success,
+                            duration_ms,
+                        }]
                     }
                     crate::agent::AgentProgressEvent::TextDelta { ref text } => {
                         // Stream the model's actual text/reasoning to the client
                         vec![WsResponseType::StreamChunk {
                             session_key: progress_sk.clone(),
-                            delta: format!("\n{text}\n"),
+                            delta: text.clone(),
                         }]
                     }
                     crate::agent::AgentProgressEvent::TokenUsage {
                         prompt_tokens, completion_tokens, total_tokens, cumulative_total,
                     } => {
-                        vec![WsResponseType::StreamChunk {
+                        // Send structured token usage (not embedded in chat text)
+                        vec![WsResponseType::TokenUsageMsg {
                             session_key: progress_sk.clone(),
-                            delta: format!(
-                                "\n*[tokens: {total_tokens} ({prompt_tokens}p + {completion_tokens}c) | cumulative: {cumulative_total}]*\n"
-                            ),
+                            prompt_tokens,
+                            completion_tokens,
+                            total_tokens,
+                            cumulative_total,
                         }]
                     }
-                    crate::agent::AgentProgressEvent::LlmCall { .. } => {
-                        // Replaced by TextDelta + TokenUsage events
-                        vec![]
+                    crate::agent::AgentProgressEvent::LlmCall { iteration, message_count: _ } => {
+                        vec![WsResponseType::ThinkingStatus {
+                            session_key: progress_sk.clone(),
+                            phase: "llm".to_string(),
+                            tool_name: None,
+                            iteration: Some(iteration),
+                        }]
                     }
                     crate::agent::AgentProgressEvent::Handoff {
                         ref from_agent, ref to_agent, ref context_preview,

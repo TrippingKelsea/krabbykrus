@@ -78,9 +78,22 @@ pub enum Message {
     ChatResponse(String, String),       // (session_key, AI response text)
     ChatAgentResponse(String, String, Vec<ToolCallInfo>), // (session_key, content, tool_calls)
     ChatError(String, String),          // (session_key, error text)
-    ChatStreamChunk(String),            // Streaming chunk (for future use)
+    ChatStreamChunk(String),            // Streaming chunk: "session_key:text"
+    ChatTokenUsage {                    // Structured token usage from gateway
+        session_key: String,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        total_tokens: u64,
+        cumulative_total: u64,
+    },
+    ChatThinkingStatus {                // Thinking/processing phase update
+        session_key: String,
+        phase: String,
+        tool_name: Option<String>,
+        iteration: Option<usize>,
+    },
     SessionMessagesLoaded(String, Vec<ChatMessage>), // (session_key, messages)
-    
+
     // Context files
     ContextFilesLoaded(String, Vec<ContextFileInfo>),   // (agent_id, files)
     ContextFileLoaded(String, String, String),           // (agent_id, filename, content)
@@ -223,6 +236,39 @@ pub struct SessionInfo {
     pub model: Option<String>,
 }
 
+/// Thinking phase tracking for the AI processing indicator
+#[derive(Debug, Clone, Default)]
+pub struct ThinkingState {
+    /// Current processing phase ("llm", "tool", etc.)
+    pub phase: String,
+    /// Name of tool currently running (if phase == "tool")
+    pub tool_name: Option<String>,
+    /// Current iteration number
+    pub iteration: Option<usize>,
+    /// Cumulative prompt tokens consumed so far
+    pub prompt_tokens: u64,
+    /// Cumulative completion tokens generated so far
+    pub completion_tokens: u64,
+    /// Cumulative total tokens
+    pub cumulative_total: u64,
+    /// When processing started (for elapsed time / tok/s calculation)
+    pub started_at: Option<std::time::Instant>,
+}
+
+impl ThinkingState {
+    /// Average completion tokens per second since processing started
+    pub fn tokens_per_second(&self) -> f64 {
+        let elapsed = self.started_at
+            .map(|s| s.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
+        if elapsed > 0.5 {
+            self.completion_tokens as f64 / elapsed
+        } else {
+            0.0
+        }
+    }
+}
+
 /// Per-session chat state
 #[derive(Debug, Clone)]
 pub struct SessionChatState {
@@ -232,6 +278,8 @@ pub struct SessionChatState {
     pub loaded: bool, // Whether history has been fetched from gateway
     pub auto_scroll: bool, // When true, scroll follows latest content
     pub max_scroll: std::cell::Cell<usize>, // Last computed max scroll value (updated during render)
+    /// Live thinking/processing state for the spinner
+    pub thinking: ThinkingState,
 }
 
 impl Default for SessionChatState {
@@ -243,6 +291,7 @@ impl Default for SessionChatState {
             loaded: false,
             auto_scroll: true,
             max_scroll: std::cell::Cell::new(0),
+            thinking: ThinkingState::default(),
         }
     }
 }
@@ -2160,16 +2209,19 @@ impl AppState {
                 let chat = self.session_chats.entry(session_key).or_default();
                 chat.messages.push(ChatMessage::assistant(content));
                 chat.loading = false;
+                chat.thinking = ThinkingState::default();
             }
             Message::ChatAgentResponse(session_key, content, tool_calls) => {
                 let chat = self.session_chats.entry(session_key).or_default();
                 chat.messages.push(ChatMessage::assistant_with_tools(content, tool_calls));
                 chat.loading = false;
+                chat.thinking = ThinkingState::default();
             }
             Message::ChatError(session_key, err) => {
                 let chat = self.session_chats.entry(session_key).or_default();
                 chat.messages.push(ChatMessage::system(format!("Error: {err}")));
                 chat.loading = false;
+                chat.thinking = ThinkingState::default();
             }
             Message::ChatStreamChunk(chunk) => {
                 // Handle streaming chunks for incremental display
@@ -2185,6 +2237,24 @@ impl AppState {
                     } else {
                         chat.messages.push(ChatMessage::assistant(text.to_string()));
                     }
+                }
+            }
+            Message::ChatTokenUsage { session_key, prompt_tokens, completion_tokens, total_tokens: _, cumulative_total } => {
+                let chat = self.session_chats.entry(session_key).or_default();
+                chat.thinking.prompt_tokens = prompt_tokens;
+                chat.thinking.completion_tokens = completion_tokens;
+                chat.thinking.cumulative_total = cumulative_total;
+                if chat.thinking.started_at.is_none() {
+                    chat.thinking.started_at = Some(std::time::Instant::now());
+                }
+            }
+            Message::ChatThinkingStatus { session_key, phase, tool_name, iteration } => {
+                let chat = self.session_chats.entry(session_key).or_default();
+                chat.thinking.phase = phase;
+                chat.thinking.tool_name = tool_name;
+                chat.thinking.iteration = iteration;
+                if chat.thinking.started_at.is_none() {
+                    chat.thinking.started_at = Some(std::time::Instant::now());
                 }
             }
             Message::SessionMessagesLoaded(session_key, messages) => {

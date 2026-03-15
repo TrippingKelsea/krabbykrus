@@ -17,6 +17,32 @@ const CARD_WIDTH: u16 = 15;
 /// Card height: 2 border + 3 content lines = 5 rows
 const CARD_HEIGHT: u16 = 5;
 
+/// Rotating words shown while the model is processing
+const THINKING_WORDS: &[&str] = &[
+    "thinking...",
+    "reasoning...",
+    "pondering...",
+    "considering...",
+    "analyzing...",
+    "reflecting...",
+    "processing...",
+    "evaluating...",
+    "deliberating...",
+    "synthesizing...",
+    "contemplating...",
+    "formulating...",
+];
+
+/// Pick a thinking word based on tick count, or show tool name if running a tool
+fn thinking_word(tick: usize, tool_name: Option<&str>) -> String {
+    if let Some(name) = tool_name {
+        return format!("running {name}...");
+    }
+    // Change word every ~8 ticks (roughly every 2 seconds at 4 ticks/sec)
+    let idx = (tick / 8) % THINKING_WORDS.len();
+    THINKING_WORDS[idx].to_string()
+}
+
 /// Derive a 3-character provider code from provider ID
 fn provider_short_code(provider_id: &str) -> &'static str {
     match provider_id {
@@ -415,10 +441,27 @@ fn render_chat_messages(
     }
 
     if loading {
-        lines.push(Line::from(vec![
+        let thinking = state.active_chat().map(|c| &c.thinking);
+        let thinking_label = thinking_word(state.tick_count, thinking.and_then(|t| t.tool_name.as_deref()));
+        let mut indicator_spans = vec![
             Span::styled("AI: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled("thinking...", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
-        ]));
+            Span::styled(thinking_label, Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+        ];
+
+        // Show token stats if we have any
+        if let Some(ts) = thinking {
+            if ts.cumulative_total > 0 {
+                let tps = ts.tokens_per_second();
+                let tps_str = if tps > 0.5 {
+                    format!("  [{} tok | {:.1} tok/s]", ts.cumulative_total, tps)
+                } else {
+                    format!("  [{} tok]", ts.cumulative_total)
+                };
+                indicator_spans.push(Span::styled(tps_str, Style::default().fg(Color::DarkGray)));
+            }
+        }
+
+        lines.push(Line::from(indicator_spans));
     }
 
     // Compute actual wrapped line count by rendering to a scratch buffer.
