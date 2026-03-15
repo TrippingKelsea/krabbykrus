@@ -13,9 +13,8 @@ use ratatui::{
 use crate::tui::effects::{self, palette, EffectState};
 use crate::tui::state::AppState;
 
-/// Card dimensions for provider cards
+/// Card width for provider cards
 const CARD_WIDTH: u16 = 16;
-const CARD_HEIGHT: u16 = 5;
 
 /// Derive a 3-character provider code
 fn provider_short_code(id: &str) -> &'static str {
@@ -28,20 +27,15 @@ fn provider_short_code(id: &str) -> &'static str {
     }
 }
 
-/// Render the models page — card strip on top, details below
-pub fn render_models(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
+/// Render the models page — cards in cards_area, details in detail_area
+pub fn render_models(frame: &mut Frame, cards_area: Rect, detail_area: Rect, state: &AppState, effect_state: &EffectState) {
     if state.providers.is_empty() {
-        render_no_providers(frame, area);
+        render_no_providers(frame, detail_area);
         return;
     }
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(CARD_HEIGHT), Constraint::Min(0)])
-        .split(area);
-
-    render_provider_cards(frame, chunks[0], state, effect_state);
-    render_provider_details(frame, chunks[1], state);
+    render_provider_cards(frame, cards_area, state, effect_state);
+    render_provider_details(frame, detail_area, state);
 }
 
 fn render_no_providers(frame: &mut Frame, area: Rect) {

@@ -15,9 +15,8 @@ use ratatui::{
 use crate::tui::effects::{self, palette, EffectState};
 use crate::tui::state::AppState;
 
-/// Card dimensions for tab strip
+/// Card width for tab strip
 const CARD_WIDTH: u16 = 18;
-const CARD_HEIGHT: u16 = 5;
 
 /// Tab labels and sub-headings
 const TABS: &[(&str, &str, &str)] = &[
@@ -27,36 +26,32 @@ const TABS: &[(&str, &str, &str)] = &[
     ("Audit", "Activity", "Log"),
 ];
 
-/// Render the credentials page — tab card strip on top, list content below
+/// Render the credentials page — tab cards in cards_area, list in detail_area
 pub fn render_credentials(
     frame: &mut Frame,
-    area: Rect,
+    cards_area: Rect,
+    detail_area: Rect,
     state: &AppState,
     selected_tab: usize,
     effect_state: &EffectState,
 ) {
-    // Vault not ready — show init/unlock screens
+    // Vault not ready — show init/unlock screens in the detail area
     if !state.vault.initialized {
-        render_vault_init(frame, area, state);
+        render_vault_init(frame, detail_area, state);
         return;
     }
     if state.vault.locked {
-        render_vault_locked(frame, area);
+        render_vault_locked(frame, detail_area);
         return;
     }
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(CARD_HEIGHT), Constraint::Min(0)])
-        .split(area);
-
-    render_tab_cards(frame, chunks[0], state, selected_tab, effect_state);
+    render_tab_cards(frame, cards_area, state, selected_tab, effect_state);
 
     match selected_tab {
-        0 => render_endpoints_list(frame, chunks[1], state),
-        1 => render_providers_list(frame, chunks[1], state),
-        2 => render_permissions_list(frame, chunks[1], state),
-        3 => render_audit_list(frame, chunks[1]),
+        0 => render_endpoints_list(frame, detail_area, state),
+        1 => render_providers_list(frame, detail_area, state),
+        2 => render_permissions_list(frame, detail_area, state),
+        3 => render_audit_list(frame, detail_area),
         _ => {}
     }
 }

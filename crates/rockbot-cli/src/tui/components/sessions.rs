@@ -14,8 +14,6 @@ use super::render_spinner;
 
 /// Card width: 2 border + 13 content = 15 columns
 const CARD_WIDTH: u16 = 15;
-/// Card height: 2 border + 3 content lines = 5 rows
-const CARD_HEIGHT: u16 = 5;
 
 /// Rotating words shown while the model is processing
 const THINKING_WORDS: &[&str] = &[
@@ -85,14 +83,9 @@ fn shorten_model_name(name: &str) -> String {
 }
 
 /// Render the sessions page — card strip on top, chat below
-pub fn render_sessions(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(CARD_HEIGHT), Constraint::Min(0)])
-        .split(area);
-
-    render_session_cards(frame, chunks[0], state, effect_state);
-    render_chat_area(frame, chunks[1], state, effect_state);
+pub fn render_sessions(frame: &mut Frame, cards_area: Rect, detail_area: Rect, state: &AppState, effect_state: &EffectState) {
+    render_session_cards(frame, cards_area, state, effect_state);
+    render_chat_area(frame, detail_area, state, effect_state);
 }
 
 /// Render the horizontal session card strip

@@ -12,19 +12,13 @@ use crate::tui::effects::{self, palette, EffectState};
 use crate::tui::state::{AgentStatus, AppState};
 use super::render_spinner;
 
-/// Card width and height for agent cards
+/// Card width for agent cards
 const CARD_WIDTH: u16 = 16;
-const CARD_HEIGHT: u16 = 5;
 
-/// Render the agents page — card strip on top, details below
-pub fn render_agents(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(CARD_HEIGHT), Constraint::Min(0)])
-        .split(area);
-
-    render_agent_cards(frame, chunks[0], state, effect_state);
-    render_agent_details(frame, chunks[1], state);
+/// Render the agents page — cards in cards_area, details in detail_area
+pub fn render_agents(frame: &mut Frame, cards_area: Rect, detail_area: Rect, state: &AppState, effect_state: &EffectState) {
+    render_agent_cards(frame, cards_area, state, effect_state);
+    render_agent_details(frame, detail_area, state);
 }
 
 fn render_agent_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {

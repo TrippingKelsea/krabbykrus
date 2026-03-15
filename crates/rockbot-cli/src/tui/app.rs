@@ -2845,32 +2845,35 @@ impl App {
 
     /// Render the entire UI
     fn render(&mut self, frame: &mut Frame) {
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(22), Constraint::Min(0)])
+        // Layout: top row (sidebar + cards) | main content | status bar
+        // Sidebar height: 6 menu items + 2 borders = 8 rows
+        let outer = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(8), Constraint::Min(0), Constraint::Length(2)])
             .split(frame.area());
 
-        let main_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(2)])
-            .split(chunks[1]);
+        // Top row: sidebar (left) + page cards area (right)
+        let top_row = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(22), Constraint::Min(0)])
+            .split(outer[0]);
 
-        // Sidebar
-        render_sidebar(frame, chunks[0], &self.state, &self.effect_state);
+        // Sidebar in top-left
+        render_sidebar(frame, top_row[0], &self.state, &self.effect_state);
 
-        // Content area - pass effect state for active border animation
+        // Content: page cards in top-right, detail in main area
         match self.state.menu_item {
-            MenuItem::Dashboard => render_dashboard(frame, main_chunks[0], &self.state, &self.effect_state),
-            MenuItem::Credentials => render_credentials(frame, main_chunks[0], &self.state, self.state.credentials_tab, &self.effect_state),
-            MenuItem::Agents => render_agents(frame, main_chunks[0], &self.state, &self.effect_state),
-            MenuItem::Sessions => render_sessions(frame, main_chunks[0], &self.state, &self.effect_state),
-            MenuItem::Models => render_models(frame, main_chunks[0], &self.state, &self.effect_state),
-            MenuItem::Settings => render_settings(frame, main_chunks[0], &self.state, &self.effect_state),
+            MenuItem::Dashboard => render_dashboard(frame, top_row[1], outer[1], &self.state, &self.effect_state),
+            MenuItem::Credentials => render_credentials(frame, top_row[1], outer[1], &self.state, self.state.credentials_tab, &self.effect_state),
+            MenuItem::Agents => render_agents(frame, top_row[1], outer[1], &self.state, &self.effect_state),
+            MenuItem::Sessions => render_sessions(frame, top_row[1], outer[1], &self.state, &self.effect_state),
+            MenuItem::Models => render_models(frame, top_row[1], outer[1], &self.state, &self.effect_state),
+            MenuItem::Settings => render_settings(frame, top_row[1], outer[1], &self.state, &self.effect_state),
         }
 
         // Status bar
         let help_text = self.get_help_text();
-        render_status_bar(frame, main_chunks[1], self.state.status_message.as_ref(), &help_text);
+        render_status_bar(frame, outer[2], self.state.status_message.as_ref(), &help_text);
 
         // Render modals on top
         self.render_modals(frame);

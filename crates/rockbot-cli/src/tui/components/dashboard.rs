@@ -13,17 +13,11 @@ use crate::tui::state::{AgentStatus, AppState};
 use super::render_spinner;
 
 const CARD_WIDTH: u16 = 16;
-const CARD_HEIGHT: u16 = 5;
 
-/// Render the dashboard page — card strip on top, detail below
-pub fn render_dashboard(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(CARD_HEIGHT), Constraint::Min(0)])
-        .split(area);
-
-    render_status_cards(frame, chunks[0], state, effect_state);
-    render_detail_panel(frame, chunks[1], state);
+/// Render the dashboard page — cards in cards_area, detail in detail_area
+pub fn render_dashboard(frame: &mut Frame, cards_area: Rect, detail_area: Rect, state: &AppState, effect_state: &EffectState) {
+    render_status_cards(frame, cards_area, state, effect_state);
+    render_detail_panel(frame, detail_area, state);
 }
 
 fn render_status_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {

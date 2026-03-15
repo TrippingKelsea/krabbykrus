@@ -12,17 +12,11 @@ use crate::tui::effects::{self, palette, EffectState};
 use crate::tui::state::AppState;
 
 const CARD_WIDTH: u16 = 16;
-const CARD_HEIGHT: u16 = 5;
 
-/// Render the settings page — card strip on top, detail below
-pub fn render_settings(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(CARD_HEIGHT), Constraint::Min(0)])
-        .split(area);
-
-    render_settings_cards(frame, chunks[0], state, effect_state);
-    render_settings_detail(frame, chunks[1], state);
+/// Render the settings page — cards in cards_area, detail in detail_area
+pub fn render_settings(frame: &mut Frame, cards_area: Rect, detail_area: Rect, state: &AppState, effect_state: &EffectState) {
+    render_settings_cards(frame, cards_area, state, effect_state);
+    render_settings_detail(frame, detail_area, state);
 }
 
 fn render_settings_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
