@@ -2776,7 +2776,6 @@ impl App {
     /// Spawn an async task to send a chat message via the gateway
     fn spawn_chat_request(&self, user_message: String) {
         let tx = self.state.tx.clone();
-        let model = self.state.chat_model.clone();
         let session_key = self.state.active_session_key().unwrap_or("").to_string();
         // Resolve agent_id from chat_agent_id or the selected session's agent_id
         let agent_id = self.state.chat_agent_id.clone().or_else(|| {
@@ -2786,61 +2785,42 @@ impl App {
                 .cloned()
         });
         let launch_dir = self.state.launch_dir.to_string_lossy().to_string();
-        let chat_history: Vec<(bool, String)> = self.state.chat_messages()
-            .iter()
-            .filter_map(|m| match m.role {
-                super::state::ChatRole::User => Some((true, m.content.clone())),
-                super::state::ChatRole::Assistant => Some((false, m.content.clone())),
-                super::state::ChatRole::System => None,
-            })
-            .collect();
 
-        // Try WebSocket for agent messages (persistent, streaming)
-        if let Some(ref agent) = agent_id {
-            if self.ws_connected() {
-                let ws_msg = serde_json::json!({
-                    "type": "agent_message",
-                    "agent_id": agent,
-                    "session_key": session_key,
-                    "message": user_message,
-                    "workspace": launch_dir,
-                });
-                if let Some(ref ws_tx) = self.ws_tx {
-                    if ws_tx.send(ws_msg.to_string()).is_ok() {
-                        return; // Message sent via WebSocket, responses arrive asynchronously
-                    }
-                }
-            }
+        // WebSocket is the only communication path — no HTTP fallback
+        if !self.ws_connected() {
+            let _ = tx.send(Message::ChatError(
+                session_key,
+                "Not connected to gateway. Check that the gateway is running.".to_string(),
+            ));
+            return;
         }
 
-        // Fallback to HTTP
-        tokio::spawn(async move {
-            // Use agent message endpoint when an agent is available (full tool loop)
-            if let Some(ref agent) = agent_id {
-                match send_agent_message(agent, &session_key, &user_message, &launch_dir).await {
-                    Ok((content, tool_calls)) => {
-                        if tool_calls.is_empty() {
-                            let _ = tx.send(Message::ChatResponse(session_key, content));
-                        } else {
-                            let _ = tx.send(Message::ChatAgentResponse(session_key, content, tool_calls));
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Message::ChatError(session_key, e.to_string()));
-                    }
-                }
-            } else {
-                // Fallback to raw chat endpoint for ad-hoc sessions without an agent
-                match send_chat_message(&chat_history, &user_message, model.as_deref(), None).await {
-                    Ok(response) => {
-                        let _ = tx.send(Message::ChatResponse(session_key, response));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Message::ChatError(session_key, e.to_string()));
-                    }
-                }
+        let agent = match agent_id {
+            Some(ref a) => a,
+            None => {
+                let _ = tx.send(Message::ChatError(
+                    session_key,
+                    "No agent selected for this session.".to_string(),
+                ));
+                return;
             }
+        };
+
+        let ws_msg = serde_json::json!({
+            "type": "agent_message",
+            "agent_id": agent,
+            "session_key": session_key,
+            "message": user_message,
+            "workspace": launch_dir,
         });
+        if let Some(ref ws_tx) = self.ws_tx {
+            if ws_tx.send(ws_msg.to_string()).is_err() {
+                let _ = tx.send(Message::ChatError(
+                    session_key,
+                    "Failed to send message over WebSocket.".to_string(),
+                ));
+            }
+        }
     }
 
     /// Render the entire UI
@@ -3633,179 +3613,6 @@ async fn check_vault_status(vault_path: &PathBuf) -> Result<VaultStatus> {
 }
 
 /// Send a chat message via the gateway
-async fn send_chat_message(
-    chat_history: &[(bool, String)], // (is_user, content)
-    user_message: &str,
-    model: Option<&str>,
-    agent_id: Option<&str>,
-) -> Result<String> {
-    // Build messages array
-    let mut messages = Vec::new();
-    for (is_user, content) in chat_history {
-        messages.push(serde_json::json!({
-            "role": if *is_user { "user" } else { "assistant" },
-            "content": content,
-        }));
-    }
-    messages.push(serde_json::json!({
-        "role": "user",
-        "content": user_message,
-    }));
-
-    // Determine model: use explicit model, or let gateway pick
-    let model_id = model.unwrap_or("default");
-
-    let mut request_body = serde_json::json!({
-        "model": model_id,
-        "messages": messages,
-        "temperature": 0.7,
-        "max_tokens": 4096,
-        "stream": false,
-    });
-    if let Some(agent_id) = agent_id {
-        request_body["agent_id"] = serde_json::json!(agent_id);
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()?;
-
-    let response = client
-        .post("http://127.0.0.1:18080/api/chat")
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("Gateway unreachable: {e}. Is the gateway running?"))?;
-
-    if !response.status().is_success() {
-        let err_text = response.text().await.unwrap_or_default();
-        let err_json: serde_json::Value = serde_json::from_str(&err_text).unwrap_or_default();
-        let err_msg = err_json.get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&err_text);
-        return Err(anyhow::anyhow!("{err_msg}"));
-    }
-
-    let json: serde_json::Value = response.json().await?;
-
-    // Extract the assistant's response from choices[0].message.content
-    let content = json
-        .get("choices")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|msg| msg.get("content"))
-        .and_then(|c| c.as_str())
-        .unwrap_or("No response received")
-        .to_string();
-
-    Ok(content)
-}
-
-/// Send a message to an agent via the gateway agent message endpoint (full tool loop)
-async fn send_agent_message(
-    agent_id: &str,
-    session_key: &str,
-    user_message: &str,
-    workspace: &str,
-) -> Result<(String, Vec<ToolCallInfo>)> {
-    let request_body = serde_json::json!({
-        "session_key": session_key,
-        "message": user_message,
-        "workspace": workspace,
-    });
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(90)) // HTTP fallback; primary path uses streaming WS
-        .build()?;
-
-    let url = format!("http://127.0.0.1:18080/api/agents/{agent_id}/message");
-    let response = client
-        .post(&url)
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("Gateway unreachable: {e}. Is the gateway running?"))?;
-
-    if !response.status().is_success() {
-        let err_text = response.text().await.unwrap_or_default();
-        let err_json: serde_json::Value = serde_json::from_str(&err_text).unwrap_or_default();
-        let err_msg = err_json.get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&err_text);
-        return Err(anyhow::anyhow!("{err_msg}"));
-    }
-
-    let json: serde_json::Value = response.json().await?;
-
-    // Extract content from AgentResponse.message.content
-    let content = json.get("message")
-        .and_then(|m| m.get("content"))
-        .and_then(|c| {
-            // MessageContent can be Text { text } or other variants
-            c.get("text").and_then(|t| t.as_str())
-                .or_else(|| c.as_str())
-        })
-        .unwrap_or("No response received")
-        .to_string();
-
-    // Extract tool results from AgentResponse.tool_results
-    let tool_calls: Vec<ToolCallInfo> = json.get("tool_results")
-        .and_then(|t| t.as_array())
-        .map(|arr| {
-            arr.iter().filter_map(|tr| {
-                let tool_name = tr.get("tool_name")?.as_str()?.to_string();
-                let execution_time_ms = tr.get("execution_time_ms")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let success = tr.get("success")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true);
-
-                // Extract result summary from ToolResult variants
-                let result_val = tr.get("result")?;
-                let result = if let Some(text) = result_val.get("content").and_then(|c| c.as_str()) {
-                    truncate_tool_result(text, 200)
-                } else if let Some(err) = result_val.get("message").and_then(|m| m.as_str()) {
-                    format!("Error: {err}")
-                } else if let Some(data) = result_val.get("data") {
-                    // For exec tool results, show stdout/stderr instead of raw JSON
-                    if let Some(stdout) = data.get("stdout").and_then(|s| s.as_str()) {
-                        let stderr = data.get("stderr").and_then(|s| s.as_str()).unwrap_or("");
-                        let exit_code = data.get("exit_code").and_then(|c| c.as_i64()).unwrap_or(0);
-                        let mut output = stdout.to_string();
-                        if !stderr.is_empty() {
-                            output.push_str(&format!("\nstderr: {stderr}"));
-                        }
-                        if exit_code != 0 {
-                            output.push_str(&format!("\nexit code: {exit_code}"));
-                        }
-                        truncate_tool_result(&output, 500)
-                    } else {
-                        let s = serde_json::to_string_pretty(data).unwrap_or_default();
-                        truncate_tool_result(&s, 200)
-                    }
-                } else if let Some(path) = result_val.get("path").and_then(|p| p.as_str()) {
-                    format!("[File: {path}]")
-                } else {
-                    String::new()
-                };
-
-                Some(ToolCallInfo {
-                    tool_name,
-                    arguments: String::new(), // Not exposed in AgentResponse.tool_results
-                    result,
-                    success,
-                    duration_ms: execution_time_ms,
-                    expanded: false,
-                })
-            }).collect()
-        })
-        .unwrap_or_default();
-
-    Ok((content, tool_calls))
-}
-
 /// Truncate a tool result string for display
 fn truncate_tool_result(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
