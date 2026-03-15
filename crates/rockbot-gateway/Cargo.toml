@@ -1,31 +1,31 @@
 [package]
-name = "rockbot-core"
+name = "rockbot-gateway"
 version.workspace = true
 edition = "2021"
-description = "Core RockBot framework components"
+description = "Gateway server for RockBot (HTTP, WebSocket, A2A, cron)"
 license = "MIT"
 
 [features]
 default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "tools-mcp", "tools-markdown"]
 # LLM providers
-anthropic = ["rockbot-llm/anthropic", "rockbot-gateway/anthropic"]
-openai = ["rockbot-llm/openai", "rockbot-gateway/openai"]
-ollama = ["rockbot-llm/ollama", "rockbot-gateway/ollama"]
-bedrock = ["rockbot-llm/bedrock", "rockbot-gateway/bedrock"]
+anthropic = ["rockbot-llm/anthropic"]
+openai = ["rockbot-llm/openai"]
+ollama = ["rockbot-llm/ollama"]
+bedrock = ["rockbot-llm/bedrock"]
 # Channel providers
-discord = ["dep:rockbot-channels-discord", "rockbot-gateway/discord"]
-telegram = ["dep:rockbot-channels-telegram", "rockbot-gateway/telegram"]
-signal = ["dep:rockbot-channels-signal", "rockbot-gateway/signal"]
+discord = ["dep:rockbot-channels-discord"]
+telegram = ["dep:rockbot-channels-telegram"]
+signal = ["dep:rockbot-channels-signal"]
 # Tool providers
-tools-credentials = ["dep:rockbot-tools-credentials", "rockbot-gateway/tools-credentials"]
-tools-mcp = ["dep:rockbot-tools-mcp", "rockbot-gateway/tools-mcp"]
-tools-markdown = ["dep:rockbot-tools-markdown", "rockbot-gateway/tools-markdown"]
+tools-credentials = ["dep:rockbot-tools-credentials"]
+tools-mcp = ["dep:rockbot-tools-mcp"]
+tools-markdown = ["dep:rockbot-tools-markdown"]
 # Telemetry
-otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry", "rockbot-gateway/otel"]
+otel = ["rockbot-agent/otel"]
 # Embedded overseer
-overseer = ["dep:rockbot-overseer", "rockbot-gateway/overseer"]
+overseer = ["dep:rockbot-overseer"]
 # Remote tool execution over Noise Protocol
-remote-exec = ["dep:snow", "rockbot-client/remote-exec", "rockbot-agent/remote-exec", "rockbot-gateway/remote-exec"]
+remote-exec = ["dep:snow", "rockbot-client/remote-exec"]
 
 [lints]
 workspace = true
@@ -34,7 +34,6 @@ workspace = true
 rockbot-agent = { path = "../rockbot-agent" }
 rockbot-client = { path = "../rockbot-client" }
 rockbot-config = { path = "../rockbot-config" }
-rockbot-gateway = { path = "../rockbot-gateway", default-features = false }
 rockbot-session = { path = "../rockbot-session" }
 rockbot-webui = { path = "../rockbot-webui" }
 rockbot-tools = { path = "../rockbot-tools" }
@@ -79,17 +78,7 @@ notify = { workspace = true }
 rusqlite = { workspace = true }
 regex = { workspace = true }
 dirs = { workspace = true }
-rand = "0.8"
-which = "6"
 cron = { workspace = true }
-metrics = { workspace = true }
-tiktoken-rs = { workspace = true }
-
-# OpenTelemetry (optional, behind `otel` feature)
-opentelemetry = { workspace = true, optional = true }
-opentelemetry_sdk = { workspace = true, optional = true }
-opentelemetry-otlp = { workspace = true, optional = true }
-tracing-opentelemetry = { workspace = true, optional = true }
 
 # Embedded overseer (optional)
 rockbot-overseer = { path = "../rockbot-overseer", optional = true }
