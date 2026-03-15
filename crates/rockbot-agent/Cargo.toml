@@ -9,6 +9,7 @@ license = "MIT"
 workspace = true
 
 [dependencies]
+rockbot-client = { path = "../rockbot-client", optional = true }
 rockbot-config = { path = "../rockbot-config" }
 rockbot-session = { path = "../rockbot-session" }
 rockbot-llm = { path = "../rockbot-llm", default-features = false }
@@ -49,6 +50,7 @@ tracing-subscriber = { workspace = true, optional = true }
 
 [features]
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry", "dep:tracing-subscriber"]
+remote-exec = ["dep:rockbot-client", "rockbot-client/remote-exec"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

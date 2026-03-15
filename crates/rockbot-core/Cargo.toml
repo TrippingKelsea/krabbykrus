@@ -25,13 +25,14 @@ otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", 
 # Embedded overseer
 overseer = ["dep:rockbot-overseer"]
 # Remote tool execution over Noise Protocol
-remote-exec = ["dep:snow"]
+remote-exec = ["dep:snow", "rockbot-client/remote-exec", "rockbot-agent/remote-exec"]
 
 [lints]
 workspace = true
 
 [dependencies]
 rockbot-agent = { path = "../rockbot-agent" }
+rockbot-client = { path = "../rockbot-client" }
 rockbot-config = { path = "../rockbot-config" }
 rockbot-session = { path = "../rockbot-session" }
 rockbot-webui = { path = "../rockbot-webui" }

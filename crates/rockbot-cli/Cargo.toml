@@ -23,12 +23,13 @@ tools-markdown = ["rockbot-core/tools-markdown"]
 # Embedded overseer
 overseer = ["rockbot-core/overseer"]
 # Remote tool execution
-remote-exec = ["rockbot-core/remote-exec"]
+remote-exec = ["rockbot-core/remote-exec", "rockbot-client/remote-exec"]
 
 [lints]
 workspace = true
 
 [dependencies]
+rockbot-client = { path = "../rockbot-client" }
 rockbot-core = { path = "../rockbot-core", default-features = false }
 rockbot-tools = { path = "../rockbot-tools" }
 rockbot-memory = { path = "../rockbot-memory" }

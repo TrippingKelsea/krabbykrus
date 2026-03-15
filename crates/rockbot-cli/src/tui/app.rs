@@ -93,10 +93,10 @@ pub struct App {
     models_tab: usize,
     /// Unlocked vault handle (None if locked or not initialized)
     vault: Option<rockbot_credentials::CredentialVault>,
-    /// WebSocket sender for the persistent gateway connection (None if not connected)
-    ws_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
-    /// Pending oneshot receiver — the WS task sends the channel here once connected
-    ws_pending_rx: Option<tokio::sync::oneshot::Receiver<tokio::sync::mpsc::UnboundedSender<String>>>,
+    /// Gateway WebSocket client
+    gateway_client: Option<rockbot_client::GatewayClient>,
+    /// Receiver for gateway events
+    gateway_events_rx: Option<tokio::sync::broadcast::Receiver<rockbot_client::GatewayEvent>>,
     /// Local tool registry for remote tool execution (TUI executes tools on behalf of gateway)
     #[cfg(feature = "remote-exec")]
     #[allow(dead_code)]
@@ -113,8 +113,8 @@ impl App {
             effect_state: EffectState::new(),
             models_tab: 0,
             vault: None,
-            ws_tx: None,
-            ws_pending_rx: None,
+            gateway_client: None,
+            gateway_events_rx: None,
             #[cfg(feature = "remote-exec")]
             local_tool_registry: None,
         }
@@ -165,124 +165,39 @@ impl App {
         Ok(())
     }
 
-    /// Spawn a background task that connects to the gateway via WebSocket.
-    ///
-    /// The connection is established *before* we set `ws_tx`, so that
-    /// `ws_connected()` only returns `true` when the socket is actually open.
-    /// If the connection fails, a retry loop keeps trying every 5 seconds
-    /// until it succeeds or the app shuts down.
+    /// Connect to the gateway via WebSocket using GatewayClient.
     fn spawn_ws_connect(&mut self) {
-        // If there is already an active WS, don't spawn again
         if self.ws_connected() {
             return;
         }
 
-        let tx = self.state.tx.clone();
-        // ws_ready_tx lets the spawned task hand back the send channel once
-        // the WebSocket connection is actually established.
-        let (ws_ready_tx, ws_ready_rx) = tokio::sync::oneshot::channel::<
-            tokio::sync::mpsc::UnboundedSender<String>,
-        >();
-        // We clear the old channel immediately so ws_connected() returns false
-        // while we are still connecting.
-        self.ws_tx = None;
-
-        // Store the receiver so the main loop can pick up the channel once
-        // the connection succeeds.
-        self.ws_pending_rx = Some(ws_ready_rx);
-
         let ws_url = self.state.ws_url();
-        tokio::spawn(async move {
+        let client = rockbot_client::GatewayClient::connect(&ws_url);
+        let events_rx = client.subscribe();
 
-            // Retry loop: try to connect with back-off
-            let mut attempt = 0u32;
-            let ws_stream = loop {
-                attempt += 1;
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    tokio_tungstenite::connect_async(&ws_url),
-                ).await {
-                    Ok(Ok((stream, _))) => {
-                        tracing::info!("WebSocket connected to gateway (attempt {attempt})");
-                        break stream;
-                    }
-                    Ok(Err(e)) => {
-                        tracing::debug!("WebSocket connect attempt {attempt} failed: {e}");
-                    }
-                    Err(_) => {
-                        tracing::debug!("WebSocket connect attempt {attempt} timed out");
-                    }
-                }
-                // After 6 failed attempts (~30s total), give up and let the
-                // periodic refresh interval trigger a new `spawn_ws_connect`.
-                if attempt >= 6 {
-                    tracing::debug!("WebSocket gave up after {attempt} attempts, will retry later");
-                    let _ = tx.send(Message::SetStatus(
-                        "WebSocket unavailable, using HTTP polling".to_string(), false,
-                    ));
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            };
-
-            use futures_util::{SinkExt, StreamExt};
-            let (mut ws_sink, mut ws_source) = ws_stream.split();
-
-            // Create the outbound channel *now* that we know we are connected
-            let (ws_send_tx, mut ws_send_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-            let _ = ws_ready_tx.send(ws_send_tx.clone());
-
-            // --- Initiate Noise Protocol handshake for remote tool execution ---
-            #[cfg(feature = "remote-exec")]
-            {
-                match initiate_noise_handshake(&mut ws_sink).await {
+        // Initiate Noise handshake once connected
+        #[cfg(feature = "remote-exec")]
+        {
+            let sender = client.sender();
+            tokio::spawn(async move {
+                // Wait a moment for the connection to establish
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                match initiate_noise_handshake(&sender).await {
                     Ok(()) => tracing::info!("Noise handshake step 1 sent"),
                     Err(e) => tracing::warn!("Failed to initiate Noise handshake: {e}"),
                 }
-            }
+            });
+        }
 
-            loop {
-                tokio::select! {
-                    // Outbound: messages from the app to send over WebSocket
-                    outbound = ws_send_rx.recv() => {
-                        match outbound {
-                            Some(text) => {
-                                use tokio_tungstenite::tungstenite::Message as WsMsg;
-                                if ws_sink.send(WsMsg::Text(text)).await.is_err() {
-                                    tracing::warn!("WebSocket send failed, disconnecting");
-                                    break;
-                                }
-                            }
-                            None => break, // Channel closed
-                        }
-                    }
-                    // Inbound: messages from the gateway
-                    inbound = ws_source.next() => {
-                        match inbound {
-                            Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
-                                handle_ws_response(&tx, &ws_send_tx, &text).await;
-                            }
-                            Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) | None => {
-                                tracing::info!("WebSocket closed by server");
-                                break;
-                            }
-                            Some(Err(e)) => {
-                                tracing::debug!("WebSocket error: {e}");
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-
-            tracing::info!("WebSocket disconnected");
-        });
+        self.gateway_client = Some(client);
+        self.gateway_events_rx = Some(events_rx);
     }
 
     /// Check if a WebSocket connection is active
     fn ws_connected(&self) -> bool {
-        self.ws_tx.as_ref().is_some_and(|tx| !tx.is_closed())
+        self.gateway_client
+            .as_ref()
+            .is_some_and(|c| c.is_connected())
     }
 
     /// Spawn a task to check gateway status
@@ -2963,13 +2878,19 @@ impl App {
             "message": user_message,
             "workspace": launch_dir,
         });
-        if let Some(ref ws_tx) = self.ws_tx {
-            if ws_tx.send(ws_msg.to_string()).is_err() {
-                let _ = tx.send(Message::ChatError(
-                    session_key,
-                    "Failed to send message over WebSocket.".to_string(),
-                ));
-            }
+        if let Some(ref client) = self.gateway_client {
+            let sender = client.sender();
+            let session_key_clone = session_key.clone();
+            let tx_clone = tx.clone();
+            let msg_str = ws_msg.to_string();
+            tokio::spawn(async move {
+                if sender.send(msg_str).await.is_err() {
+                    let _ = tx_clone.send(Message::ChatError(
+                        session_key_clone,
+                        "Failed to send message over WebSocket.".to_string(),
+                    ));
+                }
+            });
         }
     }
 
@@ -3344,30 +3265,36 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: Str
                 app.state.tick_count = app.state.tick_count.wrapping_add(1);
             }
 
+            // Gateway events from WebSocket
+            event = async {
+                if let Some(ref mut rx) = app.gateway_events_rx {
+                    rx.recv().await.ok()
+                } else {
+                    std::future::pending::<Option<rockbot_client::GatewayEvent>>().await
+                }
+            } => {
+                if let Some(event) = event {
+                    handle_gateway_event(&app.state.tx, app.gateway_client.as_ref(), &event).await;
+                }
+            }
+
             // Periodic refresh
             _ = refresh_interval.tick() => {
-                // Check if a pending WS connection has completed
-                if let Some(ref mut rx) = app.ws_pending_rx {
-                    if let Ok(ws_send_tx) = rx.try_recv() {
-                        tracing::info!("WebSocket channel ready — activating");
-                        app.ws_tx = Some(ws_send_tx);
-                        app.ws_pending_rx = None;
-                    }
-                }
-
                 if app.ws_connected() {
-                    // WebSocket is active — send a ping instead of HTTP poll
-                    if let Some(ref ws_tx) = app.ws_tx {
-                        let _ = ws_tx.send(r#"{"type":"health_check"}"#.to_string());
+                    // WebSocket is active — send a health check
+                    if let Some(ref client) = app.gateway_client {
+                        let sender = client.sender();
+                        tokio::spawn(async move {
+                            let _ = sender.send(r#"{"type":"health_check"}"#.to_string()).await;
+                        });
                     }
                 } else {
                     // No WebSocket — fall back to HTTP status check
                     if !app.state.gateway_loading {
                         app.spawn_gateway_check();
                     }
-                    // Try to reconnect WebSocket if gateway is up and no
-                    // connect attempt is already in progress
-                    if app.state.gateway.connected && app.ws_pending_rx.is_none() {
+                    // Try to reconnect WebSocket if gateway is up
+                    if app.state.gateway.connected && app.gateway_client.as_ref().is_none_or(|c| !c.is_connected()) {
                         app.spawn_ws_connect();
                     }
                 }
@@ -3394,19 +3321,12 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: Str
 // Background task implementations
 // =============================================================================
 
-/// Parse an incoming WebSocket message from the gateway and dispatch to the TUI state
 /// Initiate Noise Protocol handshake — send step 1 (client -> server).
 #[cfg(feature = "remote-exec")]
-async fn initiate_noise_handshake<S>(ws_sink: &mut S) -> Result<()>
-where
-    S: futures_util::Sink<tokio_tungstenite::tungstenite::Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
-{
-    use futures_util::SinkExt;
-    use tokio_tungstenite::tungstenite::Message as WsMsg;
-
-    let client_key = rockbot_core::remote_exec::generate_keypair()
+async fn initiate_noise_handshake(sender: &rockbot_client::GatewaySender) -> Result<()> {
+    let client_key = rockbot_client::remote_exec::generate_keypair()
         .map_err(|e| anyhow::anyhow!("Noise keypair generation failed: {e}"))?;
-    let mut initiator = rockbot_core::remote_exec::create_initiator(&client_key)
+    let mut initiator = rockbot_client::remote_exec::create_initiator(&client_key)
         .map_err(|e| anyhow::anyhow!("Noise initiator creation failed: {e}"))?;
 
     let mut buf = vec![0u8; 65535];
@@ -3419,12 +3339,12 @@ where
         "payload": payload_b64,
         "step": 1
     });
-    ws_sink.send(WsMsg::Text(serde_json::to_string(&msg)?)).await?;
+    sender.send(serde_json::to_string(&msg)?).await
+        .map_err(|e| anyhow::anyhow!("Failed to send Noise step 1: {e}"))?;
 
     // Store the handshake state + key for step 3
     {
-        let mut guard: tokio::sync::MutexGuard<'_, Option<(rockbot_core::remote_exec::HandshakeState, rockbot_core::remote_exec::Keypair)>> =
-            NOISE_HANDSHAKE_STATE.lock().await;
+        let mut guard = NOISE_HANDSHAKE_STATE.lock().await;
         *guard = Some((initiator, client_key));
     }
 
@@ -3433,7 +3353,7 @@ where
 
 /// In-progress Noise handshake state (client side).
 #[cfg(feature = "remote-exec")]
-static NOISE_HANDSHAKE_STATE: tokio::sync::Mutex<Option<(rockbot_core::remote_exec::HandshakeState, rockbot_core::remote_exec::Keypair)>> =
+static NOISE_HANDSHAKE_STATE: tokio::sync::Mutex<Option<(rockbot_client::remote_exec::HandshakeState, rockbot_client::remote_exec::Keypair)>> =
     tokio::sync::Mutex::const_new(None);
 
 /// Whether the Noise session is established (remote exec active).
@@ -3487,10 +3407,7 @@ fn base64_decode_simple(input: &str) -> Result<Vec<u8>> {
 
 /// Handle Noise handshake step 2 response from the server.
 #[cfg(feature = "remote-exec")]
-async fn handle_noise_step2(
-    ws_tx: &tokio::sync::mpsc::UnboundedSender<String>,
-    payload_b64: &str,
-) {
+async fn handle_noise_step2(sender: &rockbot_client::GatewaySender, payload_b64: &str) {
     let payload = match base64_decode_simple(payload_b64) {
         Ok(p) => p,
         Err(e) => {
@@ -3499,8 +3416,7 @@ async fn handle_noise_step2(
         }
     };
 
-    let mut state: tokio::sync::MutexGuard<'_, Option<(rockbot_core::remote_exec::HandshakeState, rockbot_core::remote_exec::Keypair)>> =
-        NOISE_HANDSHAKE_STATE.lock().await;
+    let mut state = NOISE_HANDSHAKE_STATE.lock().await;
     let Some((ref mut initiator, _)) = *state else {
         tracing::warn!("Received Noise step 2 but no handshake in progress");
         return;
@@ -3529,15 +3445,14 @@ async fn handle_noise_step2(
         "payload": payload_b64,
         "step": 3
     });
-    if let Err(e) = ws_tx.send(serde_json::to_string(&msg).unwrap_or_default()) {
-        tracing::warn!("Failed to send Noise step 3: {e}");
+    if sender.send(serde_json::to_string(&msg).unwrap_or_default()).await.is_err() {
+        tracing::warn!("Failed to send Noise step 3");
         state.take();
         return;
     }
 
     tracing::info!("Noise handshake step 3 sent — awaiting capabilities ack");
 
-    // Handshake should now be finished — send capabilities
     if initiator.is_handshake_finished() {
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
@@ -3548,31 +3463,28 @@ async fn handle_noise_step2(
             "client_type": "tui",
             "working_dir": cwd,
         });
-        let _ = ws_tx.send(serde_json::to_string(&caps_msg).unwrap_or_default());
+        let _ = sender.send(serde_json::to_string(&caps_msg).unwrap_or_default()).await;
         tracing::info!("Sent TUI capabilities (filesystem, shell, network)");
         NOISE_SESSION_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
-    state.take(); // Consume the handshake state
+    state.take();
 }
 
 /// Execute a tool locally on behalf of the remote gateway.
 #[cfg(feature = "remote-exec")]
 async fn handle_remote_tool_request(
-    ws_tx: &tokio::sync::mpsc::UnboundedSender<String>,
-    json: &serde_json::Value,
+    sender: &rockbot_client::GatewaySender,
+    request_id: &str,
+    tool_name: &str,
+    params: &str,
+    agent_id: &str,
+    session_id: &str,
+    workspace: &str,
 ) {
-    let request_id = json.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let tool_name = json.get("tool_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let params = json.get("params").and_then(|v| v.as_str()).unwrap_or("{}").to_string();
-    let agent_id = json.get("agent_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let session_id = json.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let workspace = json.get("workspace_path").and_then(|v| v.as_str()).unwrap_or(".").to_string();
-
     tracing::info!("Executing remote tool locally: {tool_name} (request={request_id})");
     let start = std::time::Instant::now();
 
-    // Create a minimal tool registry for local execution
     let tool_config = rockbot_tools::ToolConfig {
         profile: "standard".to_string(),
         deny: vec![],
@@ -3581,24 +3493,22 @@ async fn handle_remote_tool_request(
     let registry = match rockbot_tools::ToolRegistry::new(tool_config).await {
         Ok(r) => r,
         Err(e) => {
-            send_tool_response(ws_tx, &request_id, false, &format!("Failed to create tool registry: {e}"), start.elapsed());
+            send_tool_response(sender, request_id, false, &format!("Failed to create tool registry: {e}"), start.elapsed()).await;
             return;
         }
     };
 
-    // Build a permissive execution context for local tool execution
-    let workspace_path = std::path::PathBuf::from(&workspace);
+    let workspace_path = std::path::PathBuf::from(workspace);
     let mut capabilities = rockbot_security::Capabilities::new();
     capabilities.add(rockbot_security::Capability::FilesystemRead(workspace_path.clone()));
     capabilities.add(rockbot_security::Capability::FilesystemWrite(workspace_path.clone()));
     capabilities.add(rockbot_security::Capability::ProcessExecute);
-    // Allow read/write from root so tools can access absolute paths
     capabilities.add(rockbot_security::Capability::FilesystemRead(std::path::PathBuf::from("/")));
     capabilities.add(rockbot_security::Capability::FilesystemWrite(std::path::PathBuf::from("/")));
 
     let context = rockbot_tools::ToolExecutionContext {
-        session_id,
-        agent_id,
+        session_id: session_id.to_string(),
+        agent_id: agent_id.to_string(),
         workspace_path,
         security_context: rockbot_security::SecurityContext {
             session_id: "remote-exec".to_string(),
@@ -3615,7 +3525,7 @@ async fn handle_remote_tool_request(
         swarm_id: None,
     };
 
-    match registry.execute_tool(&tool_name, &params, context).await {
+    match registry.execute_tool(tool_name, params, context).await {
         Ok(result) => {
             let output = match &result.result {
                 rockbot_tools::message::ToolResult::Text { content } => content.clone(),
@@ -3624,17 +3534,17 @@ async fn handle_remote_tool_request(
                 rockbot_tools::message::ToolResult::File { path, .. } => format!("[File: {path}]"),
                 rockbot_tools::message::ToolResult::Handoff { .. } => "[Handoff — not applicable for remote exec]".to_string(),
             };
-            send_tool_response(ws_tx, &request_id, result.success, &output, start.elapsed());
+            send_tool_response(sender, request_id, result.success, &output, start.elapsed()).await;
         }
         Err(e) => {
-            send_tool_response(ws_tx, &request_id, false, &format!("Tool execution error: {e}"), start.elapsed());
+            send_tool_response(sender, request_id, false, &format!("Tool execution error: {e}"), start.elapsed()).await;
         }
     }
 }
 
 #[cfg(feature = "remote-exec")]
-fn send_tool_response(
-    ws_tx: &tokio::sync::mpsc::UnboundedSender<String>,
+async fn send_tool_response(
+    sender: &rockbot_client::GatewaySender,
     request_id: &str,
     success: bool,
     output: &str,
@@ -3647,176 +3557,140 @@ fn send_tool_response(
         "output": output,
         "execution_time_ms": elapsed.as_millis() as u64,
     });
-    let _ = ws_tx.send(serde_json::to_string(&resp).unwrap_or_default());
+    let _ = sender.send(serde_json::to_string(&resp).unwrap_or_default()).await;
     tracing::info!("Remote tool response sent: request={request_id}, success={success}, time={}ms", elapsed.as_millis());
 }
 
-async fn handle_ws_response(
+/// Map a GatewayEvent from rockbot-client into TUI Messages.
+async fn handle_gateway_event(
     tx: &mpsc::UnboundedSender<Message>,
-    ws_tx: &tokio::sync::mpsc::UnboundedSender<String>,
-    text: &str,
+    client: Option<&rockbot_client::GatewayClient>,
+    event: &rockbot_client::GatewayEvent,
 ) {
-    let _ = &ws_tx; // Used by remote-exec feature
-    let json: serde_json::Value = match serde_json::from_str(text) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("Invalid WebSocket JSON from gateway: {e}");
-            return;
+    use rockbot_client::GatewayEvent;
+    match event {
+        GatewayEvent::StreamChunk { session_key, delta } => {
+            let _ = tx.send(Message::ChatStreamChunk(format!("{session_key}:{delta}")));
         }
-    };
-
-    let msg_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    match msg_type {
-        "stream_chunk" => {
-            let session_key = json.get("session_key").and_then(|v| v.as_str()).unwrap_or("");
-            let delta = json.get("delta").and_then(|v| v.as_str()).unwrap_or("");
-            if !session_key.is_empty() && !delta.is_empty() {
-                // ChatStreamChunk format is "session_key:text"
-                let _ = tx.send(Message::ChatStreamChunk(
-                    format!("{session_key}:{delta}")
-                ));
-            }
-        }
-        "tool_call" => {
-            let tool_name = json.get("tool_name").and_then(|v| v.as_str()).unwrap_or("unknown");
+        GatewayEvent::ToolCall { tool_name } => {
             let _ = tx.send(Message::SetStatus(format!("Running: {tool_name}..."), false));
         }
-        "tool_result" => {
-            let tool_name = json.get("tool_name").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let success = json.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
-            let duration = json.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
-            let status = if success { "✓" } else { "✗" };
+        GatewayEvent::ToolResult { tool_name, success, duration_ms } => {
+            let status = if *success { "✓" } else { "✗" };
             let _ = tx.send(Message::SetStatus(
-                format!("{status} {tool_name} ({duration}ms)"), !success
+                format!("{status} {tool_name} ({duration_ms}ms)"), !success
             ));
         }
-        "agent_response" => {
-            let session_key = json.get("session_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let tool_calls: Vec<ToolCallInfo> = json.get("tool_calls")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter().filter_map(|tc| {
-                        let raw_result = tc.get("result").and_then(|v| v.as_str()).unwrap_or("");
-                        Some(ToolCallInfo {
-                            tool_name: tc.get("tool_name")?.as_str()?.to_string(),
-                            arguments: String::new(),
-                            result: truncate_tool_result(raw_result, 500),
-                            success: tc.get("success").and_then(|v| v.as_bool()).unwrap_or(true),
-                            duration_ms: tc.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0),
-                            expanded: false,
-                        })
-                    }).collect()
-                })
-                .unwrap_or_default();
+        GatewayEvent::AgentResponse { session_key, content, tool_calls, tokens_used, processing_time_ms } => {
+            let tui_tool_calls: Vec<ToolCallInfo> = tool_calls.iter().map(|tc| {
+                ToolCallInfo {
+                    tool_name: tc.tool_name.clone(),
+                    arguments: String::new(),
+                    result: truncate_tool_result(&tc.result, 500),
+                    success: tc.success,
+                    duration_ms: tc.duration_ms,
+                    expanded: false,
+                }
+            }).collect();
 
-            if tool_calls.is_empty() {
-                let _ = tx.send(Message::ChatResponse(session_key.clone(), content));
+            if tui_tool_calls.is_empty() {
+                let _ = tx.send(Message::ChatResponse(session_key.clone(), content.clone()));
             } else {
-                let _ = tx.send(Message::ChatAgentResponse(session_key.clone(), content, tool_calls));
+                let _ = tx.send(Message::ChatAgentResponse(session_key.clone(), content.clone(), tui_tool_calls));
             }
 
-            // Show token usage in status bar if available
-            if let Some(tokens) = json.get("tokens_used") {
-                let total = tokens.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                let prompt = tokens.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                let completion = tokens.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                let time_ms = json.get("processing_time_ms").and_then(|v| v.as_u64()).unwrap_or(0);
-                if total > 0 {
-                    let status = if time_ms > 0 {
-                        format!("Tokens: {total} ({prompt} prompt + {completion} completion) | {time_ms}ms")
+            if let Some(tokens) = tokens_used {
+                if tokens.total_tokens > 0 {
+                    let status = if let Some(time_ms) = processing_time_ms {
+                        format!("Tokens: {} ({} prompt + {} completion) | {time_ms}ms",
+                            tokens.total_tokens, tokens.prompt_tokens, tokens.completion_tokens)
                     } else {
-                        format!("Tokens: {total} ({prompt} prompt + {completion} completion)")
+                        format!("Tokens: {} ({} prompt + {} completion)",
+                            tokens.total_tokens, tokens.prompt_tokens, tokens.completion_tokens)
                     };
                     let _ = tx.send(Message::SetStatus(status, false));
                 }
             }
         }
-        "agent_error" => {
-            let session_key = json.get("session_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let error = json.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error").to_string();
-            let _ = tx.send(Message::ChatError(session_key, error));
+        GatewayEvent::AgentError { session_key, error } => {
+            let _ = tx.send(Message::ChatError(session_key.clone(), error.clone()));
         }
-        "token_usage" => {
-            let session_key = json.get("session_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let prompt = json.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            let completion = json.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            let total = json.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            let cumulative = json.get("cumulative_total").and_then(|v| v.as_u64()).unwrap_or(0);
-            if !session_key.is_empty() {
-                let _ = tx.send(Message::ChatTokenUsage {
-                    session_key,
-                    prompt_tokens: prompt,
-                    completion_tokens: completion,
-                    total_tokens: total,
-                    cumulative_total: cumulative,
-                });
-            }
+        GatewayEvent::TokenUsage { session_key, prompt_tokens, completion_tokens, total_tokens, cumulative_total } => {
+            let _ = tx.send(Message::ChatTokenUsage {
+                session_key: session_key.clone(),
+                prompt_tokens: *prompt_tokens,
+                completion_tokens: *completion_tokens,
+                total_tokens: *total_tokens,
+                cumulative_total: *cumulative_total,
+            });
         }
-        "thinking_status" => {
-            let session_key = json.get("session_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let phase = json.get("phase").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let tool_name = json.get("tool_name").and_then(|v| v.as_str()).map(String::from);
-            let iteration = json.get("iteration").and_then(|v| v.as_u64()).map(|v| v as usize);
-            if !session_key.is_empty() {
-                let _ = tx.send(Message::ChatThinkingStatus {
-                    session_key,
-                    phase,
-                    tool_name,
-                    iteration,
-                });
-            }
+        GatewayEvent::ThinkingStatus { session_key, phase, tool_name, iteration } => {
+            let _ = tx.send(Message::ChatThinkingStatus {
+                session_key: session_key.clone(),
+                phase: phase.clone(),
+                tool_name: tool_name.clone(),
+                iteration: *iteration,
+            });
         }
-        "pong" => {
-            // Silently handle keepalive responses
+        GatewayEvent::Pong => {}
+        GatewayEvent::HealthStatus { version, uptime_secs, active_sessions, pending_agents, .. } => {
+            let gateway_status = super::state::GatewayStatus {
+                connected: true,
+                version: version.clone(),
+                uptime_secs: *uptime_secs,
+                active_sessions: *active_sessions,
+                pending_agents: *pending_agents,
+            };
+            let _ = tx.send(Message::GatewayStatus(gateway_status));
         }
-        "health_status" => {
-            // Update gateway status from WebSocket health check
-            if let Some(status) = json.get("status") {
-                let gateway_status = super::state::GatewayStatus {
-                    connected: true,
-                    version: status.get("version").and_then(|v| v.as_str()).map(String::from),
-                    uptime_secs: status.get("uptime_seconds").and_then(|v| v.as_u64()),
-                    active_sessions: status.get("active_sessions").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-                    pending_agents: status.get("pending_agents").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-                };
-                let _ = tx.send(Message::GatewayStatus(gateway_status));
-            }
+        GatewayEvent::Connected => {
+            tracing::info!("GatewayClient connected");
         }
-        "error" => {
-            let message = json.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+        GatewayEvent::Disconnected { reason } => {
+            let _ = tx.send(Message::SetStatus(
+                format!("WebSocket disconnected: {reason}"), false,
+            ));
+        }
+        GatewayEvent::Error { message } => {
             tracing::warn!("Gateway WebSocket error: {message}");
         }
-        // --- Remote execution protocol messages ---
         #[cfg(feature = "remote-exec")]
-        "noise_handshake" => {
-            let step = json.get("step").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-            if step == 2 {
-                let payload = json.get("payload").and_then(|v| v.as_str()).unwrap_or("");
-                handle_noise_step2(ws_tx, payload).await;
+        GatewayEvent::NoiseHandshakeStep { step, payload } => {
+            if *step == 2 {
+                if let Some(c) = client {
+                    let sender = c.sender();
+                    handle_noise_step2(&sender, payload).await;
+                }
             }
         }
         #[cfg(feature = "remote-exec")]
-        "remote_capabilities_ack" => {
-            let accepted = json.get("accepted").and_then(|v| v.as_bool()).unwrap_or(false);
-            let message = json.get("message").and_then(|v| v.as_str()).unwrap_or("");
-            if accepted {
+        GatewayEvent::RemoteCapabilitiesAck { accepted, message } => {
+            if *accepted {
                 tracing::info!("Remote execution registered: {message}");
             } else {
                 tracing::warn!("Remote execution rejected: {message}");
             }
         }
         #[cfg(feature = "remote-exec")]
-        "remote_tool_request" => {
-            let ws_tx_clone = ws_tx.clone();
-            let json_clone = json.clone();
-            tokio::spawn(async move {
-                handle_remote_tool_request(&ws_tx_clone, &json_clone).await;
-            });
+        GatewayEvent::RemoteToolRequest { request_id, tool_name, params, agent_id, session_id, workspace_path } => {
+            if let Some(c) = client {
+                let sender = c.sender();
+                let request_id = request_id.clone();
+                let tool_name = tool_name.clone();
+                let params = params.clone();
+                let agent_id = agent_id.clone();
+                let session_id = session_id.clone();
+                let workspace_path = workspace_path.clone();
+                tokio::spawn(async move {
+                    handle_remote_tool_request(&sender, &request_id, &tool_name, &params, &agent_id, &session_id, &workspace_path).await;
+                });
+            }
         }
-        other => {
-            tracing::debug!("Unhandled WebSocket message type: {other}");
-        }
+        // When remote-exec is not enabled, ignore these events
+        #[cfg(not(feature = "remote-exec"))]
+        GatewayEvent::NoiseHandshakeStep { .. }
+        | GatewayEvent::RemoteCapabilitiesAck { .. }
+        | GatewayEvent::RemoteToolRequest { .. } => {}
     }
 }
 

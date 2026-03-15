@@ -216,6 +216,17 @@ pub enum AgentCommands {
         #[arg(short, long)]
         model: Option<String>,
     },
+    /// Run an interactive agent session via a remote gateway
+    Run {
+        /// Agent ID to interact with
+        agent_id: String,
+        /// Gateway URL
+        #[arg(short, long, default_value = "http://127.0.0.1:18080")]
+        gateway: String,
+        /// Register as remote tool executor
+        #[arg(long)]
+        exec: bool,
+    },
 }
 
 /// Tool commands

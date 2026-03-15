@@ -245,7 +245,7 @@ pub struct Agent {
     swarm_id: Option<String>,
     /// Remote executor registry for dispatching tool calls to connected clients
     #[cfg(feature = "remote-exec")]
-    remote_exec_registry: Option<Arc<crate::remote_exec::RemoteExecutorRegistry>>,
+    remote_exec_registry: Option<Arc<rockbot_client::remote_exec::RemoteExecutorRegistry>>,
     /// Agent state
     state: Arc<RwLock<AgentState>>,
 }
@@ -554,7 +554,7 @@ impl Agent {
 
     /// Set the remote executor registry for dispatching tool calls to connected clients.
     #[cfg(feature = "remote-exec")]
-    pub fn set_remote_exec_registry(&mut self, registry: Arc<crate::remote_exec::RemoteExecutorRegistry>) {
+    pub fn set_remote_exec_registry(&mut self, registry: Arc<rockbot_client::remote_exec::RemoteExecutorRegistry>) {
         self.remote_exec_registry = Some(registry);
     }
 

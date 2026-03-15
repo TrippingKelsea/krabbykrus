@@ -1,0 +1,31 @@
+[package]
+name = "rockbot-client"
+version.workspace = true
+edition = "2021"
+description = "Gateway client library for RockBot (WS, ACP, remote execution)"
+license = "MIT"
+
+[features]
+# Remote tool execution over Noise Protocol
+remote-exec = ["dep:snow"]
+
+[lints]
+workspace = true
+
+[dependencies]
+rockbot-config = { path = "../rockbot-config" }
+
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+# Noise Protocol for remote execution (optional)
+snow = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
