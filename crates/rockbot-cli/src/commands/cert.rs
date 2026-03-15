@@ -401,18 +401,30 @@ async fn update_config_tls(
     Ok(())
 }
 
+/// Expand a leading `~` or `~/` to the user's home directory.
+fn expand_tilde(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if s == "~" || s.starts_with("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(s.strip_prefix("~/").unwrap_or(""));
+        }
+    }
+    path.to_path_buf()
+}
+
 /// Resolve the cert path from an explicit argument or from the config.
 async fn resolve_cert_path(
     explicit: Option<&Path>,
     config_path: &Path,
 ) -> Result<PathBuf> {
     if let Some(p) = explicit {
-        return Ok(p.to_path_buf());
+        return Ok(expand_tilde(p));
     }
     let config = load_config(&config_path.to_path_buf()).await?;
     config
         .gateway
         .tls_cert
+        .map(|p| expand_tilde(&p))
         .context("No --cert provided and no tls_cert in config")
 }
 
@@ -423,16 +435,16 @@ async fn resolve_cert_key_paths(
     config_path: &Path,
 ) -> Result<(PathBuf, PathBuf)> {
     match (cert, key) {
-        (Some(c), Some(k)) => Ok((c.to_path_buf(), k.to_path_buf())),
+        (Some(c), Some(k)) => Ok((expand_tilde(c), expand_tilde(k))),
         _ => {
             let config = load_config(&config_path.to_path_buf()).await?;
             let c = cert
-                .map(|p| p.to_path_buf())
-                .or(config.gateway.tls_cert)
+                .map(|p| expand_tilde(p))
+                .or(config.gateway.tls_cert.map(|p| expand_tilde(&p)))
                 .context("No --cert provided and no tls_cert in config")?;
             let k = key
-                .map(|p| p.to_path_buf())
-                .or(config.gateway.tls_key)
+                .map(|p| expand_tilde(p))
+                .or(config.gateway.tls_key.map(|p| expand_tilde(&p)))
                 .context("No --key provided and no tls_key in config")?;
             Ok((c, k))
         }

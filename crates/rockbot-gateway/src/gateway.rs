@@ -897,10 +897,21 @@ impl Gateway {
         Ok((created, still_pending_count))
     }
     
+    /// Expand a leading `~` or `~/` to the user's home directory.
+    fn expand_tilde(path: &std::path::Path) -> std::path::PathBuf {
+        let s = path.to_string_lossy();
+        if s == "~" || s.starts_with("~/") {
+            if let Some(home) = dirs::home_dir() {
+                return home.join(s.strip_prefix("~/").unwrap_or(""));
+            }
+        }
+        path.to_path_buf()
+    }
+
     /// Load a TLS acceptor from the configured cert/key paths.
     fn load_tls_acceptor(&self) -> Result<Option<tokio_rustls::TlsAcceptor>> {
         let (cert_path, key_path) = match (&self.config.tls_cert, &self.config.tls_key) {
-            (Some(c), Some(k)) => (c, k),
+            (Some(c), Some(k)) => (Self::expand_tilde(c), Self::expand_tilde(k)),
             _ => return Ok(None),
         };
 
@@ -910,9 +921,9 @@ impl Gateway {
             )
         };
 
-        let cert_pem = std::fs::read(cert_path)
+        let cert_pem = std::fs::read(&cert_path)
             .map_err(|e| tls_config_err(format!("Failed to read TLS cert {}: {e}", cert_path.display())))?;
-        let key_pem = std::fs::read(key_path)
+        let key_pem = std::fs::read(&key_path)
             .map_err(|e| tls_config_err(format!("Failed to read TLS key {}: {e}", key_path.display())))?;
 
         let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
