@@ -1,6 +1,6 @@
 [package]
 name = "rockbot-credentials-schema"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Credential schema types shared across RockBot provider plugins"
 license = "MIT"

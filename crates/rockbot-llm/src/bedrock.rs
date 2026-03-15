@@ -193,6 +193,38 @@ pub struct BedrockProvider {
 }
 
 impl BedrockProvider {
+    /// Build runtime and bedrock clients from an AWS SdkConfig, applying
+    /// connect/read timeouts so that misconfigured models or network issues
+    /// cannot hang the process indefinitely.
+    fn build_clients(config: &aws_config::SdkConfig) -> (Client, aws_sdk_bedrock::Client) {
+        use std::time::Duration;
+
+        let timeout = aws_sdk_bedrockruntime::config::timeout::TimeoutConfig::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(90))
+            .operation_timeout(Duration::from_secs(120))
+            .build();
+
+        let runtime_config = aws_sdk_bedrockruntime::config::Builder::from(config)
+            .timeout_config(timeout.clone())
+            .build();
+
+        let control_timeout = aws_sdk_bedrock::config::timeout::TimeoutConfig::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(30))
+            .operation_timeout(Duration::from_secs(45))
+            .build();
+
+        let control_config = aws_sdk_bedrock::config::Builder::from(config)
+            .timeout_config(control_timeout)
+            .build();
+
+        (
+            Client::from_conf(runtime_config),
+            aws_sdk_bedrock::Client::from_conf(control_config),
+        )
+    }
+
     /// Create a new Bedrock provider with the specified region using standard AWS credentials
     pub async fn new(region: &str) -> Result<Self> {
         let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
@@ -200,9 +232,11 @@ impl BedrockProvider {
             .load()
             .await;
 
+        let (client, bedrock_client) = Self::build_clients(&config);
+
         Ok(Self {
-            client: Client::new(&config),
-            bedrock_client: aws_sdk_bedrock::Client::new(&config),
+            client,
+            bedrock_client,
             region: region.to_string(),
             auth_mode: BedrockAuthMode::AwsCredentials,
             sdk_config: config,
@@ -221,9 +255,11 @@ impl BedrockProvider {
         let region = config
             .region().map_or_else(|| "us-east-1".to_string(), std::string::ToString::to_string);
 
+        let (client, bedrock_client) = Self::build_clients(&config);
+
         Ok(Self {
-            client: Client::new(&config),
-            bedrock_client: aws_sdk_bedrock::Client::new(&config),
+            client,
+            bedrock_client,
             region,
             auth_mode: BedrockAuthMode::AwsCredentials,
             sdk_config: config,
@@ -250,9 +286,11 @@ impl BedrockProvider {
             .load()
             .await;
 
+        let (client, bedrock_client) = Self::build_clients(&aws_config);
+
         Ok(Self {
-            client: Client::new(&aws_config),
-            bedrock_client: aws_sdk_bedrock::Client::new(&aws_config),
+            client,
+            bedrock_client,
             region: region.to_string(),
             auth_mode: BedrockAuthMode::AgentCoreOAuth2(config),
             sdk_config: aws_config,
@@ -280,9 +318,11 @@ impl BedrockProvider {
             .load()
             .await;
 
+        let (client, bedrock_client) = Self::build_clients(&aws_config);
+
         Ok(Self {
-            client: Client::new(&aws_config),
-            bedrock_client: aws_sdk_bedrock::Client::new(&aws_config),
+            client,
+            bedrock_client,
             region: region.to_string(),
             auth_mode: BedrockAuthMode::AgentCoreApiKey {
                 credential_provider_name: credential_provider_name.to_string(),

@@ -170,10 +170,12 @@ pub struct CronJob {
     pub wake_mode: WakeMode,
     /// Optional delivery channel for results
     pub delivery: Option<CronDelivery>,
-    /// Target client label — when set, the job is dispatched to a specific
-    /// connected client (e.g. "laptop-1", "server-prod") rather than executed
-    /// locally on the gateway. If the target client is not connected when the
-    /// job fires, the execution is skipped and an error is recorded.
+    /// Target client for remote execution. When set, the job is dispatched to
+    /// a specific connected client rather than executed locally on the gateway.
+    /// The value is matched against clients by UUID first (exact), then label,
+    /// then hostname — using the UUID is strongly recommended for deterministic
+    /// dispatch. If the target client is not connected when the job fires, the
+    /// execution is skipped and an error is recorded.
     #[serde(default)]
     pub target_client: Option<String>,
     /// Runtime state

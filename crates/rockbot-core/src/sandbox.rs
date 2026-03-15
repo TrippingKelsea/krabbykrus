@@ -23,15 +23,18 @@ pub struct SandboxResult {
     pub containerized: bool,
 }
 
-/// Check if Docker is available on the system.
+/// Check if Docker is available on the system (with 10s timeout).
 pub async fn is_docker_available() -> bool {
-    Command::new("docker")
-        .args(["info", "--format", "{{.ServerVersion}}"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await
-        .is_ok_and(|s| s.success())
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        Command::new("docker")
+            .args(["info", "--format", "{{.ServerVersion}}"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status(),
+    )
+    .await
+    .map_or(false, |r| r.is_ok_and(|s| s.success()))
 }
 
 /// Execute a command inside a Docker container sandbox.

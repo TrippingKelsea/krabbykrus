@@ -127,8 +127,12 @@ fn render_general(frame: &mut Frame, area: Rect, state: &AppState) {
             gateway_status,
         ]),
         Line::from(vec![
-            Span::styled("Version: ", Style::default().fg(Color::Cyan)),
+            Span::styled("Gateway Version: ", Style::default().fg(Color::Cyan)),
             Span::raw(state.gateway.version.as_deref().unwrap_or("-")),
+        ]),
+        Line::from(vec![
+            Span::styled("Client Version: ", Style::default().fg(Color::Cyan)),
+            Span::raw(env!("CARGO_PKG_VERSION")),
         ]),
         Line::from(vec![
             Span::styled("Active Sessions: ", Style::default().fg(Color::Cyan)),

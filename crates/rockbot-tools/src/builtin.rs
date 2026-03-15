@@ -1141,14 +1141,22 @@ impl Tool for InvokeAgentTool {
                 }
             };
 
-            match invoker.invoke_agent(
-                &agent_id,
-                &message,
-                &context.session_id,
-                context.delegation_depth + 1,
+            // Timeout sub-agent invocation to prevent indefinite hangs
+            let invoke_timeout = std::time::Duration::from_secs(300);
+            match tokio::time::timeout(
+                invoke_timeout,
+                invoker.invoke_agent(
+                    &agent_id,
+                    &message,
+                    &context.session_id,
+                    context.delegation_depth + 1,
+                ),
             ).await {
-                Ok(response) => Ok(ToolResult::text(response)),
-                Err(e) => Ok(ToolResult::error(format!("Agent invocation failed: {e}"))),
+                Ok(Ok(response)) => Ok(ToolResult::text(response)),
+                Ok(Err(e)) => Ok(ToolResult::error(format!("Agent invocation failed: {e}"))),
+                Err(_) => Ok(ToolResult::error(format!(
+                    "Agent invocation timed out after {}s", invoke_timeout.as_secs()
+                ))),
             }
         })
     }

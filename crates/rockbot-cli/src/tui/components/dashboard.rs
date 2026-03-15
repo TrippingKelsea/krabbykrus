@@ -94,6 +94,9 @@ fn render_status_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_s
     }
 }
 
+/// Client (TUI) version — set at compile time from Cargo.toml
+const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 fn gateway_card_lines(state: &AppState) -> Vec<Line<'static>> {
     if state.gateway_loading {
         return vec![Line::from(Span::styled("...", Style::default().fg(Color::DarkGray)))];
@@ -103,11 +106,19 @@ fn gateway_card_lines(state: &AppState) -> Vec<Line<'static>> {
     } else {
         ("○ Offline", Color::Red)
     };
+    let gw_ver = state.gateway.version.as_deref().unwrap_or("-");
+    let ver_color = if state.gateway.version.as_deref() == Some(CLIENT_VERSION) {
+        Color::DarkGray
+    } else if state.gateway.connected {
+        Color::Yellow // version mismatch
+    } else {
+        Color::DarkGray
+    };
     vec![
         Line::from(Span::styled(status, Style::default().fg(color))),
         Line::from(Span::styled(
-            state.gateway.version.clone().unwrap_or_else(|| "-".to_string()),
-            Style::default().fg(Color::DarkGray),
+            format!("gw {gw_ver}"),
+            Style::default().fg(ver_color),
         )),
     ]
 }
@@ -188,14 +199,31 @@ fn render_gateway_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         ("○ Stopped", Color::Red)
     };
 
+    let gw_ver = state.gateway.version.as_deref().unwrap_or("-");
+    let version_match = state.gateway.version.as_deref() == Some(CLIENT_VERSION);
+    let gw_ver_style = if version_match || !state.gateway.connected {
+        Style::default()
+    } else {
+        Style::default().fg(Color::Yellow)
+    };
+
     let mut content = vec![
         Line::from(vec![
             Span::styled("Status: ", Style::default().fg(Color::Cyan)),
             Span::styled(status, Style::default().fg(color)),
         ]),
         Line::from(vec![
-            Span::styled("Version: ", Style::default().fg(Color::Cyan)),
-            Span::raw(state.gateway.version.as_deref().unwrap_or("-")),
+            Span::styled("Gateway: ", Style::default().fg(Color::Cyan)),
+            Span::styled(format!("v{gw_ver}"), gw_ver_style),
+            if !version_match && state.gateway.connected {
+                Span::styled(" (mismatch!)", Style::default().fg(Color::Yellow))
+            } else {
+                Span::raw("")
+            },
+        ]),
+        Line::from(vec![
+            Span::styled("Client:  ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("v{CLIENT_VERSION}")),
         ]),
         Line::from(vec![
             Span::styled("Endpoint: ", Style::default().fg(Color::Cyan)),

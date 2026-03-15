@@ -93,6 +93,8 @@ pub struct App {
     vault: Option<rockbot_credentials::CredentialVault>,
     /// WebSocket sender for the persistent gateway connection (None if not connected)
     ws_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    /// Pending oneshot receiver — the WS task sends the channel here once connected
+    ws_pending_rx: Option<tokio::sync::oneshot::Receiver<tokio::sync::mpsc::UnboundedSender<String>>>,
 }
 
 impl App {
@@ -106,6 +108,7 @@ impl App {
             models_tab: 0,
             vault: None,
             ws_tx: None,
+            ws_pending_rx: None,
         }
     }
 
@@ -153,32 +156,72 @@ impl App {
         Ok(())
     }
 
-    /// Spawn a background task that connects to the gateway via WebSocket
+    /// Spawn a background task that connects to the gateway via WebSocket.
+    ///
+    /// The connection is established *before* we set `ws_tx`, so that
+    /// `ws_connected()` only returns `true` when the socket is actually open.
+    /// If the connection fails, a retry loop keeps trying every 5 seconds
+    /// until it succeeds or the app shuts down.
     fn spawn_ws_connect(&mut self) {
+        // If there is already an active WS, don't spawn again
+        if self.ws_connected() {
+            return;
+        }
+
         let tx = self.state.tx.clone();
-        let (ws_send_tx, mut ws_send_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        self.ws_tx = Some(ws_send_tx);
+        // ws_ready_tx lets the spawned task hand back the send channel once
+        // the WebSocket connection is actually established.
+        let (ws_ready_tx, ws_ready_rx) = tokio::sync::oneshot::channel::<
+            tokio::sync::mpsc::UnboundedSender<String>,
+        >();
+        // We clear the old channel immediately so ws_connected() returns false
+        // while we are still connecting.
+        self.ws_tx = None;
+
+        // Store the receiver so the main loop can pick up the channel once
+        // the connection succeeds.
+        self.ws_pending_rx = Some(ws_ready_rx);
 
         tokio::spawn(async move {
-            // Try to connect, retry on failure
             let ws_url = "ws://127.0.0.1:18080/ws";
-            let ws_stream = match tokio_tungstenite::connect_async(ws_url).await {
-                Ok((stream, _)) => {
-                    tracing::info!("WebSocket connected to gateway");
-                    stream
+
+            // Retry loop: try to connect with back-off
+            let mut attempt = 0u32;
+            let ws_stream = loop {
+                attempt += 1;
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    tokio_tungstenite::connect_async(ws_url),
+                ).await {
+                    Ok(Ok((stream, _))) => {
+                        tracing::info!("WebSocket connected to gateway (attempt {attempt})");
+                        break stream;
+                    }
+                    Ok(Err(e)) => {
+                        tracing::debug!("WebSocket connect attempt {attempt} failed: {e}");
+                    }
+                    Err(_) => {
+                        tracing::debug!("WebSocket connect attempt {attempt} timed out");
+                    }
                 }
-                Err(e) => {
-                    tracing::debug!("WebSocket connection failed (will use HTTP fallback): {e}");
-                    // Signal that WS is not available
+                // After 6 failed attempts (~30s total), give up and let the
+                // periodic refresh interval trigger a new `spawn_ws_connect`.
+                if attempt >= 6 {
+                    tracing::debug!("WebSocket gave up after {attempt} attempts, will retry later");
                     let _ = tx.send(Message::SetStatus(
                         "WebSocket unavailable, using HTTP polling".to_string(), false,
                     ));
                     return;
                 }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             };
 
             use futures_util::{SinkExt, StreamExt};
             let (mut ws_sink, mut ws_source) = ws_stream.split();
+
+            // Create the outbound channel *now* that we know we are connected
+            let (ws_send_tx, mut ws_send_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            let _ = ws_ready_tx.send(ws_send_tx);
 
             loop {
                 tokio::select! {
@@ -3152,6 +3195,15 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf) -> Result<()> {
 
             // Periodic refresh
             _ = refresh_interval.tick() => {
+                // Check if a pending WS connection has completed
+                if let Some(ref mut rx) = app.ws_pending_rx {
+                    if let Ok(ws_send_tx) = rx.try_recv() {
+                        tracing::info!("WebSocket channel ready — activating");
+                        app.ws_tx = Some(ws_send_tx);
+                        app.ws_pending_rx = None;
+                    }
+                }
+
                 if app.ws_connected() {
                     // WebSocket is active — send a ping instead of HTTP poll
                     if let Some(ref ws_tx) = app.ws_tx {
@@ -3162,8 +3214,9 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf) -> Result<()> {
                     if !app.state.gateway_loading {
                         app.spawn_gateway_check();
                     }
-                    // Try to reconnect WebSocket if gateway is up
-                    if app.state.gateway.connected {
+                    // Try to reconnect WebSocket if gateway is up and no
+                    // connect attempt is already in progress
+                    if app.state.gateway.connected && app.ws_pending_rx.is_none() {
                         app.spawn_ws_connect();
                     }
                 }
@@ -3301,9 +3354,13 @@ async fn check_gateway_status() -> Result<GatewayStatus> {
     use tokio::time::timeout;
 
     // Try to fetch actual status from the gateway API
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_millis(500))
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let status_result = timeout(
-        Duration::from_millis(500),
+        Duration::from_secs(3),
         client.get("http://127.0.0.1:18080/api/status").send()
     ).await;
 
@@ -3577,7 +3634,7 @@ async fn send_chat_message(
     }
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(300))
         .build()?;
 
     let response = client
@@ -3626,7 +3683,7 @@ async fn send_agent_message(
     });
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120)) // Agent tool loops can take longer
+        .timeout(Duration::from_secs(600)) // Agent tool loops can take several minutes
         .build()?;
 
     let url = format!("http://127.0.0.1:18080/api/agents/{agent_id}/message");

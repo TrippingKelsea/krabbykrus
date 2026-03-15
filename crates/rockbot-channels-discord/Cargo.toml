@@ -1,6 +1,6 @@
 [package]
 name = "rockbot-channels-discord"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Discord channel plugin for RockBot"
 license = "MIT"

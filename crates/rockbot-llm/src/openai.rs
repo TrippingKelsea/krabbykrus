@@ -173,7 +173,7 @@ impl OpenAiProvider {
         let api_key = env::var("OPENAI_API_KEY").map_err(|_| LlmError::AuthenticationFailed)?;
 
         Ok(Self {
-            client: reqwest::Client::new(),
+            client: Self::build_client(),
             api_key,
             base_url: "https://api.openai.com".to_string(),
         })
@@ -182,7 +182,7 @@ impl OpenAiProvider {
     /// Create with explicit API key
     pub fn with_api_key(api_key: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: Self::build_client(),
             api_key,
             base_url: "https://api.openai.com".to_string(),
         }
@@ -191,10 +191,19 @@ impl OpenAiProvider {
     /// Create with explicit API key and custom base URL (for Azure OpenAI, etc.)
     pub fn with_config(api_key: String, base_url: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: Self::build_client(),
             api_key,
             base_url,
         }
+    }
+
+    /// Build an HTTP client with sensible timeouts to prevent indefinite hangs.
+    fn build_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
     }
 
     /// Extract model name from full ID (e.g., "openai/gpt-4" -> "gpt-4")

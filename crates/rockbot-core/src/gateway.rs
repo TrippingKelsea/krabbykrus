@@ -166,6 +166,22 @@ pub struct Gateway {
     shutdown_tx: broadcast::Sender<()>,
 }
 
+/// Stable identity for a connected WebSocket client.
+///
+/// `client_uuid` is the primary key for dispatch — it is globally unique even
+/// when two hosts share the same hostname or multiple client instances run on
+/// the same machine. `hostname` is the machine's self-reported hostname (human
+/// readable). `label` is an optional user-chosen alias (e.g. "laptop-1").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClientIdentity {
+    /// Globally unique client ID (UUID v4, generated or supplied by the client).
+    client_uuid: String,
+    /// Machine hostname (self-reported by the client).
+    hostname: String,
+    /// Optional human-readable label (e.g. "laptop-1", "server-prod").
+    label: Option<String>,
+}
+
 /// WebSocket connection information
 struct WsConnection {
     #[allow(dead_code)]
@@ -173,9 +189,9 @@ struct WsConnection {
     sender: tokio::sync::mpsc::UnboundedSender<WsMessage>,
     #[allow(dead_code)]
     user_id: Option<String>,
-    /// Client label for targeted cron dispatch (e.g. "laptop-1", "server-prod").
+    /// Client identity for targeted cron dispatch and human-readable display.
     /// Set by the client sending a `client_identify` WS message after connecting.
-    client_label: Option<String>,
+    identity: Option<ClientIdentity>,
     #[allow(dead_code)]
     connected_at: std::time::Instant,
 }
@@ -196,12 +212,18 @@ enum WsMessageType {
     HealthCheck,
     #[serde(rename = "ping")]
     Ping,
-    /// Client sends this after connecting to declare its identity label.
-    /// This label is used for targeted cron job dispatch.
+    /// Client sends this after connecting to declare its identity.
+    /// Used for targeted cron job dispatch and human-readable client lists.
     #[serde(rename = "client_identify")]
     ClientIdentify {
-        /// Human-readable label for this client (e.g. "laptop-1", "server-prod")
-        label: String,
+        /// Globally unique client UUID (v4). If omitted, the server assigns one.
+        #[serde(default)]
+        client_uuid: Option<String>,
+        /// Machine hostname (self-reported).
+        hostname: String,
+        /// Optional human-readable label (e.g. "laptop-1", "server-prod")
+        #[serde(default)]
+        label: Option<String>,
     },
     /// Client sends this in response to a `cron_dispatch` to report the result.
     #[serde(rename = "cron_result")]
@@ -258,6 +280,14 @@ enum WsResponseType {
     Pong,
     #[serde(rename = "error")]
     Error { message: String },
+    /// Sent to the client after a successful `client_identify` handshake.
+    /// Contains the assigned (or confirmed) UUID so the client can persist it.
+    #[serde(rename = "client_identity_assigned")]
+    ClientIdentityAssigned {
+        client_uuid: String,
+        hostname: String,
+        label: Option<String>,
+    },
     /// Dispatched to a specific client to execute a cron job remotely.
     /// The client should process the job and reply with `cron_result`.
     #[serde(rename = "cron_dispatch")]
@@ -562,11 +592,14 @@ impl Gateway {
     /// Set the LLM provider registry (single source of truth for provider state).
     /// Probes each provider's `is_configured()` and caches the result.
     pub async fn set_llm_registry(&self, registry: Arc<rockbot_llm::LlmProviderRegistry>) {
-        // Probe and cache availability for each provider
+        // Probe and cache availability for each provider (with timeout to prevent hangs)
         let mut cache = HashMap::new();
         for provider_id in registry.list_providers() {
             if let Some(provider) = registry.get_provider(&provider_id) {
-                let configured = provider.is_configured().await;
+                let configured = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    provider.is_configured(),
+                ).await.unwrap_or(false);
                 info!("Provider '{}': configured={}", provider_id, configured);
                 cache.insert(provider_id, configured);
             }
@@ -587,7 +620,11 @@ impl Gateway {
             let mut cache = HashMap::new();
             for provider_id in reg.list_providers() {
                 if let Some(provider) = reg.get_provider(&provider_id) {
-                    cache.insert(provider_id, provider.is_configured().await);
+                    let configured = tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        provider.is_configured(),
+                    ).await.unwrap_or(false);
+                    cache.insert(provider_id, configured);
                 }
             }
             let mut configured = self.provider_configured.write().await;
@@ -1619,10 +1656,19 @@ impl Gateway {
                 .unwrap());
         };
 
-        // Test provider: check credentials and list models
+        // Test provider: check credentials and list models (with timeout)
         let result = if let Some(provider) = reg.get_provider(provider_id) {
-            let configured = provider.is_configured().await;
-            let models = provider.list_models().await;
+            let configured = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                provider.is_configured(),
+            ).await.unwrap_or(false);
+            let models = match tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                provider.list_models(),
+            ).await {
+                Ok(result) => result,
+                Err(_) => Ok(Vec::new()), // Timeout — treat as empty
+            };
             let model_count = models.as_ref().map_or(0, |m| m.len());
 
             // Update the cached availability
@@ -1756,7 +1802,10 @@ impl Gateway {
                 if provider_id == "mock" { continue; }
                 if !configured_cache.get(&provider_id).copied().unwrap_or(false) { continue; }
                 if let Some(provider) = reg.get_provider(&provider_id) {
-                    if let Ok(models) = provider.list_models().await {
+                    if let Ok(Ok(models)) = tokio::time::timeout(
+                        std::time::Duration::from_secs(15),
+                        provider.list_models(),
+                    ).await {
                         if let Some(first_model) = models.first() {
                             chat_req.model = format!("{}/{}", provider_id, first_model.id);
                             break;
@@ -1816,9 +1865,11 @@ impl Gateway {
             if let Some(provider) = registry.get_provider(&provider_id) {
                 let caps = provider.capabilities();
                 let schema = provider.credential_schema();
-                let models = provider
-                    .list_models()
-                    .await
+                let models = tokio::time::timeout(
+                    std::time::Duration::from_secs(15),
+                    provider.list_models(),
+                ).await
+                    .unwrap_or(Ok(Vec::new()))
                     .unwrap_or_default()
                     .into_iter()
                     .map(|m| ProviderModelInfo {
@@ -2596,18 +2647,22 @@ impl Gateway {
                 id: conn_id.clone(),
                 sender: outbound_tx.clone(),
                 user_id: None,
-                client_label: None,
+                identity: None,
                 connected_at: std::time::Instant::now(),
             });
         }
         info!("WebSocket registered: {} (total: {})", conn_id,
               self.ws_connections.read().await.len());
 
-        // Writer task: forward outbound messages to WebSocket sink
+        // Writer task: forward outbound messages to WebSocket sink (with write timeout)
         let writer_handle = tokio::spawn(async move {
             while let Some(msg) = outbound_rx.recv().await {
-                if ws_sink.send(msg).await.is_err() {
-                    break;
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(15),
+                    ws_sink.send(msg),
+                ).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) | Err(_) => break,
                 }
             }
         });
@@ -2691,11 +2746,32 @@ impl Gateway {
                     conn_id, outbound_tx, agent_id, session_key, message, workspace,
                 ).await;
             }
-            WsMessageType::ClientIdentify { label } => {
-                info!("WebSocket client {} identified as '{}'", conn_id, label);
-                let mut conns = self.ws_connections.write().await;
-                if let Some(conn) = conns.get_mut(conn_id) {
-                    conn.client_label = Some(label);
+            WsMessageType::ClientIdentify { client_uuid, hostname, label } => {
+                // Use the client-provided UUID or generate one
+                let uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                info!(
+                    "WebSocket client {} identified: uuid={}, hostname='{}', label={:?}",
+                    conn_id, uuid, hostname, label
+                );
+                let identity = ClientIdentity {
+                    client_uuid: uuid.clone(),
+                    hostname: hostname.clone(),
+                    label: label.clone(),
+                };
+                {
+                    let mut conns = self.ws_connections.write().await;
+                    if let Some(conn) = conns.get_mut(conn_id) {
+                        conn.identity = Some(identity);
+                    }
+                }
+                // Confirm the identity back to the client so it can persist its UUID
+                let response = WsResponseType::ClientIdentityAssigned {
+                    client_uuid: uuid,
+                    hostname,
+                    label,
+                };
+                if let Ok(json) = serde_json::to_string(&response) {
+                    let _ = outbound_tx.send(WsMessage::Text(json));
                 }
             }
             WsMessageType::CronResult { job_id, success, error, output } => {
@@ -3910,15 +3986,27 @@ impl Gateway {
         }
     }
 
-    /// List connected clients with their labels (for cron target selection)
+    /// List connected clients with their identity info (for cron target selection)
     async fn handle_list_cron_clients(&self) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
         let conns = self.ws_connections.read().await;
         let clients: Vec<serde_json::Value> = conns.values()
-            .map(|c| serde_json::json!({
-                "id": c.id,
-                "label": c.client_label,
-                "connected": true,
-            }))
+            .map(|c| {
+                let (client_uuid, hostname, label) = match &c.identity {
+                    Some(id) => (
+                        Some(id.client_uuid.as_str()),
+                        Some(id.hostname.as_str()),
+                        id.label.as_deref(),
+                    ),
+                    None => (None, None, None),
+                };
+                serde_json::json!({
+                    "id": c.id,
+                    "client_uuid": client_uuid,
+                    "hostname": hostname,
+                    "label": label,
+                    "connected": true,
+                })
+            })
             .collect();
         let json = serde_json::to_string(&clients).unwrap_or_else(|_| "[]".to_string());
         Ok(Response::builder()
@@ -4172,20 +4260,28 @@ impl GatewayCronExecutor {
     }
 
     /// Dispatch a cron job to a specific remote client over WebSocket.
+    ///
+    /// `target` is matched against client UUID first (exact match), then
+    /// falls back to label match, then hostname match. UUID is the
+    /// recommended targeting mechanism for cron jobs.
     async fn dispatch_to_client(
         &self,
         job: &crate::cron::CronJob,
-        target_label: &str,
+        target: &str,
     ) -> std::result::Result<(), String> {
         let conns = self.ws_connections.read().await;
 
-        // Find a connection with the matching client label
+        // Try UUID match first, then label, then hostname
         let target_conn = conns.values().find(|c| {
-            c.client_label.as_deref() == Some(target_label)
-        });
+            c.identity.as_ref().is_some_and(|id| id.client_uuid == target)
+        }).or_else(|| conns.values().find(|c| {
+            c.identity.as_ref().and_then(|id| id.label.as_deref()) == Some(target)
+        })).or_else(|| conns.values().find(|c| {
+            c.identity.as_ref().is_some_and(|id| id.hostname == target)
+        }));
 
         let conn = target_conn.ok_or_else(|| {
-            format!("Target client '{}' is not connected", target_label)
+            format!("Target client '{}' is not connected", target)
         })?;
 
         let dispatch_msg = WsResponseType::CronDispatch {
@@ -4199,9 +4295,9 @@ impl GatewayCronExecutor {
             .map_err(|e| format!("Failed to serialize cron dispatch: {e}"))?;
 
         conn.sender.send(WsMessage::Text(json))
-            .map_err(|_| format!("Failed to send cron dispatch to client '{}'", target_label))?;
+            .map_err(|_| format!("Failed to send cron dispatch to client '{}'", target))?;
 
-        info!("Cron job '{}' dispatched to client '{}'", job.name, target_label);
+        info!("Cron job '{}' dispatched to client '{}'", job.name, target);
         Ok(())
     }
 }

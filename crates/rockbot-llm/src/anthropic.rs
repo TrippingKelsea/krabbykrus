@@ -249,20 +249,29 @@ impl LlmProvider for AnthropicProvider {
         
         let options = options_builder.build();
         
-        // Query Claude Code SDK
-        let stream = query(&conversation, Some(options)).await.map_err(|e| {
+        // Query Claude Code SDK (with connection timeout)
+        let stream = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            query(&conversation, Some(options)),
+        ).await.map_err(|_| LlmError::ApiError {
+            message: "Timed out connecting to Claude Code SDK".to_string(),
+        })?.map_err(|e| {
             LlmError::ApiError {
                 message: format!("Claude Code SDK error: {e}"),
             }
         })?;
-        
+
         let mut pinned_stream = Box::pin(stream);
         let mut response_content = String::new();
         let mut input_tokens = 0u64;
         let mut output_tokens = 0u64;
-        
-        // Collect all messages from stream
-        while let Some(message_result) = pinned_stream.next().await {
+
+        // Collect all messages from stream (with per-message idle timeout)
+        let chunk_timeout = std::time::Duration::from_secs(120);
+        while let Ok(Some(message_result)) = tokio::time::timeout(
+            chunk_timeout,
+            pinned_stream.next(),
+        ).await {
             match message_result {
                 Ok(sdk_message) => {
                     match sdk_message {

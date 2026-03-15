@@ -99,10 +99,20 @@ impl McpConnection {
         })?;
         line.push('\n');
 
-        self.stdin.write_all(line.as_bytes()).await.map_err(|e| ToolError::ExecutionFailed {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.stdin.write_all(line.as_bytes()),
+        ).await.map_err(|_| ToolError::ExecutionFailed {
+            message: "Timed out writing to MCP server stdin".to_string(),
+        })?.map_err(|e| ToolError::ExecutionFailed {
             message: format!("Failed to write to MCP server stdin: {e}"),
         })?;
-        self.stdin.flush().await.map_err(|e| ToolError::ExecutionFailed {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.stdin.flush(),
+        ).await.map_err(|_| ToolError::ExecutionFailed {
+            message: "Timed out flushing MCP server stdin".to_string(),
+        })?.map_err(|e| ToolError::ExecutionFailed {
             message: format!("Failed to flush MCP server stdin: {e}"),
         })?;
 

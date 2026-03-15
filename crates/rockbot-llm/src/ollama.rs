@@ -135,7 +135,7 @@ impl OllamaProvider {
     /// Create a new Ollama provider targeting the default local address.
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: Self::build_client(),
             base_url: DEFAULT_BASE_URL.to_string(),
         }
     }
@@ -144,9 +144,18 @@ impl OllamaProvider {
     pub fn with_base_url(base_url: String) -> Self {
         let base_url = base_url.trim_end_matches('/').to_string();
         Self {
-            client: reqwest::Client::new(),
+            client: Self::build_client(),
             base_url,
         }
+    }
+
+    /// Build an HTTP client with sensible timeouts to prevent indefinite hangs.
+    fn build_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
     }
 
     /// Strip the `ollama/` provider prefix from a model identifier.
