@@ -1092,8 +1092,7 @@ impl LlmProvider for BedrockProvider {
         let mut receiver = output.stream;
 
         let stream = async_stream::stream! {
-            let mut has_text_content = false;
-            let mut reasoning_buffer = String::new();
+            let mut in_reasoning_block = false;
 
             // Track in-progress tool use blocks from ContentBlockStart/Delta
             // Each entry: (content_block_index, tool_use_id, tool_name, accumulated_input)
@@ -1147,7 +1146,6 @@ impl LlmProvider for BedrockProvider {
                             ConverseStreamOutput::ContentBlockDelta(delta_event) => {
                                 match delta_event.delta() {
                                     Some(ContentBlockDelta::Text(text)) => {
-                                        has_text_content = true;
                                         #[allow(clippy::unwrap_used)]
                                         let created_ts = std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
@@ -1207,20 +1205,43 @@ impl LlmProvider for BedrockProvider {
                                         }
                                     }
                                     Some(ContentBlockDelta::ReasoningContent(rc)) => {
-                                        // Buffer reasoning text; emit as fallback if no
-                                        // Text deltas arrive before the stream ends.
+                                        // Stream reasoning text in real-time wrapped in
+                                        // <think> tags so the TUI shows thinking progress.
                                         if let Ok(text) = rc.as_text() {
-                                            reasoning_buffer.push_str(text);
+                                            let mut emit_text = String::new();
+                                            if !in_reasoning_block {
+                                                emit_text.push_str("<think>");
+                                                in_reasoning_block = true;
+                                            }
+                                            emit_text.push_str(text);
+                                            #[allow(clippy::unwrap_used)]
+                                            let created_ts = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap()
+                                                .as_secs();
+                                            yield Ok(StreamingChunk {
+                                                id: format!("stream-{}", uuid::Uuid::new_v4()),
+                                                object: "chat.completion.chunk".to_string(),
+                                                created: created_ts,
+                                                model: model_clone.clone(),
+                                                choices: vec![StreamingChoice {
+                                                    index: 0,
+                                                    delta: StreamingDelta {
+                                                        role: None,
+                                                        content: Some(emit_text),
+                                                        tool_calls: None,
+                                                    },
+                                                    finish_reason: None,
+                                                }],
+                                            });
                                         }
                                     }
                                     _ => {}
                                 }
                             }
                             ConverseStreamOutput::MessageStop(_) => {
-                                // If the model produced only reasoning content (no Text
-                                // deltas), emit the reasoning wrapped in <think> tags so
-                                // the agent's strip_think_blocks can surface it.
-                                if !has_text_content && !reasoning_buffer.is_empty() {
+                                // Close any open reasoning block
+                                if in_reasoning_block {
                                     #[allow(clippy::unwrap_used)]
                                     let created_ts = std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
@@ -1235,9 +1256,7 @@ impl LlmProvider for BedrockProvider {
                                             index: 0,
                                             delta: StreamingDelta {
                                                 role: None,
-                                                content: Some(format!(
-                                                    "<think>{}</think>", reasoning_buffer
-                                                )),
+                                                content: Some("</think>".to_string()),
                                                 tool_calls: None,
                                             },
                                             finish_reason: None,

@@ -2657,11 +2657,11 @@ impl App {
             }
             // Shift+Enter or Alt+Enter inserts a newline (up to 10 lines)
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) || key.modifiers.contains(KeyModifiers::ALT) => {
-                let newline_count = self.state.input_buffer.chars().filter(|&c| c == '\n').count();
-                if newline_count < 9 {
-                    self.state.input_buffer.insert(self.state.input_cursor, '\n');
-                    self.state.input_cursor += 1;
-                }
+                self.insert_chat_newline();
+            }
+            // Ctrl+J (LF) or Ctrl+N inserts a newline — universally supported fallback
+            KeyCode::Char('j') | KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.insert_chat_newline();
             }
             // Plain Enter sends the message
             KeyCode::Enter => {
@@ -2764,6 +2764,14 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn insert_chat_newline(&mut self) {
+        let newline_count = self.state.input_buffer.chars().filter(|&c| c == '\n').count();
+        if newline_count < 9 {
+            self.state.input_buffer.insert(self.state.input_cursor, '\n');
+            self.state.input_cursor += 1;
+        }
     }
 
     fn send_chat_buffer(&mut self) {
@@ -3073,7 +3081,7 @@ impl App {
             InputMode::PasswordInput { .. } => "Enter:Submit │ Esc:Cancel".to_string(),
             InputMode::AddCredential(_) => "↑↓/Tab:Navigate │ ←→:Type │ Enter:Submit │ Esc:Cancel".to_string(),
             InputMode::Confirm { .. } => "y:Yes │ n:No │ Esc:Cancel".to_string(),
-            InputMode::ChatInput => "Enter:Send │ Alt+Enter:Newline │ PgUp/Dn:Scroll │ Ctrl+R:Retry │ Esc:Close".to_string(),
+            InputMode::ChatInput => "Enter:Send │ Ctrl+J:Newline │ PgUp/Dn:Scroll │ Ctrl+R:Retry │ Esc:Close".to_string(),
             InputMode::EditCredential(_) => "↑↓/Tab:Navigate │ Enter:Submit │ Esc:Cancel".to_string(),
             InputMode::EditProvider(_) => "↑↓/Tab:Navigate │ ←→:Auth Type │ Enter:Save │ Esc:Cancel".to_string(),
             InputMode::AddAgent(_) | InputMode::EditAgent(_) => "↑↓/Tab:Navigate │ ←→:Cycle Model │ Ctrl+S:Save │ Esc:Cancel".to_string(),

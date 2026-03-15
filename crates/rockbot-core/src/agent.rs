@@ -1030,7 +1030,7 @@ impl Agent {
         // Per-chunk idle timeout: if no chunk arrives within the timeout, abort.
         // This is more generous than the initial connection timeout since the model
         // may legitimately pause while thinking/generating tool calls.
-        let chunk_idle_timeout = Duration::from_secs(self.config.llm_timeout_secs * 2);
+        let chunk_idle_timeout = Duration::from_secs(15);
 
         while let Ok(maybe_chunk) = tokio::time::timeout(chunk_idle_timeout, stream.next()).await {
             let Some(chunk_result) = maybe_chunk else { break };
@@ -1906,7 +1906,7 @@ The user wants me to explore the codebase. I should start by listing the directo
         let retry_config = RetryConfig::default();
         let mut last_error_message = String::new();
         let llm_timeout = Duration::from_secs(self.config.llm_timeout_secs);
-        let chunk_idle_timeout = Duration::from_secs(self.config.llm_timeout_secs * 2);
+        let chunk_idle_timeout = Duration::from_secs(15);
 
         for attempt in 0..=retry_config.max_retries {
             debug!("LLM streaming call attempt {} of {} (timeout: {}s)",
@@ -2148,7 +2148,7 @@ The user wants me to explore the codebase. I should start by listing the directo
         // Budget resets after each successful tool-call iteration — a nudge that causes
         // the model to use tools is a success, not a permanent deduction.
         // "Consecutive" tracks nudges since the last tool-call iteration.
-        let max_consecutive_nudges = 3u32;
+        let max_consecutive_nudges = 2u32;
         let mut consecutive_nudge_count = 0u32;
 
         // Tool loop detector
