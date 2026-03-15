@@ -1,228 +1,152 @@
-# RockBot Architecture Overview
+# Architecture Overview
 
-RockBot is a modular AI agent framework written in Rust, designed for secure, local-first operation with emphasis on credential safety.
+RockBot is a modular AI agent framework written in Rust. It runs as a
+self-hosted gateway that accepts messages from multiple channels, routes them
+to configured agents, and returns responses — with credentials managed in an
+encrypted vault that agents never see directly.
 
 ## High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        User Interfaces                          │
-├─────────────────┬─────────────────┬─────────────────────────────┤
-│      CLI        │      TUI        │          Web UI             │
-│ (rockbot-cli)│ (rockbot-cli)│     (rockbot-core)       │
-└────────┬────────┴────────┬────────┴──────────────┬──────────────┘
-         │                 │                       │
-         └─────────────────┼───────────────────────┘
-                           │
-                    ┌──────▼──────┐
-                    │   Gateway   │
-                    │  (HTTP/WS)  │
-                    └──────┬──────┘
-                           │
-    ┌──────────────────────┼──────────────────────┐
-    │                      │                      │
-┌───▼───┐           ┌──────▼──────┐         ┌────▼────┐
-│Agents │           │ Credentials │         │Sessions │
-│Engine │           │   Vault     │         │ Manager │
-└───┬───┘           └──────┬──────┘         └────┬────┘
-    │                      │                     │
-┌───▼───┐           ┌──────▼──────┐         ┌────▼────┐
-│ Tools │           │   Crypto    │         │ SQLite  │
-└───┬───┘           └─────────────┘         └─────────┘
-    │
-┌───▼───┐
-│  LLM  │
-│Providers│
-└─────────┘
+┌───────────────────────────────────────────────────────────┐
+│                      Interfaces                           │
+│   TUI (rockbot-cli)   Web UI (rockbot-webui)   Channels  │
+│         ▲                    ▲               (Discord,    │
+│         │                    │                Telegram,   │
+│         │ WebSocket          │ HTTP           Signal)     │
+└─────────┼────────────────────┼──────────┬─────────────────┘
+          │                    │          │
+     ┌────▼────────────────────▼──────────▼────┐
+     │              Gateway (TLS)               │
+     │         rockbot-gateway                  │
+     │  ┌──────────┬──────────┬──────────────┐  │
+     │  │ Routing  │  A2A     │ Cron         │  │
+     │  │ Engine   │ Protocol │ Scheduler    │  │
+     │  └──────────┴──────────┴──────────────┘  │
+     └──────────────────┬──────────────────────┘
+                        │
+          ┌─────────────┼─────────────┐
+          │             │             │
+     ┌────▼───┐   ┌─────▼─────┐  ┌───▼─────┐
+     │ Agent  │   │ Credential│  │ Session │
+     │ Engine │   │   Vault   │  │ Manager │
+     └────┬───┘   └───────────┘  └─────────┘
+          │
+     ┌────┼────────────────┐
+     │    │                │
+┌────▼──┐ │  ┌─────────────▼──────────────┐
+│ Tools │ │  │    Remote Executors         │
+│       │ │  │  (TUI / CLI clients over   │
+└───────┘ │  │   Noise Protocol)          │
+          │  └────────────────────────────┘
+     ┌────▼────┐
+     │   LLM   │
+     │Providers │
+     └─────────┘
 ```
 
-## Component Responsibilities
+## Core Concepts
 
-### Gateway (`rockbot-core`)
+### Gateway
 
-The gateway is the central coordinator:
+The gateway (`rockbot-gateway`) is the single source of truth. It owns:
 
-- **HTTP Server**: Handles REST API requests
-- **WebSocket**: Real-time communication (planned)
-- **Agent Router**: Dispatches messages to appropriate agents
-- **Session Manager**: Tracks conversation state
-- **Web UI**: Serves embedded HTML dashboard
+- **Agent lifecycle** — creates, configures, and destroys agents
+- **Provider state** — LLM, channel, and tool provider registries
+- **TLS termination** — serves HTTPS/WSS with self-signed or custom certs
+- **Multi-agent routing** — routes messages to agents by channel, pattern, or keyword
+- **WebSocket protocol** — real-time streaming, health checks, remote tool dispatch
+- **A2A protocol** — agent-to-agent communication via JSON-RPC
+- **Cron scheduler** — timed jobs with SQLite persistence
 
-### Agent Engine (`rockbot-core`)
+### Agents
 
-Executes agent logic:
+Each agent (`rockbot-agent`) runs an iterative tool-use loop:
 
-- **Message Processing**: Formats prompts for LLM
-- **Tool Execution**: Invokes tools with security context
-- **Context Management**: Compacts history to fit context window
-- **Token Tracking**: Monitors usage for rate limiting
+1. Assemble system prompt from context files (SOUL.md, AGENTS.md, MEMORY.md)
+2. Send conversation to LLM provider
+3. If the LLM requests tool calls, execute them (with security checks)
+4. Loop back to step 2 with tool results until the LLM produces a text response
 
-### Credential Vault (`rockbot-credentials`)
+Agents support planning modes, reflection passes, guardrail pipelines,
+trajectory recording, and handoff delegation to other agents.
 
-Secure credential storage:
+### Credentials
 
-- **Encryption**: AES-256-GCM at rest
-- **Key Derivation**: Argon2id from password
-- **Audit Logging**: Hash-chained tamper-evident log
-- **HIL System**: Human-in-loop approval workflow
-- **Permission Evaluation**: Glob-based access control
+The credential vault (`rockbot-credentials`) provides defense in depth:
 
-### LLM Providers (`rockbot-llm`)
+1. **Encryption at rest** — AES-256-GCM
+2. **Key derivation** — Argon2id prevents brute-force
+3. **Capability system** — tools can only access what's explicitly allowed
+4. **HIL approval** — sensitive operations require human consent
+5. **Audit trail** — hash-chained tamper-evident logs
 
-Abstract interface to language models:
+Credentials never cross the agent boundary. They are injected into tool
+execution and sanitized from responses.
 
-- **Provider Registry**: Routes requests by model ID
-- **Chat Completion**: Standard request/response format
-- **Streaming**: Token-by-token responses (planned)
-- **Retry Logic**: Exponential backoff (planned)
+### Remote Execution
 
-### Tools (`rockbot-tools`)
+With the `remote-exec` feature, TUI and CLI clients register as remote
+executors over a Noise Protocol encrypted channel. The gateway dispatches
+tool calls (file reads, shell commands, etc.) to the client's local
+machine, enabling agents to work on remote workstations.
 
-Agent capabilities:
+### Multi-Agent Orchestration
 
-- **Tool Registry**: Profile-based loading
-- **Capability Checking**: Security context validation
-- **Built-in Tools**: read, write, edit, exec
-- **Credential Injection**: Automatic token insertion
-
-### Security (`rockbot-security`)
-
-Capability and sandboxing:
-
-- **Capabilities**: Fine-grained permissions
-- **Security Context**: Session-scoped restrictions
-- **Sandbox**: Process isolation (planned)
-
-### Memory (`rockbot-memory`)
-
-Knowledge and context:
-
-- **Document Loading**: File-based memory
-- **Search**: Keyword and semantic (planned)
-- **Core Memory**: Persistent facts
+- **Handoffs** — agents delegate to other agents mid-conversation
+- **Swarm blackboard** — shared key-value store for agent coordination
+- **Graph workflows** — DAG-based execution with parallel fan-out
 
 ## Data Flow
 
-### Agent Message Flow
+### Message Processing
 
 ```
-User Input
-    │
-    ▼
-Gateway receives HTTP/WS request
-    │
-    ▼
-Session Manager loads/creates session
-    │
-    ▼
-Agent Engine processes message
-    │
-    ├─► Tool Call Required?
-    │       │
-    │       ▼
-    │   Security Check (capabilities)
-    │       │
-    │       ▼
-    │   Credential Check (permissions)
-    │       │
-    │       ├─► Allow: Inject credentials
-    │       ├─► AllowHIL: Wait for approval
-    │       └─► Deny: Return error
-    │       │
-    │       ▼
-    │   Execute Tool
-    │       │
-    │       ▼
-    │   Sanitize Response
-    │
-    ▼
-LLM Provider generates response
-    │
-    ▼
-Session Manager stores messages
-    │
-    ▼
-Gateway returns response
+User sends message (via TUI WebSocket or HTTP POST)
+  │
+  ▼
+Gateway receives request
+  │
+  ▼
+Routing engine selects agent
+  │
+  ▼
+Session manager loads/creates session
+  │
+  ▼
+Agent processes message (iterative tool loop)
+  │
+  ├──► Tool call?
+  │      │
+  │      ▼
+  │    Security check (capabilities)
+  │      │
+  │      ▼
+  │    Local or remote execution
+  │      │
+  │      ▼
+  │    Results fed back to LLM
+  │
+  ▼
+Response streamed back via WebSocket
+Session updated with new messages
 ```
 
-### Credential Access Flow
+### TLS and Connection Security
 
-```
-Tool requests credential (saggyclaw://homeassistant/api/...)
-    │
-    ▼
-CredentialManager.check_permission(path)
-    │
-    ├─► Allow
-    │       │
-    │       ▼
-    │   decrypt_credential_for_endpoint()
-    │       │
-    │       ▼
-    │   Return secret to tool
-    │
-    ├─► AllowHIL
-    │       │
-    │       ▼
-    │   Create HilApprovalRequest
-    │       │
-    │       ▼
-    │   Notify user (Web UI, TUI, channel)
-    │       │
-    │       ▼
-    │   Wait for approval (with timeout)
-    │       │
-    │       ├─► Approved: decrypt and return
-    │       └─► Denied: return error
-    │
-    └─► Deny
-            │
-            ▼
-        Log attempt, return error
-```
+By default, the gateway serves HTTPS/WSS. `rockbot config init` generates
+a self-signed certificate. Clients connecting via `wss://` accept
+self-signed certs automatically. Plain HTTP requires building with the
+`http-insecure` feature flag.
 
 ## Persistence
-
-### Files
 
 | Path | Purpose |
 |------|---------|
 | `~/.config/rockbot/rockbot.toml` | Configuration |
-| `~/.local/share/rockbot/sessions.db` | Session history |
-| `~/.local/share/rockbot/credentials/` | Encrypted vault |
-| `~/.local/share/rockbot/credentials/audit.log` | Audit trail |
-
-### Database Schema
-
-Sessions are stored in SQLite with tables for:
-- `sessions`: Session metadata
-- `messages`: Conversation history
-- `token_usage`: Usage tracking
-
-## Security Model
-
-### Defense in Depth
-
-1. **Encryption at Rest**: Credentials encrypted with AES-256-GCM
-2. **Key Derivation**: Argon2id prevents brute force
-3. **Capability System**: Tools can only do what's allowed
-4. **HIL Approval**: Sensitive operations require human consent
-5. **Audit Trail**: All access logged with hash chain
-
-### Trust Boundaries
-
-```
-┌─────────────────────────────────────┐
-│         User (Trusted)              │
-├─────────────────────────────────────┤
-│       Gateway (Semi-trusted)        │
-├─────────────────────────────────────┤
-│        Agent (Untrusted)            │
-│  ┌─────────────────────────────┐    │
-│  │   Credentials never cross   │    │
-│  │    this boundary directly   │    │
-│  └─────────────────────────────┘    │
-└─────────────────────────────────────┘
-```
-
-Credentials are injected into tool execution but never returned to the agent directly. Responses are sanitized to prevent credential leakage.
+| `~/.config/rockbot/gateway.crt` | TLS certificate |
+| `~/.config/rockbot/gateway.key` | TLS private key |
+| `~/.config/rockbot/agents/{id}/` | Per-agent context files |
+| `~/.config/rockbot/data/sessions.db` | Session history (SQLite) |
+| `~/.config/rockbot/data/cron.db` | Cron jobs (SQLite) |
+| `~/.local/share/rockbot/credentials/` | Encrypted credential vault |

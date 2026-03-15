@@ -1,46 +1,36 @@
-# Getting Started with RockBot
-
-This guide will help you install, configure, and run RockBot for the first time.
+# Getting Started
 
 ## Prerequisites
 
-- **Rust 1.75+** - Install via [rustup](https://rustup.rs/)
-- **SQLite 3** - Usually pre-installed on Linux/macOS
-- **OpenSSL** - For TLS support
+- **Rust 1.75+** — install via [rustup](https://rustup.rs/)
 
 ## Installation
 
-### From Source
-
 ```bash
-# Clone the repository
 git clone https://github.com/TrippingKelsea/rockbot.git
 cd rockbot
-
-# Build release binary
 cargo build --release
-
-# Binary is at ./target/release/rockbot
 ```
 
-### Verify Installation
+The binary is at `./target/release/rockbot`.
 
 ```bash
-./target/release/rockbot --version
-# rockbot 0.1.0
-
-./target/release/rockbot doctor
-# Runs diagnostic checks
+rockbot --version
+rockbot doctor        # diagnostic checks
 ```
 
-## Initial Configuration
+## Initial Setup
 
-### Generate Default Config
+### Generate Config
 
 ```bash
 rockbot config init
 # Creates ~/.config/rockbot/rockbot.toml
+# Generates TLS certificate at ~/.config/rockbot/gateway.{crt,key}
 ```
+
+This creates a default configuration with one agent (`main`) using AWS
+Bedrock, and a self-signed TLS certificate for the gateway.
 
 ### Minimal Configuration
 
@@ -48,120 +38,119 @@ rockbot config init
 # ~/.config/rockbot/rockbot.toml
 
 [gateway]
-bind_host = "127.0.0.1"
-port = 8765
+bind_host = "0.0.0.0"
+port = 18080
+tls_cert = "/home/you/.config/rockbot/gateway.crt"
+tls_key = "/home/you/.config/rockbot/gateway.key"
 
 [agents.defaults]
 model = "anthropic/claude-sonnet-4-20250514"
-workspace = "~/.local/share/rockbot/agents"
 
 [[agents.list]]
 id = "main"
 
 [tools]
 profile = "standard"
-
-[credentials]
-enabled = true
-vault_path = "~/.local/share/rockbot/credentials"
 ```
 
-See [Configuration Reference](configuration.md) for all options.
+## Running
 
-## First Run
-
-### 1. Start the Gateway
+### Start the Gateway
 
 ```bash
-rockbot gateway
-# INFO Starting gateway on 127.0.0.1:8765
+rockbot gateway run
+# INFO Gateway server listening on 0.0.0.0:18080 (TLS)
 ```
 
-The gateway runs in the foreground. Use `Ctrl+C` to stop.
+### Connect with the TUI
 
-### 2. Check Health
-
-```bash
-curl http://localhost:8765/health
-# {"status":"ok","version":"0.1.0"}
-```
-
-### 3. Open the Web UI
-
-Navigate to [http://localhost:8765](http://localhost:8765) in your browser.
-
-### 4. Or Use the TUI
-
+From the same machine:
 ```bash
 rockbot tui
 ```
 
-Use arrow keys to navigate, `q` to quit.
+From another machine on the network:
+```bash
+rockbot tui -g 192.168.1.10:18080
+```
+
+The `-g` flag accepts bare `host:port` — no need to specify `https://`.
+
+### Open the Web UI
+
+Navigate to `https://localhost:18080` in your browser. Accept the
+self-signed certificate when prompted.
+
+## Remote Tool Execution
+
+Build with the `remote-exec` feature to let the gateway dispatch tool calls
+(file reads, shell commands) to your local machine:
+
+```bash
+cargo build --release -F remote-exec
+```
+
+When the TUI connects, it automatically registers as a remote executor via
+a Noise Protocol encrypted channel.
 
 ## Setting Up Credentials
 
 ### Initialize the Vault
 
-The credential vault is automatically created on first use. You'll be prompted for a master password.
-
 ```bash
-rockbot credentials status
-# Vault: Not initialized
-# Would you like to create a new vault? [y/N]
+rockbot credentials init
 ```
 
-### Add Your First Endpoint
+### Add an Endpoint
 
 ```bash
-# Add a Home Assistant endpoint
 rockbot credentials add homeassistant \
   --type home_assistant \
   --url http://homeassistant.local:8123
-
 # You'll be prompted for the access token
-Enter secret (will not echo): ********
 ```
 
 ### List Endpoints
 
 ```bash
 rockbot credentials list
-# ID                                    Name           Type              URL
-# a1b2c3d4-...                         homeassistant  home_assistant    http://homeassistant.local:8123
 ```
 
-## Next Steps
+## Feature Flags
 
-- [Configure your agents](configuration.md#agents)
-- [Learn the CLI commands](cli-reference.md)
-- [Explore the TUI](tui-guide.md)
-- [Set up credential permissions](credentials.md)
+| Flag | Description |
+|------|-------------|
+| `remote-exec` | Noise Protocol remote tool dispatch |
+| `overseer` | Embedded local-model agent oversight |
+| `otel` | OpenTelemetry export |
+| `http-insecure` | Allow plain HTTP (TLS is default) |
+| `anthropic` | Anthropic API provider |
+| `openai` | OpenAI API provider |
+| `ollama` | Ollama local models |
 
 ## Troubleshooting
 
-### Gateway Won't Start
-
-Check if the port is already in use:
+**Gateway won't start:**
 ```bash
-lsof -i :8765
+# Check if port is in use
+ss -tlnp | grep 18080
 ```
 
-### Vault Won't Unlock
-
-If you forgot your password, the vault must be recreated:
+**TLS certificate issues:**
 ```bash
+# Regenerate certificate
+rockbot config init --force
+```
+
+**Vault won't unlock:**
+```bash
+# If you forgot your password, recreate the vault
 rm -rf ~/.local/share/rockbot/credentials
-rockbot credentials status  # Will prompt to create new vault
+rockbot credentials init
 ```
 
-### Configuration Errors
-
-Validate your config:
+**Configuration errors:**
 ```bash
 rockbot config validate
-```
-
-Show current config with resolved paths:
-```bash
 rockbot config show
 ```

@@ -1,332 +1,161 @@
 # Crate Structure
 
-RockBot is organized as a Cargo workspace with multiple crates, each responsible for a specific domain.
+RockBot is a Cargo workspace with 19 crates organized by responsibility.
 
 ## Workspace Layout
 
 ```
 rockbot/
-├── Cargo.toml              # Workspace manifest
 ├── crates/
-│   ├── rockbot/         # Binary crate (entry point)
-│   ├── rockbot-cli/     # CLI and TUI
-│   ├── rockbot-core/    # Gateway, agents, sessions
-│   ├── rockbot-credentials/ # Secure credential vault
-│   ├── rockbot-llm/     # LLM provider abstraction
-│   ├── rockbot-memory/  # Memory and search
-│   ├── rockbot-security/ # Capabilities and sandboxing
-│   ├── rockbot-tools/   # Built-in tools
-│   ├── rockbot-channels/ # Communication channels
-│   └── rockbot-plugins/ # Plugin system
+│   ├── rockbot/                  # Binary entry point
+│   ├── rockbot-cli/              # CLI commands and TUI
+│   ├── rockbot-core/             # Re-export facade (backward compat)
+│   ├── rockbot-config/           # Config types, message types, errors
+│   ├── rockbot-session/          # Session management and persistence
+│   ├── rockbot-agent/            # Agent execution engine
+│   ├── rockbot-client/           # Gateway WS client, ACP, remote exec
+│   ├── rockbot-gateway/          # HTTP/WS server, A2A, cron, routing
+│   ├── rockbot-webui/            # Embedded web dashboard (static HTML)
+│   ├── rockbot-llm/              # LLM provider abstraction
+│   ├── rockbot-tools/            # Tool trait and registry
+│   ├── rockbot-tools-credentials/# Credential vault access tool
+│   ├── rockbot-tools-mcp/        # MCP server connection tool
+│   ├── rockbot-tools-markdown/   # Markdown processing tool
+│   ├── rockbot-channels/         # Channel traits and registry
+│   ├── rockbot-channels-discord/ # Discord (Serenity)
+│   ├── rockbot-channels-telegram/# Telegram (Teloxide)
+│   ├── rockbot-channels-signal/  # Signal (placeholder)
+│   ├── rockbot-memory/           # Memory and search system
+│   ├── rockbot-security/         # Capability system and sandboxing
+│   ├── rockbot-credentials/      # Encrypted credential vault
+│   ├── rockbot-credentials-schema/# Shared credential schema types
+│   ├── rockbot-overseer/         # Embedded local-model oversight
+│   └── rockbot-plugins/          # Plugin system (scaffold)
 ```
 
 ## Dependency Graph
 
+The crate hierarchy follows a strict DAG — no cycles.
+
 ```
-rockbot (binary)
-    │
-    └─► rockbot-cli
-            │
-            ├─► rockbot-core
-            │       │
-            │       ├─► rockbot-credentials
-            │       │       │
-            │       │       └─► rockbot-security
-            │       │
-            │       ├─► rockbot-llm
-            │       │
-            │       ├─► rockbot-tools
-            │       │       │
-            │       │       └─► rockbot-security
-            │       │
-            │       ├─► rockbot-memory
-            │       │
-            │       ├─► rockbot-channels
-            │       │
-            │       └─► rockbot-plugins
-            │
-            └─► rockbot-credentials (direct CLI access)
-```
+rockbot-config            (leaf: config, message, error types)
+rockbot-credentials-schema (leaf: shared schema types)
+rockbot-webui             (leaf: pure static HTML)
 
-## Crate Details
+rockbot-session           → rockbot-config
+rockbot-security          → (standalone)
+rockbot-memory            → (standalone)
+rockbot-credentials       → rockbot-security
 
-### `rockbot` (Binary)
+rockbot-llm               → rockbot-credentials-schema
+rockbot-tools             → rockbot-security, rockbot-credentials-schema
+rockbot-channels          → rockbot-credentials-schema
 
-**Purpose**: Main entry point that ties everything together.
+rockbot-agent             → rockbot-config, rockbot-session, rockbot-llm,
+                             rockbot-tools, rockbot-memory, rockbot-security
+                             [optional: rockbot-client for remote-exec]
 
-**Dependencies**: `rockbot-cli`
+rockbot-client            → rockbot-config
+                             [optional: snow for remote-exec]
 
-**Exports**: None (binary only)
+rockbot-gateway           → rockbot-config, rockbot-session, rockbot-agent,
+                             rockbot-webui, rockbot-client, rockbot-llm,
+                             rockbot-tools, rockbot-channels, rockbot-credentials
+                             [optional: channel/tool provider crates, overseer]
 
-### `rockbot-cli`
-
-**Purpose**: Command-line interface and terminal UI.
-
-**Key modules**:
-- `commands/` - CLI subcommands
-- `tui/` - Terminal user interface
-  - `app.rs` - Main event loop
-  - `state.rs` - Centralized state
-  - `components/` - UI components
-
-**Public API**:
-```rust
-// Run the CLI
-pub fn run() -> Result<()>;
-
-// TUI entry point
-pub mod tui {
-    pub fn run_app() -> Result<()>;
-}
+rockbot-core              → facade: re-exports all of the above
+rockbot-cli               → rockbot-core, rockbot-client
+rockbot                   → rockbot-cli, rockbot-core
 ```
 
-### `rockbot-core`
+## Feature Flags
 
-**Purpose**: Core framework - gateway, agents, sessions.
+Features propagate from the binary through the crate chain. Only enabled
+features are compiled.
 
-**Key modules**:
-- `gateway.rs` - HTTP server and API routing
-- `agent.rs` - Agent execution engine
-- `session.rs` - Session persistence
-- `config.rs` - Configuration system
-- `message.rs` - Message types
-- `web_ui.rs` - Embedded web dashboard
+### LLM Providers
 
-**Public API**:
-```rust
-// Gateway
-pub struct Gateway { ... }
-impl Gateway {
-    pub async fn new(config: Config) -> Result<Self>;
-    pub async fn run(self) -> Result<()>;
-}
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `bedrock` | yes | AWS Bedrock (Claude, Titan, etc.) |
+| `anthropic` | no | Anthropic API direct |
+| `openai` | no | OpenAI API |
+| `ollama` | no | Local Ollama models |
+| `all-providers` | no | Enable all of the above |
 
-// Agent
-pub struct AgentEngine { ... }
-impl AgentEngine {
-    pub async fn process_message(&mut self, msg: Message) -> Result<Message>;
-}
+### Channels
 
-// Session
-pub struct SessionManager { ... }
-impl SessionManager {
-    pub fn create_session(&self, agent_id: &str) -> Result<Session>;
-    pub fn get_session(&self, key: &str) -> Result<Session>;
-}
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `discord` | yes | Discord via Serenity |
+| `telegram` | yes | Telegram via Teloxide |
+| `signal` | yes | Signal (placeholder) |
+| `all-channels` | no | Enable all |
 
-// Config
-pub struct Config { ... }
-impl Config {
-    pub fn load() -> Result<Self>;
-    pub fn from_file(path: &Path) -> Result<Self>;
-}
-```
+### Tools
 
-### `rockbot-credentials`
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `tools-credentials` | yes | Credential vault access |
+| `tools-mcp` | yes | MCP server proxy |
+| `tools-markdown` | yes | Markdown processing |
+| `all-tools` | no | Enable all |
 
-**Purpose**: Secure credential storage with HIL support.
+### Security and Infrastructure
 
-**Key modules**:
-- `types.rs` - Core data types
-- `crypto.rs` - Encryption utilities
-- `storage.rs` - Vault operations
-- `manager.rs` - High-level manager
-- `permissions.rs` - Permission evaluation
-- `audit.rs` - Audit logging
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `remote-exec` | no | Noise Protocol encrypted remote tool dispatch |
+| `overseer` | no | Embedded local-model agent oversight |
+| `otel` | no | OpenTelemetry trace/metric export |
+| `http-insecure` | no | Allow plain HTTP/WS (TLS is default) |
 
-**Public API**:
-```rust
-// High-level manager (recommended)
-pub struct CredentialManager { ... }
-impl CredentialManager {
-    pub async fn new(vault_path: &Path) -> Result<Self>;
-    pub async fn unlock(&self, master_key: MasterKey) -> Result<()>;
-    pub async fn check_permission(&self, path: &str) -> PathPermissionResult;
-    pub async fn request_credential(&self, ...) -> CredentialRequestResult;
-}
-
-// Low-level vault
-pub struct CredentialVault { ... }
-impl CredentialVault {
-    pub fn open(path: &Path) -> Result<Self>;
-    pub fn unlock(&mut self, key: MasterKey);
-    pub fn create_endpoint(...) -> Result<Endpoint>;
-    pub fn store_credential(...) -> Result<()>;
-    pub fn decrypt_credential_for_endpoint(&self, id: Uuid) -> Result<Vec<u8>>;
-}
-
-// Crypto
-pub struct MasterKey { ... }
-impl MasterKey {
-    pub fn derive_from_password(password: &str, salt: &[u8]) -> Result<Self>;
-}
-```
-
-### `rockbot-llm`
-
-**Purpose**: LLM provider abstraction.
-
-**Key modules**:
-- `provider.rs` - Provider trait
-- `registry.rs` - Provider registry
-- `types.rs` - Request/response types
-
-**Public API**:
-```rust
-#[async_trait]
-pub trait LlmProvider: Send + Sync {
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse>;
-    fn models(&self) -> Vec<String>;
-}
-
-pub struct ProviderRegistry { ... }
-impl ProviderRegistry {
-    pub fn register(&mut self, name: &str, provider: Box<dyn LlmProvider>);
-    pub fn get(&self, model: &str) -> Option<&dyn LlmProvider>;
-}
-```
-
-### `rockbot-tools`
-
-**Purpose**: Built-in tools for agent capabilities.
-
-**Key modules**:
-- `registry.rs` - Tool registry
-- `execution.rs` - Tool execution
-- `builtin/` - Built-in tool implementations
-
-**Public API**:
-```rust
-pub trait Tool: Send + Sync {
-    fn name(&self) -> &str;
-    fn description(&self) -> &str;
-    async fn execute(&self, input: Value, ctx: &SecurityContext) -> Result<ToolResult>;
-}
-
-pub struct ToolRegistry { ... }
-impl ToolRegistry {
-    pub fn new(profile: ToolProfile) -> Self;
-    pub fn register(&mut self, tool: Box<dyn Tool>);
-    pub fn get(&self, name: &str) -> Option<&dyn Tool>;
-}
-```
-
-### `rockbot-security`
-
-**Purpose**: Capability system and sandboxing.
-
-**Key modules**:
-- `capabilities.rs` - Capability definitions
-- `context.rs` - Security context
-
-**Public API**:
-```rust
-pub enum Capability {
-    FilesystemRead,
-    FilesystemWrite,
-    ProcessExecute,
-    NetworkAccess,
-    CredentialAccess,
-    // ...
-}
-
-pub struct SecurityContext {
-    pub capabilities: HashSet<Capability>,
-    pub session_id: String,
-}
-```
-
-### `rockbot-memory`
-
-**Purpose**: Memory and search system.
-
-**Key modules**:
-- `manager.rs` - Memory manager
-- `search.rs` - Search implementation
-
-**Public API**:
-```rust
-pub struct MemoryManager { ... }
-impl MemoryManager {
-    pub fn load_documents(&mut self, path: &Path) -> Result<()>;
-    pub fn search(&self, query: &str) -> Vec<SearchResult>;
-}
-```
-
-### `rockbot-channels`
-
-**Purpose**: Communication channel integrations.
-
-**Key modules**:
-- `traits.rs` - Channel trait
-- `discord/`, `telegram/`, etc. - Channel implementations
-
-**Public API**:
-```rust
-#[async_trait]
-pub trait Channel: Send + Sync {
-    async fn send(&self, message: &Message) -> Result<()>;
-    async fn receive(&mut self) -> Result<Message>;
-}
-```
-
-### `rockbot-plugins`
-
-**Purpose**: Plugin system for extensibility.
-
-**Key modules**:
-- `traits.rs` - Plugin trait
-- `loader.rs` - Plugin loading
-
-**Public API**:
-```rust
-pub trait Plugin: Send + Sync {
-    fn name(&self) -> &str;
-    fn version(&self) -> &str;
-    fn on_load(&self) -> Result<()>;
-    fn on_unload(&self) -> Result<()>;
-}
-```
-
-## Type Conversions
-
-Some types exist in multiple crates for layering purposes. Conversions are provided via `From` implementations:
-
-```rust
-// rockbot-core::config::ToolConfig -> rockbot-tools::ToolConfig
-impl From<core::config::ToolConfig> for tools::ToolConfig { ... }
-```
-
-## Building
+### Build Examples
 
 ```bash
-# Build all crates
-cargo build
-
-# Build specific crate
-cargo build -p rockbot-credentials
-
-# Build with release optimizations
+# Default (Bedrock + all channels + all tools)
 cargo build --release
 
-# Run tests for all crates
-cargo test
+# Anthropic-only, no channels
+cargo build --release --no-default-features -F anthropic
 
-# Run tests for specific crate
-cargo test -p rockbot-credentials
+# Everything
+cargo build --release -F all-providers,all-channels,all-tools,remote-exec,overseer,otel
+
+# Remote development setup
+cargo build --release -F remote-exec
+
+# Minimal size
+cargo build --profile release-small --no-default-features -F anthropic
 ```
 
-## Documentation
+## Key Modules by Crate
 
-Generate API documentation:
+### rockbot-gateway
+- `gateway.rs` — HTTP/WS server, agent lifecycle, TLS listener
+- `routing.rs` — Multi-agent routing engine
+- `a2a.rs` — Agent-to-Agent protocol (JSON-RPC)
+- `cron.rs` — Cron scheduler with SQLite persistence
+- `slash_commands.rs` — Gateway-level slash command dispatch
+- `error.rs` — `RockBotError` aggregator
 
-```bash
-# Generate and open docs
-cargo doc --open --no-deps
+### rockbot-agent
+- `agent.rs` — Agent execution loop, tool calls, streaming
+- `hooks.rs` — Hook system (pre/post message, tool calls)
+- `guardrails.rs` — PII detection, prompt injection guard
+- `trajectory.rs` — Full execution trajectory recording
+- `orchestration.rs` — Swarm blackboard, workflow executor
+- `skills.rs` — Skill manager, slash commands, SKILL.md parsing
+- `tokenizer.rs` — BPE token counting (tiktoken)
+- `indexer.rs` — Codebase symbol extraction, TF-IDF
+- `sandbox.rs` — Docker container sandbox
 
-# Generate docs for all dependencies too
-cargo doc --open
+### rockbot-client
+- `client.rs` — `GatewayClient` WS connection with protocol probing
+- `acp.rs` — Agent Client Protocol (JSON-RPC over stdio)
+- `remote_exec.rs` — Noise Protocol remote tool execution
 
-# Generate docs for specific crate
-cargo doc -p rockbot-credentials --open
-```
+### rockbot-config
+- `config.rs` — `Config`, `GatewayConfig`, `AgentInstance`, feature types
+- `message.rs` — `Message`, `MessageContent`, `ContentPart`
+- `error.rs` — `ConfigError` sub-enum

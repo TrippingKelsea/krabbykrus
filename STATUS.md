@@ -1,6 +1,6 @@
 # RockBot Status
 
-**Version:** 0.1.16
+**Version:** 0.2.3
 **Last Updated:** 2026-03-15
 
 ## Build Status
@@ -16,7 +16,7 @@
 
 ## Codebase Overview
 
-- **18 crates** in workspace
+- **27 crates** in workspace (19 focused crates after decomposition)
 - **80 Rust source files**, ~51,000 LOC
 - Minimum Rust version: 1.75
 
