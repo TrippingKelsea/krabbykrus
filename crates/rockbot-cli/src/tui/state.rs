@@ -203,191 +203,314 @@ impl MenuItem {
 }
 
 // ---------------------------------------------------------------------------
-// Card Chain Navigation
+// Slotted Card Bar Navigation
 // ---------------------------------------------------------------------------
 
-/// A stack of card levels forming a breadcrumb-navigable card chain.
-pub struct CardChain {
-    pub levels: Vec<CardLevel>,
-    pub active_level: usize,
+/// Identifies a compact card-sized widget for rendering inside card slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardWidgetId {
+    GatewayStatus,
+    GatewayLoad,
+    GatewayNetwork,
+    ClientStatus,
+    ClientMessages,
+    ClientResources,
+    AgentOverview,
+    AgentSessions,
+    AgentTools,
 }
 
-/// One row of cards at a given depth.
-pub struct CardLevel {
-    pub cards: Vec<Card>,
-    pub selected: usize,
+/// What kind of slot this is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotKind {
+    ModeSelector,
+    InfoCard,
+}
+
+/// A single view within a card slot.
+#[derive(Debug, Clone)]
+pub struct SlotView {
     pub label: String,
+    pub widget: CardWidgetId,
 }
 
-/// A single card in the horizontal strip.
-pub struct Card {
+/// A single slot in the card bar.
+#[derive(Debug, Clone)]
+pub struct CardSlot {
     pub label: String,
     pub icon: char,
-    pub action: CardAction,
-    /// Optional badge text (e.g. item count).
     pub badge: Option<String>,
+    pub views: Vec<SlotView>,
+    pub active_view: usize,
+    pub kind: SlotKind,
 }
 
-/// What happens when a card is activated.
-pub enum CardAction {
-    /// Push a child card set (drill down). The closure builds children from AppState.
-    Chain(fn(&AppState) -> Vec<Card>),
-    /// Navigate to a section — sets active MenuItem for detail rendering.
-    Section(MenuItem),
-    /// Execute a TUI action directly.
-    Execute(super::keybindings::TuiAction),
+/// A fixed "mode" card at slot 0 with dynamic info cards to the right.
+pub struct SlottedCardBar {
+    pub mode: usize,
+    pub slots: Vec<CardSlot>,
+    pub active_slot: usize,
 }
 
-impl CardChain {
-    /// Build the default top-level card chain.
-    pub fn default_chain() -> Self {
-        let top = CardLevel {
-            label: "RockBot".to_string(),
-            cards: vec![
-                Card {
-                    label: "Butler".to_string(),
-                    icon: '🫖',
-                    action: CardAction::Section(MenuItem::Dashboard),
-                    badge: None,
+impl SlottedCardBar {
+    pub fn new() -> Self {
+        let mut bar = Self {
+            mode: 0,
+            slots: vec![CardSlot {
+                label: MenuItem::Dashboard.title().to_string(),
+                icon: '*',
+                badge: None,
+                views: vec![],
+                active_view: 0,
+                kind: SlotKind::ModeSelector,
+            }],
+            active_slot: 0,
+        };
+        bar.slots.extend(build_dashboard_slots());
+        bar
+    }
+
+    pub fn select_left(&mut self) {
+        if self.active_slot > 0 {
+            self.active_slot -= 1;
+        }
+    }
+
+    pub fn select_right(&mut self) {
+        if self.active_slot + 1 < self.slots.len() {
+            self.active_slot += 1;
+        }
+    }
+
+    /// Cycle up on slot 0 = prev mode; on slots 1+ = prev view
+    pub fn cycle_up(&mut self, agents: &[AgentInfo], sessions: &[SessionInfo]) {
+        if self.active_slot == 0 {
+            let modes = MenuItem::all();
+            if self.mode > 0 {
+                self.mode -= 1;
+            } else {
+                self.mode = modes.len() - 1;
+            }
+            self.slots[0].label = modes[self.mode].title().to_string();
+            self.rebuild_content_slots(agents, sessions);
+        } else if let Some(slot) = self.slots.get_mut(self.active_slot) {
+            if !slot.views.is_empty() {
+                if slot.active_view > 0 {
+                    slot.active_view -= 1;
+                } else {
+                    slot.active_view = slot.views.len() - 1;
+                }
+            }
+        }
+    }
+
+    /// Cycle down on slot 0 = next mode; on slots 1+ = next view
+    pub fn cycle_down(&mut self, agents: &[AgentInfo], sessions: &[SessionInfo]) {
+        if self.active_slot == 0 {
+            let modes = MenuItem::all();
+            self.mode = (self.mode + 1) % modes.len();
+            self.slots[0].label = modes[self.mode].title().to_string();
+            self.rebuild_content_slots(agents, sessions);
+        } else if let Some(slot) = self.slots.get_mut(self.active_slot) {
+            if !slot.views.is_empty() {
+                slot.active_view = (slot.active_view + 1) % slot.views.len();
+            }
+        }
+    }
+
+    /// Current mode as MenuItem
+    pub fn current_mode(&self) -> MenuItem {
+        MenuItem::from_index(self.mode)
+    }
+
+    /// Widget ID for the currently active slot's current view
+    pub fn active_widget(&self) -> Option<CardWidgetId> {
+        let slot = self.slots.get(self.active_slot)?;
+        let view = slot.views.get(slot.active_view)?;
+        Some(view.widget)
+    }
+
+    /// Rebuild slots 1+ based on current mode
+    pub fn rebuild_content_slots(&mut self, agents: &[AgentInfo], sessions: &[SessionInfo]) {
+        self.slots.truncate(1);
+        let new_slots = match self.current_mode() {
+            MenuItem::Dashboard => build_dashboard_slots(),
+            MenuItem::Agents => build_agents_slots_from(agents),
+            MenuItem::Sessions => build_sessions_slots_from(sessions),
+            MenuItem::Credentials => build_credentials_slots(),
+            MenuItem::CronJobs => build_cron_slots(),
+            MenuItem::Models => build_models_slots(),
+            MenuItem::Settings => build_settings_slots(),
+        };
+        self.slots.extend(new_slots);
+        if self.active_slot >= self.slots.len() {
+            self.active_slot = self.slots.len().saturating_sub(1);
+        }
+    }
+}
+
+fn build_dashboard_slots() -> Vec<CardSlot> {
+    vec![
+        CardSlot {
+            label: "Gateway".to_string(),
+            icon: 'G',
+            badge: None,
+            views: vec![
+                SlotView {
+                    label: "Status".to_string(),
+                    widget: CardWidgetId::GatewayStatus,
                 },
-                Card {
-                    label: "Agents".to_string(),
-                    icon: '🤖',
-                    action: CardAction::Chain(build_agent_cards),
-                    badge: None,
+                SlotView {
+                    label: "Load".to_string(),
+                    widget: CardWidgetId::GatewayLoad,
                 },
-                Card {
-                    label: "Sessions".to_string(),
-                    icon: '💬',
-                    action: CardAction::Chain(build_session_cards),
-                    badge: None,
-                },
-                Card {
-                    label: "Credentials".to_string(),
-                    icon: '🔐',
-                    action: CardAction::Section(MenuItem::Credentials),
-                    badge: None,
-                },
-                Card {
-                    label: "Cron".to_string(),
-                    icon: '🕐',
-                    action: CardAction::Section(MenuItem::CronJobs),
-                    badge: None,
-                },
-                Card {
-                    label: "Models".to_string(),
-                    icon: '🧠',
-                    action: CardAction::Section(MenuItem::Models),
-                    badge: None,
-                },
-                Card {
-                    label: "Settings".to_string(),
-                    icon: '⚙',
-                    action: CardAction::Section(MenuItem::Settings),
-                    badge: None,
+                SlotView {
+                    label: "Network".to_string(),
+                    widget: CardWidgetId::GatewayNetwork,
                 },
             ],
-            selected: 0,
-        };
-        Self {
-            levels: vec![top],
-            active_level: 0,
-        }
-    }
-
-    /// The currently active level.
-    pub fn active(&self) -> &CardLevel {
-        &self.levels[self.active_level]
-    }
-
-    /// Move selection left within the active level.
-    pub fn select_left(&mut self) {
-        let level = &mut self.levels[self.active_level];
-        if level.selected > 0 {
-            level.selected -= 1;
-        }
-    }
-
-    /// Move selection right within the active level.
-    pub fn select_right(&mut self) {
-        let level = &mut self.levels[self.active_level];
-        if level.selected + 1 < level.cards.len() {
-            level.selected += 1;
-        }
-    }
-
-    /// Push a child card level (drill down).
-    pub fn push_children(&mut self, label: String, cards: Vec<Card>) {
-        if cards.is_empty() {
-            return;
-        }
-        let child = CardLevel {
-            label,
-            cards,
-            selected: 0,
-        };
-        // Truncate any levels after current before pushing
-        self.levels.truncate(self.active_level + 1);
-        self.levels.push(child);
-        self.active_level = self.levels.len() - 1;
-    }
-
-    /// Pop back one level (returns false if already at root).
-    pub fn pop_level(&mut self) -> bool {
-        if self.active_level > 0 {
-            self.levels.truncate(self.active_level);
-            self.active_level -= 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Get the MenuItem for the currently selected card, if it's a Section action.
-    pub fn active_section(&self) -> Option<MenuItem> {
-        let level = self.active();
-        let card = level.cards.get(level.selected)?;
-        match &card.action {
-            CardAction::Section(item) => Some(*item),
-            _ => None,
-        }
-    }
-
-    /// Breadcrumb labels for the current drill-down path.
-    pub fn breadcrumbs(&self) -> Vec<&str> {
-        self.levels[..=self.active_level]
-            .iter()
-            .map(|l| l.label.as_str())
-            .collect()
-    }
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+        CardSlot {
+            label: "Client".to_string(),
+            icon: 'C',
+            badge: None,
+            views: vec![
+                SlotView {
+                    label: "Status".to_string(),
+                    widget: CardWidgetId::ClientStatus,
+                },
+                SlotView {
+                    label: "Messages".to_string(),
+                    widget: CardWidgetId::ClientMessages,
+                },
+                SlotView {
+                    label: "Resources".to_string(),
+                    widget: CardWidgetId::ClientResources,
+                },
+            ],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+        CardSlot {
+            label: "Agents".to_string(),
+            icon: 'A',
+            badge: None,
+            views: vec![
+                SlotView {
+                    label: "Overview".to_string(),
+                    widget: CardWidgetId::AgentOverview,
+                },
+                SlotView {
+                    label: "Sessions".to_string(),
+                    widget: CardWidgetId::AgentSessions,
+                },
+                SlotView {
+                    label: "Tools".to_string(),
+                    widget: CardWidgetId::AgentTools,
+                },
+            ],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+    ]
 }
 
-/// Build agent sub-cards from current state.
-fn build_agent_cards(state: &AppState) -> Vec<Card> {
-    state
-        .agents
+fn build_agents_slots_from(agents: &[AgentInfo]) -> Vec<CardSlot> {
+    agents
         .iter()
-        .map(|a| Card {
+        .map(|a| CardSlot {
             label: a.id.clone(),
-            icon: if a.enabled { '🟢' } else { '⚪' },
-            action: CardAction::Section(MenuItem::Agents),
-            badge: Some(format!("{} sessions", a.session_count)),
+            icon: if a.enabled { '+' } else { 'o' },
+            badge: Some(format!("{}", a.session_count)),
+            views: vec![
+                SlotView {
+                    label: "Overview".to_string(),
+                    widget: CardWidgetId::AgentOverview,
+                },
+                SlotView {
+                    label: "Sessions".to_string(),
+                    widget: CardWidgetId::AgentSessions,
+                },
+            ],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
         })
         .collect()
 }
 
-/// Build session sub-cards from current state.
-fn build_session_cards(state: &AppState) -> Vec<Card> {
-    state
-        .sessions
+fn build_sessions_slots_from(sessions: &[SessionInfo]) -> Vec<CardSlot> {
+    sessions
         .iter()
-        .map(|s| Card {
+        .map(|s| CardSlot {
             label: s.key.clone(),
-            icon: '💬',
-            action: CardAction::Section(MenuItem::Sessions),
-            badge: Some(format!("{} msgs", s.message_count)),
+            icon: 'S',
+            badge: Some(format!("{}", s.message_count)),
+            views: vec![SlotView {
+                label: "Messages".to_string(),
+                widget: CardWidgetId::ClientMessages,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
         })
         .collect()
+}
+
+fn build_credentials_slots() -> Vec<CardSlot> {
+    vec![CardSlot {
+        label: "Providers".to_string(),
+        icon: 'P',
+        badge: None,
+        views: vec![SlotView {
+            label: "Status".to_string(),
+            widget: CardWidgetId::GatewayStatus,
+        }],
+        active_view: 0,
+        kind: SlotKind::InfoCard,
+    }]
+}
+
+fn build_cron_slots() -> Vec<CardSlot> {
+    vec![CardSlot {
+        label: "Scheduler".to_string(),
+        icon: 'T',
+        badge: None,
+        views: vec![SlotView {
+            label: "Status".to_string(),
+            widget: CardWidgetId::GatewayStatus,
+        }],
+        active_view: 0,
+        kind: SlotKind::InfoCard,
+    }]
+}
+
+fn build_models_slots() -> Vec<CardSlot> {
+    vec![CardSlot {
+        label: "Providers".to_string(),
+        icon: 'M',
+        badge: None,
+        views: vec![SlotView {
+            label: "Status".to_string(),
+            widget: CardWidgetId::GatewayStatus,
+        }],
+        active_view: 0,
+        kind: SlotKind::InfoCard,
+    }]
+}
+
+fn build_settings_slots() -> Vec<CardSlot> {
+    vec![CardSlot {
+        label: "Config".to_string(),
+        icon: 'X',
+        badge: None,
+        views: vec![SlotView {
+            label: "Status".to_string(),
+            widget: CardWidgetId::GatewayStatus,
+        }],
+        active_view: 0,
+        kind: SlotKind::InfoCard,
+    }]
 }
 
 /// Gateway connection status
@@ -756,9 +879,8 @@ pub struct AppState {
     pub menu_index: usize,
     pub sidebar_focus: bool,
 
-    // Card chain navigation (Phase 4 — coexists with sidebar until migration complete)
-    pub card_chain: CardChain,
-    pub card_chain_focused: bool,
+    // Slotted card bar navigation
+    pub slot_bar: SlottedCardBar,
 
     // Paths
     pub config_path: PathBuf,
@@ -816,8 +938,9 @@ pub struct AppState {
     pub selected_cron_job: usize,
     pub selected_cron_card: usize,
 
-    // Dashboard card selection (Gateway=0, Agents=1, Sessions=2, Vault=3)
-    pub selected_dashboard_card: usize,
+    // History buffers for sparkline widgets
+    pub gateway_load_history: std::collections::VecDeque<u64>,
+    pub client_msg_history: std::collections::VecDeque<u64>,
     // Settings card selection (General=0, Paths=1, About=2)
     pub selected_settings_card: usize,
 
@@ -2586,8 +2709,7 @@ impl AppState {
             menu_item: MenuItem::Dashboard,
             menu_index: 0,
             sidebar_focus: true,
-            card_chain: CardChain::default_chain(),
-            card_chain_focused: false,
+            slot_bar: SlottedCardBar::new(),
 
             config_path,
             vault_path,
@@ -2631,7 +2753,8 @@ impl AppState {
             cron_loading: false,
             selected_cron_job: 0,
             selected_cron_card: 0,
-            selected_dashboard_card: 0,
+            gateway_load_history: std::collections::VecDeque::new(),
+            client_msg_history: std::collections::VecDeque::new(),
             selected_settings_card: 0,
             credential_schemas: Vec::new(),
 
@@ -2656,6 +2779,12 @@ impl AppState {
                 self.menu_item = item;
                 self.menu_index = item.index();
                 self.sidebar_focus = false;
+                // Keep slot_bar in sync
+                self.slot_bar.mode = item.index();
+                self.slot_bar.slots[0].label = item.title().to_string();
+                let agents = self.agents.clone();
+                let sessions = self.sessions.clone();
+                self.slot_bar.rebuild_content_slots(&agents, &sessions);
             }
             Message::ToggleSidebar => {
                 self.sidebar_focus = !self.sidebar_focus;
@@ -3169,11 +3298,7 @@ impl AppState {
     pub fn select_prev(&mut self) {
         match self.menu_item {
             MenuItem::Dashboard => {
-                self.selected_dashboard_card = if self.selected_dashboard_card == 0 {
-                    3
-                } else {
-                    self.selected_dashboard_card - 1
-                };
+                // Dashboard left/right navigation handled via slot_bar; no-op here
             }
             MenuItem::Credentials => {
                 // Left/Right navigates the tab cards
@@ -3230,7 +3355,7 @@ impl AppState {
     pub fn select_next(&mut self) {
         match self.menu_item {
             MenuItem::Dashboard => {
-                self.selected_dashboard_card = (self.selected_dashboard_card + 1) % 4;
+                // Dashboard left/right navigation handled via slot_bar; no-op here
             }
             MenuItem::Credentials => {
                 // Left/Right navigates the tab cards

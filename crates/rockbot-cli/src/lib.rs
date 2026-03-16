@@ -614,22 +614,21 @@ pub async fn run(cli: Cli) -> Result<()> {
         _ => "trace",
     };
 
-    let is_tui = matches!(cli.command, Commands::Tui { .. })
-        || {
-            #[cfg(feature = "doctor-ai")]
-            {
-                matches!(
-                    cli.command,
-                    Commands::Doctor {
-                        command: Some(DoctorCommands::Tui)
-                    }
-                )
-            }
-            #[cfg(not(feature = "doctor-ai"))]
-            {
-                false
-            }
-        };
+    let is_tui = matches!(cli.command, Commands::Tui { .. }) || {
+        #[cfg(feature = "doctor-ai")]
+        {
+            matches!(
+                cli.command,
+                Commands::Doctor {
+                    command: Some(DoctorCommands::Tui)
+                }
+            )
+        }
+        #[cfg(not(feature = "doctor-ai"))]
+        {
+            false
+        }
+    };
 
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(format!("rockbot={log_level}")));

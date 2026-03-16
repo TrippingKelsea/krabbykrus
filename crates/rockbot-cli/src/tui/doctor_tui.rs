@@ -133,8 +133,8 @@ impl DoctorTui {
         frame.render_widget(input, chunks[1]);
 
         // --- Status bar ---
-        let status = Paragraph::new(self.status.as_str())
-            .style(Style::default().fg(Color::DarkGray));
+        let status =
+            Paragraph::new(self.status.as_str()).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(status, chunks[2]);
     }
 
@@ -249,9 +249,7 @@ async fn run_event_loop(
         if event::poll(Duration::from_millis(50))? {
             if let CrosstermEvent::Key(key) = event::read()? {
                 // Ctrl+C exits
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && key.code == KeyCode::Char('c')
-                {
+                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                     tui.should_exit = true;
                     continue;
                 }
@@ -291,7 +289,9 @@ async fn run_event_loop(
                         match tui.doctor.chat(&history, &text).await {
                             Ok(response) => {
                                 tui.messages.push((Role::Assistant, response));
-                                tui.status = "Type a message and press Enter. /quit or Ctrl+C to exit.".to_string();
+                                tui.status =
+                                    "Type a message and press Enter. /quit or Ctrl+C to exit."
+                                        .to_string();
                             }
                             Err(e) => {
                                 tui.status = format!("Error: {e}");

@@ -13,7 +13,6 @@ use std::str::FromStr;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TuiAction {
     Quit,
-    ToggleFocus, // Tab - toggle sidebar/card chain vs content
     NavLeft,
     NavRight,
     NavUp,
@@ -227,7 +226,7 @@ impl KeyBinding {
         }
     }
 
-    fn with_context(key: KeySpec, action: TuiAction, ctx: &str) -> Self {
+    pub fn with_context(key: KeySpec, action: TuiAction, ctx: &str) -> Self {
         Self {
             key,
             action,
@@ -241,7 +240,7 @@ impl KeyBinding {
 pub struct KeybindingConfig {
     pub normal: Vec<KeyBinding>,
     pub chat: Vec<KeyBinding>,
-    pub card_chain: Vec<KeyBinding>,
+    pub slot_bar: Vec<KeyBinding>,
 }
 
 impl KeybindingConfig {
@@ -251,7 +250,7 @@ impl KeybindingConfig {
         let bindings = match mode {
             "normal" => &self.normal,
             "chat" => &self.chat,
-            "card_chain" => &self.card_chain,
+            "slot_bar" => &self.slot_bar,
             _ => return None,
         };
         bindings
@@ -280,25 +279,17 @@ impl Default for KeybindingConfig {
         }
 
         let normal = vec![
-            // Quit (sidebar focused only — context guard)
-            KeyBinding::with_context(char('q'), TuiAction::Quit, "sidebar_focused"),
-            // Toggle sidebar / content
-            KeyBinding::new(key(Tab), TuiAction::ToggleFocus),
-            // Sidebar navigation
-            KeyBinding::with_context(key(Up), TuiAction::NavUp, "sidebar_focused"),
-            KeyBinding::with_context(char('k'), TuiAction::NavUp, "sidebar_focused"),
-            KeyBinding::with_context(key(Down), TuiAction::NavDown, "sidebar_focused"),
-            KeyBinding::with_context(char('j'), TuiAction::NavDown, "sidebar_focused"),
-            // Content navigation — Left/Right
-            KeyBinding::with_context(key(Left), TuiAction::NavLeft, "content_focused"),
-            KeyBinding::with_context(char('h'), TuiAction::NavLeft, "content_focused"),
-            KeyBinding::with_context(key(Right), TuiAction::NavRight, "content_focused"),
-            KeyBinding::with_context(char('l'), TuiAction::NavRight, "content_focused"),
-            // Content navigation — Up/Down (credential list, cron, chat scroll)
-            KeyBinding::with_context(key(Up), TuiAction::NavUp, "content_focused"),
-            KeyBinding::with_context(char('k'), TuiAction::NavUp, "content_focused"),
-            KeyBinding::with_context(key(Down), TuiAction::NavDown, "content_focused"),
-            KeyBinding::with_context(char('j'), TuiAction::NavDown, "content_focused"),
+            // Quit
+            KeyBinding::new(char('q'), TuiAction::Quit),
+            // Navigation (used by both slot_bar and content areas)
+            KeyBinding::new(key(Up), TuiAction::NavUp),
+            KeyBinding::new(char('k'), TuiAction::NavUp),
+            KeyBinding::new(key(Down), TuiAction::NavDown),
+            KeyBinding::new(char('j'), TuiAction::NavDown),
+            KeyBinding::new(key(Left), TuiAction::NavLeft),
+            KeyBinding::new(char('h'), TuiAction::NavLeft),
+            KeyBinding::new(key(Right), TuiAction::NavRight),
+            KeyBinding::new(char('l'), TuiAction::NavRight),
             // Enter / Esc
             KeyBinding::new(key(Enter), TuiAction::Enter),
             KeyBinding::new(key(Esc), TuiAction::Escape),
@@ -321,25 +312,23 @@ impl Default for KeybindingConfig {
             KeyBinding::new(modified(Km::CONTROL, Char('f')), TuiAction::ScrollDown),
             KeyBinding::new(key(End), TuiAction::ScrollEnd),
             KeyBinding::new(char('G'), TuiAction::ScrollEnd),
-            // Page-specific actions (content focused)
-            KeyBinding::with_context(char('a'), TuiAction::Add, "content_focused"),
-            KeyBinding::with_context(char('d'), TuiAction::Delete, "content_focused"),
+            // Page-specific actions
+            KeyBinding::new(char('a'), TuiAction::Add),
+            KeyBinding::new(char('d'), TuiAction::Delete),
             KeyBinding::new(char('r'), TuiAction::Refresh),
             KeyBinding::new(key(F(5)), TuiAction::Refresh),
-            KeyBinding::with_context(char('v'), TuiAction::View, "content_focused"),
-            KeyBinding::with_context(char('c'), TuiAction::Chat, "content_focused"),
-            KeyBinding::with_context(char('e'), TuiAction::Edit, "content_focused"),
-            KeyBinding::with_context(char('n'), TuiAction::NewSession, "content_focused"),
-            KeyBinding::with_context(char('s'), TuiAction::StartGateway, "content_focused"),
-            KeyBinding::with_context(char('S'), TuiAction::StopGateway, "content_focused"),
+            KeyBinding::new(char('v'), TuiAction::View),
+            KeyBinding::new(char('c'), TuiAction::Chat),
+            KeyBinding::new(char('e'), TuiAction::Edit),
+            KeyBinding::new(char('n'), TuiAction::NewSession),
+            KeyBinding::new(char('s'), TuiAction::StartGateway),
+            KeyBinding::new(char('S'), TuiAction::StopGateway),
             KeyBinding::new(char('i'), TuiAction::InitVault),
             KeyBinding::new(char('u'), TuiAction::UnlockVault),
-            KeyBinding::with_context(char('l'), TuiAction::LockVault, "content_focused"),
-            KeyBinding::with_context(char('f'), TuiAction::ContextFiles, "content_focused"),
-            KeyBinding::with_context(char('p'), TuiAction::Permissions, "content_focused"),
-            KeyBinding::with_context(char('k'), TuiAction::Kill, "content_focused"),
-            KeyBinding::with_context(char('t'), TuiAction::TestAction, "content_focused"),
-            KeyBinding::with_context(char('?'), TuiAction::OpenContextMenu, "content_focused"),
+            KeyBinding::new(char('f'), TuiAction::ContextFiles),
+            KeyBinding::new(char('p'), TuiAction::Permissions),
+            KeyBinding::new(char('t'), TuiAction::TestAction),
+            KeyBinding::new(char('?'), TuiAction::OpenContextMenu),
         ];
 
         let chat = vec![
@@ -351,7 +340,7 @@ impl Default for KeybindingConfig {
             KeyBinding::new(key(PageDown), TuiAction::ScrollDown),
         ];
 
-        let card_chain = vec![
+        let slot_bar = vec![
             KeyBinding::new(key(Left), TuiAction::NavLeft),
             KeyBinding::new(char('h'), TuiAction::NavLeft),
             KeyBinding::new(key(Right), TuiAction::NavRight),
@@ -367,7 +356,7 @@ impl Default for KeybindingConfig {
         Self {
             normal,
             chat,
-            card_chain,
+            slot_bar,
         }
     }
 }
@@ -477,11 +466,11 @@ mod tests {
     }
 
     #[test]
-    fn test_default_config_lookup_tab() {
+    fn test_default_config_lookup_nav_up() {
         let config = KeybindingConfig::default();
-        let event = key_event(KeyCode::Tab, KeyModifiers::NONE);
+        let event = key_event(KeyCode::Up, KeyModifiers::NONE);
         let action = config.lookup("normal", &event);
-        assert_eq!(action, Some(TuiAction::ToggleFocus));
+        assert_eq!(action, Some(TuiAction::NavUp));
     }
 
     #[test]

@@ -54,7 +54,9 @@ fn render_status_cards(
     let elapsed = effect_state.elapsed_secs();
 
     for &(label, idx) in &cards {
-        let is_selected = idx == state.selected_dashboard_card;
+        // Map slot_bar active_slot to dashboard card index (slot 0 = mode, slot 1+ = cards)
+        let active_card = state.slot_bar.active_slot.saturating_sub(1);
+        let is_selected = idx == active_card;
 
         let border_style = if is_selected {
             effects::active_border_style(elapsed)
@@ -227,12 +229,13 @@ fn vault_card_lines(state: &AppState) -> Vec<Line<'static>> {
 
 /// Render the detail panel based on which dashboard card is selected
 fn render_detail_panel(frame: &mut Frame, area: Rect, state: &AppState) {
-    match state.selected_dashboard_card {
+    let active_card = state.slot_bar.active_slot.saturating_sub(1);
+    match active_card {
         0 => render_gateway_detail(frame, area, state),
         1 => render_agents_detail(frame, area, state),
         2 => render_sessions_detail(frame, area, state),
         3 => render_vault_detail(frame, area, state),
-        _ => {}
+        _ => render_gateway_detail(frame, area, state),
     }
 }
 
