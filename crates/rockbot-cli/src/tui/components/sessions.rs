@@ -286,7 +286,7 @@ fn render_session_card(
 }
 
 /// Render the chat area (messages + input) — takes full width
-fn render_chat_area(frame: &mut Frame, area: Rect, state: &AppState, _effect_state: &EffectState) {
+pub fn render_chat_area(frame: &mut Frame, area: Rect, state: &AppState, _effect_state: &EffectState) {
     let is_chat_mode = matches!(state.input_mode, InputMode::ChatInput);
 
     let messages = state.chat_messages();
@@ -358,7 +358,7 @@ fn render_chat_area(frame: &mut Frame, area: Rect, state: &AppState, _effect_sta
     render_chat_input(frame, chunks[1], state, is_chat_mode);
 }
 
-fn render_chat_messages(
+pub fn render_chat_messages(
     frame: &mut Frame,
     area: Rect,
     state: &AppState,
@@ -561,7 +561,7 @@ fn render_chat_messages(
     }
 }
 
-fn render_chat_input(frame: &mut Frame, area: Rect, state: &AppState, is_active: bool) {
+pub fn render_chat_input(frame: &mut Frame, area: Rect, state: &AppState, is_active: bool) {
     let border_style = if is_active {
         Style::default().fg(palette::ACTIVE_PRIMARY)
     } else {

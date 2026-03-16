@@ -4,6 +4,7 @@
 //! Components are stateless renderers that read from AppState.
 
 pub mod agents;
+pub mod card_chain;
 pub mod context_menu;
 pub mod credentials;
 pub mod cron;
@@ -26,8 +27,9 @@ pub use modals::{
     render_view_permission_modal, render_view_provider_modal, render_view_session_modal,
 };
 pub use models::render_models;
-pub use sessions::render_sessions;
+pub use sessions::{render_chat_area, render_chat_input, render_chat_messages, render_sessions};
 pub use settings::render_settings;
+pub use card_chain::render_card_chain;
 pub use sidebar::render_sidebar;
 
 use ratatui::{

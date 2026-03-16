@@ -32,6 +32,13 @@ pub use learned::{LearnedFix, LearnedStore};
 pub use migration::{MigrationNote, MigrationSource};
 pub use repair::DoctorFix;
 
+/// Speaker role in a Doctor AI conversation.
+#[derive(Debug, Clone)]
+pub enum Role {
+    User,
+    Assistant,
+}
+
 /// Doctor AI configuration, parsed from `[doctor]` in the TOML config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoctorConfig {
@@ -318,6 +325,26 @@ impl DoctorAi {
         notes
     }
 
+    /// Free-form conversation with the Doctor AI model.
+    ///
+    /// Formats a system prompt + conversation history + user message,
+    /// then generates a response via the local model.
+    pub async fn chat(
+        &self,
+        history: &[(Role, String)],
+        user_message: &str,
+    ) -> anyhow::Result<String> {
+        let prompt = build_chat_prompt(history, user_message);
+        let engine = Arc::clone(&self.engine);
+        let result = tokio::task::spawn_blocking(move || {
+            let mut engine = engine.blocking_lock();
+            engine.generate(&prompt)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("task join: {e}"))??;
+        Ok(result.0.trim().to_string())
+    }
+
     /// Whether auto-fix is enabled in the config.
     pub fn auto_fix_enabled(&self) -> bool {
         self.config.auto_fix
@@ -359,6 +386,23 @@ impl DoctorAi {
             }
         }
     }
+}
+
+/// Build a ChatML-formatted prompt for free-form Doctor AI conversation.
+fn build_chat_prompt(history: &[(Role, String)], user_message: &str) -> String {
+    let system = "You are Doctor, RockBot's config diagnostician. Clinical, exact, mildly exasperated by bad configs.";
+    let mut prompt = format!("<|im_start|>system\n{system}<|im_end|>\n");
+    for (role, content) in history {
+        let tag = match role {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        };
+        prompt.push_str(&format!("<|im_start|>{tag}\n{content}<|im_end|>\n"));
+    }
+    prompt.push_str(&format!(
+        "<|im_start|>user\n{user_message}<|im_end|>\n<|im_start|>assistant\n"
+    ));
+    prompt
 }
 
 #[cfg(test)]

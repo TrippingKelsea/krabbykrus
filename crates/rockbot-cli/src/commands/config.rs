@@ -154,5 +154,6 @@ fn create_default_config() -> Config {
         doctor: None,
         deploy: None,
         tui: rockbot_core::TuiConfig::default(),
+        seed_model: rockbot_core::SeedModelConfig::default(),
     }
 }

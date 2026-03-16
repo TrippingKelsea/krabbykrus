@@ -566,6 +566,9 @@ pub enum DoctorCommands {
     /// Show doctor AI status (model loaded, version, etc.)
     #[cfg(feature = "doctor-ai")]
     Status,
+    /// Launch interactive Doctor AI chat TUI
+    #[cfg(feature = "doctor-ai")]
+    Tui,
 }
 
 /// Migration commands
@@ -611,7 +614,22 @@ pub async fn run(cli: Cli) -> Result<()> {
         _ => "trace",
     };
 
-    let is_tui = matches!(cli.command, Commands::Tui { .. });
+    let is_tui = matches!(cli.command, Commands::Tui { .. })
+        || {
+            #[cfg(feature = "doctor-ai")]
+            {
+                matches!(
+                    cli.command,
+                    Commands::Doctor {
+                        command: Some(DoctorCommands::Tui)
+                    }
+                )
+            }
+            #[cfg(not(feature = "doctor-ai"))]
+            {
+                false
+            }
+        };
 
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(format!("rockbot={log_level}")));

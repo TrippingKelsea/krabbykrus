@@ -168,11 +168,40 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
     gateway.set_agent_factory(agent_factory);
     gateway.set_llm_registry(llm_registry.clone()).await;
 
+    // Open vault store for agent persistence (if vault is available)
+    if vault_result.is_some() {
+        let store_path = vault_path.join("agents.redb");
+        match rockbot_store::Store::open(&store_path) {
+            Ok(store) => {
+                let store = std::sync::Arc::new(store);
+                gateway.set_store(store);
+                info!("Vault store opened for agent persistence");
+            }
+            Err(e) => {
+                warn!("Could not open vault store: {e}. Falling back to TOML persistence.");
+            }
+        }
+    }
+
+    // Auto-migrate agents from TOML to vault if needed
+    gateway.auto_migrate_agents_to_store().await;
+
+    // Load agents: prefer vault store, fall back to TOML config
+    let agent_configs: Vec<AgentInstance> = {
+        let vault_agents = gateway.load_agents_from_store();
+        if vault_agents.is_empty() {
+            config.agents.list.clone()
+        } else {
+            info!("Loaded {} agent(s) from vault store", vault_agents.len());
+            vault_agents
+        }
+    };
+
     // Create agents (gracefully handle missing API keys)
     let mut agents_created = 0;
     let mut agents_pending = 0;
 
-    for agent_config in &config.agents.list {
+    for agent_config in &agent_configs {
         let agent_id = &agent_config.id;
         let model = agent_config
             .model
