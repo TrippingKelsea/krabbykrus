@@ -117,6 +117,14 @@ pub enum Message {
 
     // Exit
     Quit,
+
+    /// Keybinding config reloaded from vault
+    KeybindingsReloaded(Box<super::keybindings::KeybindingConfig>),
+
+    // Butler chat
+    ButlerChunk(String),
+    ButlerDone(String),
+    ButlerError(String),
 }
 
 /// Main menu items - unified between TUI and Web UI
@@ -192,6 +200,194 @@ impl MenuItem {
             _ => Self::Settings,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Card Chain Navigation
+// ---------------------------------------------------------------------------
+
+/// A stack of card levels forming a breadcrumb-navigable card chain.
+pub struct CardChain {
+    pub levels: Vec<CardLevel>,
+    pub active_level: usize,
+}
+
+/// One row of cards at a given depth.
+pub struct CardLevel {
+    pub cards: Vec<Card>,
+    pub selected: usize,
+    pub label: String,
+}
+
+/// A single card in the horizontal strip.
+pub struct Card {
+    pub label: String,
+    pub icon: char,
+    pub action: CardAction,
+    /// Optional badge text (e.g. item count).
+    pub badge: Option<String>,
+}
+
+/// What happens when a card is activated.
+pub enum CardAction {
+    /// Push a child card set (drill down). The closure builds children from AppState.
+    Chain(fn(&AppState) -> Vec<Card>),
+    /// Navigate to a section — sets active MenuItem for detail rendering.
+    Section(MenuItem),
+    /// Execute a TUI action directly.
+    Execute(super::keybindings::TuiAction),
+}
+
+impl CardChain {
+    /// Build the default top-level card chain.
+    pub fn default_chain() -> Self {
+        let top = CardLevel {
+            label: "RockBot".to_string(),
+            cards: vec![
+                Card {
+                    label: "Butler".to_string(),
+                    icon: '🫖',
+                    action: CardAction::Section(MenuItem::Dashboard),
+                    badge: None,
+                },
+                Card {
+                    label: "Agents".to_string(),
+                    icon: '🤖',
+                    action: CardAction::Chain(build_agent_cards),
+                    badge: None,
+                },
+                Card {
+                    label: "Sessions".to_string(),
+                    icon: '💬',
+                    action: CardAction::Chain(build_session_cards),
+                    badge: None,
+                },
+                Card {
+                    label: "Credentials".to_string(),
+                    icon: '🔐',
+                    action: CardAction::Section(MenuItem::Credentials),
+                    badge: None,
+                },
+                Card {
+                    label: "Cron".to_string(),
+                    icon: '🕐',
+                    action: CardAction::Section(MenuItem::CronJobs),
+                    badge: None,
+                },
+                Card {
+                    label: "Models".to_string(),
+                    icon: '🧠',
+                    action: CardAction::Section(MenuItem::Models),
+                    badge: None,
+                },
+                Card {
+                    label: "Settings".to_string(),
+                    icon: '⚙',
+                    action: CardAction::Section(MenuItem::Settings),
+                    badge: None,
+                },
+            ],
+            selected: 0,
+        };
+        Self {
+            levels: vec![top],
+            active_level: 0,
+        }
+    }
+
+    /// The currently active level.
+    pub fn active(&self) -> &CardLevel {
+        &self.levels[self.active_level]
+    }
+
+    /// Move selection left within the active level.
+    pub fn select_left(&mut self) {
+        let level = &mut self.levels[self.active_level];
+        if level.selected > 0 {
+            level.selected -= 1;
+        }
+    }
+
+    /// Move selection right within the active level.
+    pub fn select_right(&mut self) {
+        let level = &mut self.levels[self.active_level];
+        if level.selected + 1 < level.cards.len() {
+            level.selected += 1;
+        }
+    }
+
+    /// Push a child card level (drill down).
+    pub fn push_children(&mut self, label: String, cards: Vec<Card>) {
+        if cards.is_empty() {
+            return;
+        }
+        let child = CardLevel {
+            label,
+            cards,
+            selected: 0,
+        };
+        // Truncate any levels after current before pushing
+        self.levels.truncate(self.active_level + 1);
+        self.levels.push(child);
+        self.active_level = self.levels.len() - 1;
+    }
+
+    /// Pop back one level (returns false if already at root).
+    pub fn pop_level(&mut self) -> bool {
+        if self.active_level > 0 {
+            self.levels.truncate(self.active_level);
+            self.active_level -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the MenuItem for the currently selected card, if it's a Section action.
+    pub fn active_section(&self) -> Option<MenuItem> {
+        let level = self.active();
+        let card = level.cards.get(level.selected)?;
+        match &card.action {
+            CardAction::Section(item) => Some(*item),
+            _ => None,
+        }
+    }
+
+    /// Breadcrumb labels for the current drill-down path.
+    pub fn breadcrumbs(&self) -> Vec<&str> {
+        self.levels[..=self.active_level]
+            .iter()
+            .map(|l| l.label.as_str())
+            .collect()
+    }
+}
+
+/// Build agent sub-cards from current state.
+fn build_agent_cards(state: &AppState) -> Vec<Card> {
+    state
+        .agents
+        .iter()
+        .map(|a| Card {
+            label: a.id.clone(),
+            icon: if a.enabled { '🟢' } else { '⚪' },
+            action: CardAction::Section(MenuItem::Agents),
+            badge: Some(format!("{} sessions", a.session_count)),
+        })
+        .collect()
+}
+
+/// Build session sub-cards from current state.
+fn build_session_cards(state: &AppState) -> Vec<Card> {
+    state
+        .sessions
+        .iter()
+        .map(|s| Card {
+            label: s.key.clone(),
+            icon: '💬',
+            action: CardAction::Section(MenuItem::Sessions),
+            badge: Some(format!("{} msgs", s.message_count)),
+        })
+        .collect()
 }
 
 /// Gateway connection status
@@ -560,6 +756,10 @@ pub struct AppState {
     pub menu_index: usize,
     pub sidebar_focus: bool,
 
+    // Card chain navigation (Phase 4 — coexists with sidebar until migration complete)
+    pub card_chain: CardChain,
+    pub card_chain_focused: bool,
+
     // Paths
     pub config_path: PathBuf,
     pub vault_path: PathBuf,
@@ -585,6 +785,9 @@ pub struct AppState {
     pub sessions_loading: bool,
     pub sessions_error: Option<String>,
     pub selected_session: usize,
+
+    // Butler chat (permanent companion chat, always visible)
+    pub butler_chat: SessionChatState,
 
     // Chat state — per-session
     pub session_chats: std::collections::HashMap<String, SessionChatState>,
@@ -2383,6 +2586,8 @@ impl AppState {
             menu_item: MenuItem::Dashboard,
             menu_index: 0,
             sidebar_focus: true,
+            card_chain: CardChain::default_chain(),
+            card_chain_focused: false,
 
             config_path,
             vault_path,
@@ -2404,6 +2609,7 @@ impl AppState {
             sessions_error: None,
             selected_session: 0,
 
+            butler_chat: SessionChatState::default(),
             session_chats: std::collections::HashMap::new(),
             chat_model: None,
             chat_agent_id: None,
@@ -2712,6 +2918,48 @@ impl AppState {
 
             Message::Quit => {
                 self.should_exit = true;
+            }
+
+            Message::KeybindingsReloaded(_) => {
+                // Handled in app.rs handle_message — keybindings live on App, not AppState
+            }
+
+            Message::ButlerChunk(text) => {
+                // Append to last assistant message, or create a new one
+                if let Some(last) = self.butler_chat.messages.last_mut() {
+                    if last.role == ChatRole::Assistant {
+                        last.content.push_str(&text);
+                    } else {
+                        self.butler_chat.messages.push(ChatMessage::assistant(text));
+                    }
+                } else {
+                    self.butler_chat.messages.push(ChatMessage::assistant(text));
+                }
+                if self.butler_chat.auto_scroll {
+                    self.butler_chat.scroll = usize::MAX;
+                }
+            }
+            Message::ButlerDone(text) => {
+                // If last message is streaming assistant, replace; otherwise push
+                if let Some(last) = self.butler_chat.messages.last_mut() {
+                    if last.role == ChatRole::Assistant && last.content.is_empty() {
+                        last.content = text;
+                    } else if last.role != ChatRole::Assistant {
+                        self.butler_chat.messages.push(ChatMessage::assistant(text));
+                    }
+                    // If last is already assistant with content (from streaming), it's fine
+                } else {
+                    self.butler_chat.messages.push(ChatMessage::assistant(text));
+                }
+                self.butler_chat.loading = false;
+                self.butler_chat.thinking = ThinkingState::default();
+            }
+            Message::ButlerError(err) => {
+                self.butler_chat
+                    .messages
+                    .push(ChatMessage::system(format!("Butler error: {err}")));
+                self.butler_chat.loading = false;
+                self.butler_chat.thinking = ThinkingState::default();
             }
         }
     }

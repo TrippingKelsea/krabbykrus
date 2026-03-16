@@ -5,9 +5,10 @@
 use anyhow::Result;
 use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
-    widgets::{Block, Borders},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 use std::path::PathBuf;
@@ -15,13 +16,13 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use super::components::{
-    render_add_credential_modal, render_agents, render_confirm_modal, render_credentials,
-    render_cron_jobs, render_dashboard, render_edit_agent_modal, render_edit_context_file_modal,
-    render_edit_credential_modal, render_edit_permission_modal, render_edit_provider_modal,
-    render_models, render_password_modal, render_sessions, render_settings, render_sidebar,
-    render_status_bar, render_view_context_files_modal, render_view_endpoint_modal,
-    render_view_model_list_modal, render_view_permission_modal, render_view_provider_modal,
-    render_view_session_modal,
+    render_add_credential_modal, render_agents, render_card_chain, render_confirm_modal,
+    render_credentials, render_cron_jobs, render_dashboard, render_edit_agent_modal,
+    render_edit_context_file_modal, render_edit_credential_modal, render_edit_permission_modal,
+    render_edit_provider_modal, render_models, render_password_modal, render_sessions,
+    render_settings, render_status_bar, render_view_context_files_modal,
+    render_view_endpoint_modal, render_view_model_list_modal, render_view_permission_modal,
+    render_view_provider_modal, render_view_session_modal,
 };
 use super::effects::EffectState;
 use super::state::{
@@ -115,6 +116,14 @@ pub struct App {
     #[cfg(feature = "remote-exec")]
     #[allow(dead_code)]
     local_tool_registry: Option<std::sync::Arc<rockbot_tools::ToolRegistry>>,
+    /// Keybinding configuration (data-driven, replaces hardcoded key matching)
+    keybindings: super::keybindings::KeybindingConfig,
+    /// Butler companion agent (local GGUF model)
+    #[cfg(feature = "butler")]
+    butler: Option<rockbot_butler::Butler>,
+    /// Butler conversation session
+    #[cfg(feature = "butler")]
+    butler_session: Option<rockbot_butler::ButlerSession>,
 }
 
 impl App {
@@ -134,6 +143,11 @@ impl App {
             gateway_events_rx: None,
             #[cfg(feature = "remote-exec")]
             local_tool_registry: None,
+            keybindings: super::keybindings::KeybindingConfig::default(),
+            #[cfg(feature = "butler")]
+            butler: None,
+            #[cfg(feature = "butler")]
+            butler_session: None,
         }
     }
 
@@ -200,6 +214,7 @@ impl App {
         self.spawn_credential_schemas_load();
         self.spawn_sessions_load();
         self.spawn_ws_connect();
+        self.spawn_keybinding_watch();
         Ok(())
     }
 
@@ -352,6 +367,41 @@ impl App {
         });
     }
 
+    /// Spawn a background watcher that polls the vault store for keybinding changes every 5s.
+    fn spawn_keybinding_watch(&self) {
+        let vault_path = self.state.vault_path.clone();
+        let tx = self.state.tx.clone();
+        tokio::spawn(async move {
+            let store_path = vault_path.join("agents.redb");
+            // Open the store once; if it doesn't exist yet, we just do nothing.
+            let store = match rockbot_store::Store::open(&store_path) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let mut last_hash: Option<u64> = None;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                if let Ok(Some(bytes)) = store.kv_get("config", "keybindings") {
+                    let hash = {
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        bytes.hash(&mut hasher);
+                        hasher.finish()
+                    };
+                    if last_hash != Some(hash) {
+                        last_hash = Some(hash);
+                        if let Ok(config) = serde_json::from_slice::<
+                            super::keybindings::KeybindingConfig,
+                        >(&bytes)
+                        {
+                            let _ = tx.send(Message::KeybindingsReloaded(Box::new(config)));
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     /// Spawn a task to load credential schemas from gateway
     fn spawn_credential_schemas_load(&self) {
         let tx = self.state.tx.clone();
@@ -422,6 +472,12 @@ impl App {
         // ReloadProviders triggers a fresh load of provider status
         if matches!(msg, Message::ReloadProviders) {
             self.spawn_providers_load();
+        }
+
+        // KeybindingsReloaded updates keybindings on App (not AppState)
+        if let Message::KeybindingsReloaded(ref config) = msg {
+            self.keybindings = *config.clone();
+            tracing::info!("Keybindings reloaded from vault");
         }
 
         self.state.update(msg);
@@ -496,6 +552,9 @@ impl App {
 
         // Route to appropriate handler based on input mode
         match &self.state.input_mode {
+            InputMode::Normal if self.state.card_chain_focused => {
+                self.handle_card_chain(key)
+            }
             InputMode::Normal => self.handle_normal_mode(key),
             InputMode::PasswordInput { masked, action, .. } => {
                 let masked = *masked;
@@ -568,260 +627,349 @@ impl App {
     }
 
     fn handle_normal_mode(&mut self, key: KeyEvent) -> Result<()> {
-        match key.code {
-            // Navigation
-            KeyCode::Char('q') if self.state.sidebar_focus => {
-                self.state.should_exit = true;
-            }
-            KeyCode::Tab => {
-                self.state.sidebar_focus = !self.state.sidebar_focus;
-                self.effect_state.set_active(!self.state.sidebar_focus);
-            }
+        // Also support { and } as aliases for Shift+[ / Shift+] (US keyboard layouts)
+        if key.code == KeyCode::Char('{') {
+            self.prev_content_tab();
+            return Ok(());
+        }
+        if key.code == KeyCode::Char('}') {
+            self.next_content_tab();
+            return Ok(());
+        }
 
-            // Sidebar navigation (only when sidebar focused)
-            KeyCode::Up | KeyCode::Char('k') if self.state.sidebar_focus => {
-                self.state.menu_prev();
-            }
-            KeyCode::Down | KeyCode::Char('j') if self.state.sidebar_focus => {
-                self.state.menu_next();
-            }
-            KeyCode::Enter if self.state.sidebar_focus => {
-                // Enter selects and switches to content
-                self.state.sidebar_focus = false;
-                self.effect_state.set_active(true);
-            }
+        if let Some(action) = self.keybindings.lookup("normal", &key) {
+            self.dispatch_action(action);
+        }
+        Ok(())
+    }
 
-            // Content navigation (only when content focused)
-            KeyCode::Esc if !self.state.sidebar_focus => {
-                self.state.sidebar_focus = true;
-                self.effect_state.set_active(false);
-            }
-            // Left/Right for horizontal card navigation in content panes
-            KeyCode::Left | KeyCode::Char('h') if !self.state.sidebar_focus => {
-                self.state.select_prev();
-                if self.state.menu_item == MenuItem::Sessions {
-                    self.on_session_selection_changed();
-                }
-            }
-            KeyCode::Right | KeyCode::Char('l') if !self.state.sidebar_focus => {
-                self.state.select_next();
-                if self.state.menu_item == MenuItem::Sessions {
-                    self.on_session_selection_changed();
-                }
-            }
-            // Up/Down for list navigation within credential tabs / chat scroll
-            KeyCode::Up | KeyCode::Char('k') if !self.state.sidebar_focus => {
-                match self.state.menu_item {
-                    MenuItem::Credentials => self.state.credential_list_prev(),
-                    MenuItem::Sessions => {
-                        if let Some(chat) = self.state.active_chat_mut() {
-                            if chat.auto_scroll {
-                                // Transition: start from bottom
-                                chat.scroll = chat.max_scroll.get();
-                                chat.auto_scroll = false;
-                            }
-                            chat.scroll = chat.scroll.saturating_sub(1);
+    /// Handle key events when the card chain strip is focused.
+    fn handle_card_chain(&mut self, key: KeyEvent) -> Result<()> {
+        use super::keybindings::TuiAction;
+        use super::state::CardAction;
+
+        if let Some(action) = self.keybindings.lookup("card_chain", &key) {
+            match action {
+                TuiAction::NavLeft => self.state.card_chain.select_left(),
+                TuiAction::NavRight => self.state.card_chain.select_right(),
+                TuiAction::NavDown => {
+                    // Drill down: if current card is Chain, push child cards
+                    let level = self.state.card_chain.active();
+                    if let Some(card) = level.cards.get(level.selected) {
+                        if let CardAction::Chain(builder) = &card.action {
+                            let label = card.label.clone();
+                            let children = builder(&self.state);
+                            self.state.card_chain.push_children(label, children);
                         }
                     }
-                    MenuItem::CronJobs => {
-                        if !self.state.cron_jobs.is_empty() {
-                            self.state.selected_cron_job = if self.state.selected_cron_job == 0 {
-                                self.state.cron_jobs.len() - 1
-                            } else {
-                                self.state.selected_cron_job - 1
+                }
+                TuiAction::NavUp => {
+                    // Pop level; if already at root, unfocus card chain
+                    if !self.state.card_chain.pop_level() {
+                        self.state.card_chain_focused = false;
+                    }
+                }
+                TuiAction::Enter => {
+                    // Activate the selected card
+                    let level = self.state.card_chain.active();
+                    if let Some(card) = level.cards.get(level.selected) {
+                        match &card.action {
+                            CardAction::Section(item) => {
+                                self.state.menu_item = *item;
+                                self.state.menu_index = item.index();
+                                self.state.card_chain_focused = false;
+                            }
+                            CardAction::Chain(builder) => {
+                                let label = card.label.clone();
+                                let children = builder(&self.state);
+                                self.state.card_chain.push_children(label, children);
+                            }
+                            CardAction::Execute(tui_action) => {
+                                let a = tui_action.clone();
+                                self.dispatch_action(a);
+                            }
+                        }
+                    }
+                }
+                TuiAction::Escape => {
+                    // Collapse to level 0 and unfocus → butler chat gets focus
+                    while self.state.card_chain.active_level > 0 {
+                        self.state.card_chain.pop_level();
+                    }
+                    self.state.card_chain_focused = false;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn dispatch_action(&mut self, action: super::keybindings::TuiAction) {
+        use super::keybindings::TuiAction::*;
+        match action {
+            Quit => {
+                if self.state.sidebar_focus {
+                    self.state.should_exit = true;
+                }
+            }
+            ToggleFocus => {
+                // Toggle between card chain focus and content focus
+                self.state.card_chain_focused = !self.state.card_chain_focused;
+                self.state.sidebar_focus = self.state.card_chain_focused;
+                self.effect_state.set_active(!self.state.card_chain_focused);
+            }
+            NavUp => {
+                if self.state.sidebar_focus {
+                    self.state.menu_prev();
+                } else {
+                    match self.state.menu_item {
+                        MenuItem::Credentials => self.state.credential_list_prev(),
+                        MenuItem::Sessions => {
+                            if let Some(chat) = self.state.active_chat_mut() {
+                                if chat.auto_scroll {
+                                    chat.scroll = chat.max_scroll.get();
+                                    chat.auto_scroll = false;
+                                }
+                                chat.scroll = chat.scroll.saturating_sub(1);
+                            }
+                        }
+                        MenuItem::CronJobs => {
+                            if !self.state.cron_jobs.is_empty() {
+                                self.state.selected_cron_job =
+                                    if self.state.selected_cron_job == 0 {
+                                        self.state.cron_jobs.len() - 1
+                                    } else {
+                                        self.state.selected_cron_job - 1
+                                    };
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            NavDown => {
+                if self.state.sidebar_focus {
+                    self.state.menu_next();
+                } else {
+                    match self.state.menu_item {
+                        MenuItem::Credentials => self.state.credential_list_next(),
+                        MenuItem::Sessions => {
+                            if let Some(chat) = self.state.active_chat_mut() {
+                                if chat.auto_scroll {
+                                    // Already at bottom in auto-scroll
+                                    return;
+                                }
+                                chat.scroll = chat.scroll.saturating_add(1);
+                                if chat.scroll >= chat.max_scroll.get() {
+                                    chat.auto_scroll = true;
+                                }
+                            }
+                        }
+                        MenuItem::CronJobs => {
+                            if !self.state.cron_jobs.is_empty() {
+                                self.state.selected_cron_job = (self.state.selected_cron_job + 1)
+                                    % self.state.cron_jobs.len();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            NavLeft => {
+                if !self.state.sidebar_focus {
+                    self.state.select_prev();
+                    if self.state.menu_item == MenuItem::Sessions {
+                        self.on_session_selection_changed();
+                    }
+                }
+            }
+            NavRight => {
+                if !self.state.sidebar_focus {
+                    self.state.select_next();
+                    if self.state.menu_item == MenuItem::Sessions {
+                        self.on_session_selection_changed();
+                    }
+                }
+            }
+            Enter => {
+                if self.state.sidebar_focus {
+                    self.state.sidebar_focus = false;
+                    self.effect_state.set_active(true);
+                } else {
+                    match self.state.menu_item {
+                        MenuItem::Credentials => match self.state.credentials_tab {
+                            0 if !self.state.endpoints.is_empty() => {
+                                self.state.input_mode = InputMode::ViewEndpoint {
+                                    endpoint_index: self.state.selected_endpoint,
+                                };
+                            }
+                            1 => {
+                                self.state.input_mode = InputMode::ViewProvider {
+                                    provider_index: self.state.selected_provider_index,
+                                };
+                            }
+                            2 if !self.state.permissions.is_empty() => {
+                                self.state.input_mode = InputMode::ViewPermission {
+                                    permission_index: self.state.selected_permission,
+                                };
+                            }
+                            _ => {}
+                        },
+                        MenuItem::Models if !self.state.providers.is_empty() => {
+                            self.state.input_mode = InputMode::ViewModelList {
+                                provider_index: self.state.selected_provider,
+                                scroll: 0,
                             };
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') if !self.state.sidebar_focus => {
-                match self.state.menu_item {
-                    MenuItem::Credentials => self.state.credential_list_next(),
-                    MenuItem::Sessions => {
-                        if let Some(chat) = self.state.active_chat_mut() {
-                            if chat.auto_scroll {
-                                // Already at bottom in auto-scroll
-                                return Ok(());
-                            }
-                            chat.scroll = chat.scroll.saturating_add(1);
-                            // If we've scrolled to the bottom, re-enable auto-scroll
+            Escape => {
+                if !self.state.sidebar_focus {
+                    self.state.sidebar_focus = true;
+                    self.effect_state.set_active(false);
+                }
+            }
+            JumpToSection(n) => {
+                self.state.menu_item = match n {
+                    1 => MenuItem::Dashboard,
+                    2 => MenuItem::Credentials,
+                    3 => MenuItem::Agents,
+                    4 => MenuItem::Sessions,
+                    5 => MenuItem::CronJobs,
+                    6 => MenuItem::Models,
+                    7 => MenuItem::Settings,
+                    _ => return,
+                };
+            }
+            PrevTab => {
+                self.prev_content_tab();
+            }
+            NextTab => {
+                self.next_content_tab();
+            }
+            ScrollUp => {
+                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions {
+                    if let Some(chat) = self.state.active_chat_mut() {
+                        if chat.auto_scroll {
+                            chat.scroll = chat.max_scroll.get();
+                            chat.auto_scroll = false;
+                        }
+                        chat.scroll = chat.scroll.saturating_sub(10);
+                    }
+                }
+            }
+            ScrollDown => {
+                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions {
+                    if let Some(chat) = self.state.active_chat_mut() {
+                        if !chat.auto_scroll {
+                            chat.scroll = chat.scroll.saturating_add(10);
                             if chat.scroll >= chat.max_scroll.get() {
                                 chat.auto_scroll = true;
                             }
                         }
                     }
-                    MenuItem::CronJobs => {
-                        if !self.state.cron_jobs.is_empty() {
-                            self.state.selected_cron_job =
-                                (self.state.selected_cron_job + 1) % self.state.cron_jobs.len();
-                        }
-                    }
-                    _ => {}
                 }
             }
-            // Page Up/Down for faster scrolling
-            KeyCode::PageUp
-                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions =>
-            {
-                if let Some(chat) = self.state.active_chat_mut() {
-                    if chat.auto_scroll {
-                        chat.scroll = chat.max_scroll.get();
-                        chat.auto_scroll = false;
-                    }
-                    chat.scroll = chat.scroll.saturating_sub(10);
-                }
-            }
-            KeyCode::PageDown
-                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions =>
-            {
-                if let Some(chat) = self.state.active_chat_mut() {
-                    if !chat.auto_scroll {
-                        chat.scroll = chat.scroll.saturating_add(10);
-                        if chat.scroll >= chat.max_scroll.get() {
-                            chat.auto_scroll = true;
-                        }
+            ScrollEnd => {
+                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions {
+                    if let Some(chat) = self.state.active_chat_mut() {
+                        chat.auto_scroll = true;
                     }
                 }
             }
-            // End key re-enables auto-scroll for chat
-            KeyCode::End
-                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions =>
-            {
-                if let Some(chat) = self.state.active_chat_mut() {
-                    chat.auto_scroll = true;
+            Add => {
+                if !self.state.sidebar_focus {
+                    self.handle_add_action();
                 }
             }
-            // Enter to view details
-            KeyCode::Enter if !self.state.sidebar_focus => match self.state.menu_item {
-                MenuItem::Credentials => match self.state.credentials_tab {
-                    0 if !self.state.endpoints.is_empty() => {
-                        self.state.input_mode = InputMode::ViewEndpoint {
-                            endpoint_index: self.state.selected_endpoint,
-                        };
-                    }
-                    1 => {
-                        self.state.input_mode = InputMode::ViewProvider {
-                            provider_index: self.state.selected_provider_index,
-                        };
-                    }
-                    2 if !self.state.permissions.is_empty() => {
-                        self.state.input_mode = InputMode::ViewPermission {
-                            permission_index: self.state.selected_permission,
-                        };
-                    }
-                    _ => {}
-                },
-                MenuItem::Models if !self.state.providers.is_empty() => {
-                    self.state.input_mode = InputMode::ViewModelList {
-                        provider_index: self.state.selected_provider,
-                        scroll: 0,
-                    };
+            Delete => {
+                if !self.state.sidebar_focus {
+                    self.handle_delete_action();
                 }
-                _ => {}
-            },
-
-            // Tab navigation within views (Shift+[ and Shift+])
-            KeyCode::Char('[') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.prev_content_tab();
             }
-            KeyCode::Char(']') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.next_content_tab();
-            }
-            // Also support { and } which are Shift+[ and Shift+] on US keyboards
-            KeyCode::Char('{') => {
-                self.prev_content_tab();
-            }
-            KeyCode::Char('}') => {
-                self.next_content_tab();
-            }
-
-            // Quick nav by number
-            KeyCode::Char('1') => self.state.menu_item = MenuItem::Dashboard,
-            KeyCode::Char('2') => self.state.menu_item = MenuItem::Credentials,
-            KeyCode::Char('3') => self.state.menu_item = MenuItem::Agents,
-            KeyCode::Char('4') => self.state.menu_item = MenuItem::Sessions,
-            KeyCode::Char('5') => self.state.menu_item = MenuItem::CronJobs,
-            KeyCode::Char('6') => self.state.menu_item = MenuItem::Models,
-            KeyCode::Char('7') => self.state.menu_item = MenuItem::Settings,
-
-            // Page-specific actions
-            KeyCode::Char('a') if !self.state.sidebar_focus => {
-                self.handle_add_action();
-            }
-            KeyCode::Char('d') if !self.state.sidebar_focus => {
-                self.handle_delete_action();
-            }
-            KeyCode::Char('r') | KeyCode::F(5) => {
+            Refresh => {
                 self.handle_refresh_action();
             }
-            KeyCode::Char('i') => {
+            InitVault => {
                 self.handle_init_action();
             }
-            KeyCode::Char('u') => {
+            UnlockVault => {
                 self.handle_unlock_action();
             }
-            KeyCode::Char('l') if !self.state.sidebar_focus => {
-                self.handle_lock_action();
-            }
-            KeyCode::Char('c') if !self.state.sidebar_focus => {
-                self.handle_chat_action();
-            }
-            KeyCode::Char('n')
-                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions =>
-            {
-                self.handle_new_session_action();
-            }
-            KeyCode::Char('e') if !self.state.sidebar_focus => {
-                self.handle_edit_action();
-            }
-            KeyCode::Char('f')
-                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Agents =>
-            {
-                if let Some(agent) = self.state.agents.get(self.state.selected_agent) {
-                    let agent_id = agent.id.clone();
-                    self.state.input_mode = InputMode::ViewContextFiles(ViewContextFilesState {
-                        agent_id: agent_id.clone(),
-                        files: Vec::new(),
-                        selected: 0,
-                        loading: true,
-                    });
-                    self.fetch_context_files(&agent_id);
+            LockVault => {
+                if !self.state.sidebar_focus {
+                    self.handle_lock_action();
                 }
             }
-            KeyCode::Char('p') if !self.state.sidebar_focus => {
-                self.handle_permission_action();
+            Chat => {
+                if !self.state.sidebar_focus {
+                    self.handle_chat_action();
+                }
             }
-            KeyCode::Char('k') if !self.state.sidebar_focus => {
-                self.handle_kill_action();
+            NewSession => {
+                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions {
+                    self.handle_new_session_action();
+                }
             }
-            KeyCode::Char('v') if !self.state.sidebar_focus => {
-                self.handle_view_action();
+            Edit => {
+                if !self.state.sidebar_focus {
+                    self.handle_edit_action();
+                }
             }
-            KeyCode::Char('t') if !self.state.sidebar_focus => {
-                self.handle_test_action();
+            ContextFiles => {
+                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Agents {
+                    if let Some(agent) = self.state.agents.get(self.state.selected_agent) {
+                        let agent_id = agent.id.clone();
+                        self.state.input_mode =
+                            InputMode::ViewContextFiles(ViewContextFilesState {
+                                agent_id: agent_id.clone(),
+                                files: Vec::new(),
+                                selected: 0,
+                                loading: true,
+                            });
+                        self.fetch_context_files(&agent_id);
+                    }
+                }
             }
-            KeyCode::Char('s') if !self.state.sidebar_focus => {
-                self.handle_start_action();
+            Permissions => {
+                if !self.state.sidebar_focus {
+                    self.handle_permission_action();
+                }
             }
-            KeyCode::Char('S') if !self.state.sidebar_focus => {
-                self.handle_stop_action();
+            Kill => {
+                if !self.state.sidebar_focus {
+                    self.handle_kill_action();
+                }
             }
-
-            // Context menu
-            KeyCode::Char('?') if !self.state.sidebar_focus => {
-                let menu = self.state.build_context_menu();
-                self.state.input_mode = InputMode::ContextMenu(menu);
+            View => {
+                if !self.state.sidebar_focus {
+                    self.handle_view_action();
+                }
             }
-
-            // Shift+Tab for backwards tab navigation
-            KeyCode::BackTab => {
-                self.prev_content_tab();
+            TestAction => {
+                if !self.state.sidebar_focus {
+                    self.handle_test_action();
+                }
             }
-
-            _ => {}
+            StartGateway => {
+                if !self.state.sidebar_focus {
+                    self.handle_start_action();
+                }
+            }
+            StopGateway => {
+                if !self.state.sidebar_focus {
+                    self.handle_stop_action();
+                }
+            }
+            OpenContextMenu => {
+                if !self.state.sidebar_focus {
+                    let menu = self.state.build_context_menu();
+                    self.state.input_mode = InputMode::ContextMenu(menu);
+                }
+            }
         }
-        Ok(())
     }
 
     fn handle_context_menu(&mut self, key: KeyEvent, mut menu: ContextMenuState) -> Result<()> {
@@ -2988,42 +3136,97 @@ impl App {
     }
 
     fn handle_chat_input(&mut self, key: KeyEvent) -> Result<()> {
+        use super::keybindings::TuiAction;
+
+        // Shift+Enter or Alt+Enter inserts a newline (up to 10 lines) — checked before lookup
+        if key.code == KeyCode::Enter
+            && (key.modifiers.contains(KeyModifiers::SHIFT)
+                || key.modifiers.contains(KeyModifiers::ALT))
+        {
+            self.insert_chat_newline();
+            return Ok(());
+        }
+        // Ctrl+J (LF) or Ctrl+N inserts a newline — universally supported fallback
+        if (key.code == KeyCode::Char('j') || key.code == KeyCode::Char('n'))
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            self.insert_chat_newline();
+            return Ok(());
+        }
+        // Ctrl+R to retry the last user message
+        if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.retry_last_message();
+            return Ok(());
+        }
+        // Ctrl+T to toggle tool call expand/collapse
+        if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.state.toggle_tool_expansion();
+            return Ok(());
+        }
+        // Ctrl+Up/Down scroll by 3 lines
+        if key.code == KeyCode::Up && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let Some(chat) = self.state.active_chat_mut() {
+                if chat.auto_scroll {
+                    chat.scroll = chat.max_scroll.get();
+                    chat.auto_scroll = false;
+                }
+                chat.scroll = chat.scroll.saturating_sub(3);
+            }
+            return Ok(());
+        }
+        if key.code == KeyCode::Down && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let Some(chat) = self.state.active_chat_mut() {
+                if !chat.auto_scroll {
+                    chat.scroll = chat.scroll.saturating_add(3);
+                    if chat.scroll >= chat.max_scroll.get() {
+                        chat.auto_scroll = true;
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        // Route named actions through the keybinding table (Enter, Esc, PageUp, PageDown)
+        if let Some(action) = self.keybindings.lookup("chat", &key) {
+            match action {
+                TuiAction::Escape => {
+                    self.state.input_mode = InputMode::Normal;
+                }
+                TuiAction::Enter => {
+                    self.send_chat_buffer();
+                }
+                TuiAction::ScrollUp => {
+                    if let Some(chat) = self.state.active_chat_mut() {
+                        if chat.auto_scroll {
+                            chat.scroll = chat.max_scroll.get();
+                            chat.auto_scroll = false;
+                        }
+                        chat.scroll = chat.scroll.saturating_sub(10);
+                    }
+                }
+                TuiAction::ScrollDown => {
+                    if let Some(chat) = self.state.active_chat_mut() {
+                        if !chat.auto_scroll {
+                            chat.scroll = chat.scroll.saturating_add(10);
+                            if chat.scroll >= chat.max_scroll.get() {
+                                chat.auto_scroll = true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        // Text editing keys (not in the keybinding table)
         match key.code {
-            KeyCode::Esc => {
-                self.state.input_mode = InputMode::Normal;
-            }
-            // Shift+Enter or Alt+Enter inserts a newline (up to 10 lines)
-            KeyCode::Enter
-                if key.modifiers.contains(KeyModifiers::SHIFT)
-                    || key.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.insert_chat_newline();
-            }
-            // Ctrl+J (LF) or Ctrl+N inserts a newline — universally supported fallback
-            KeyCode::Char('j') | KeyCode::Char('n')
-                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.insert_chat_newline();
-            }
-            // Plain Enter sends the message
-            KeyCode::Enter => {
-                self.send_chat_buffer();
-            }
-            // Ctrl+R to retry the last user message
-            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.retry_last_message();
-            }
-            // Ctrl+T to toggle tool call expand/collapse
-            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.state.toggle_tool_expansion();
-            }
             KeyCode::Char(c) => {
                 self.state.input_buffer.insert(self.state.input_cursor, c);
                 self.state.input_cursor += c.len_utf8();
             }
             KeyCode::Backspace => {
                 if self.state.input_cursor > 0 {
-                    // Find the previous char boundary
                     let prev = self.state.input_buffer[..self.state.input_cursor]
                         .char_indices()
                         .next_back()
@@ -3040,7 +3243,6 @@ impl App {
             }
             KeyCode::Left => {
                 if self.state.input_cursor > 0 {
-                    // Move to previous char boundary
                     self.state.input_cursor = self.state.input_buffer[..self.state.input_cursor]
                         .char_indices()
                         .next_back()
@@ -3050,7 +3252,6 @@ impl App {
             }
             KeyCode::Right => {
                 if self.state.input_cursor < self.state.input_buffer.len() {
-                    // Move to next char boundary
                     self.state.input_cursor = self.state.input_buffer[self.state.input_cursor..]
                         .char_indices()
                         .nth(1)
@@ -3063,45 +3264,6 @@ impl App {
             }
             KeyCode::End => {
                 self.state.input_cursor = self.state.input_buffer.len();
-            }
-            // Scroll chat while typing: PageUp/PageDown, Ctrl+Up/Down
-            KeyCode::PageUp => {
-                if let Some(chat) = self.state.active_chat_mut() {
-                    if chat.auto_scroll {
-                        chat.scroll = chat.max_scroll.get();
-                        chat.auto_scroll = false;
-                    }
-                    chat.scroll = chat.scroll.saturating_sub(10);
-                }
-            }
-            KeyCode::PageDown => {
-                if let Some(chat) = self.state.active_chat_mut() {
-                    if !chat.auto_scroll {
-                        chat.scroll = chat.scroll.saturating_add(10);
-                        if chat.scroll >= chat.max_scroll.get() {
-                            chat.auto_scroll = true;
-                        }
-                    }
-                }
-            }
-            KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(chat) = self.state.active_chat_mut() {
-                    if chat.auto_scroll {
-                        chat.scroll = chat.max_scroll.get();
-                        chat.auto_scroll = false;
-                    }
-                    chat.scroll = chat.scroll.saturating_sub(3);
-                }
-            }
-            KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(chat) = self.state.active_chat_mut() {
-                    if !chat.auto_scroll {
-                        chat.scroll = chat.scroll.saturating_add(3);
-                        if chat.scroll >= chat.max_scroll.get() {
-                            chat.auto_scroll = true;
-                        }
-                    }
-                }
             }
             _ => {}
         }
@@ -3328,130 +3490,106 @@ impl App {
             self.prev_menu_index = self.state.menu_index;
         }
 
-        let floating_bar = self.state.tui_config.floating_bar;
         let full_area = frame.area();
+        let chain_height =
+            super::components::card_chain::card_chain_height(&self.state.card_chain);
 
-        // Compute layout areas depending on floating bar mode
-        let (cards_area, detail_area, status_area, bar_area);
+        // New layout: card chain strip (top) + main area (fill) + status (1 row)
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(chain_height),
+                Constraint::Fill(1),
+                Constraint::Length(1),
+            ])
+            .split(full_area);
 
-        if floating_bar {
-            // Floating: content fills full height, bar overlays top rows
-            let rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Fill(1), Constraint::Length(1)])
-                .split(full_area);
+        let chain_area = rows[0];
+        let main_area = rows[1];
+        let status_area = rows[2];
 
-            // Detail area starts at row 0 (content scrolls behind the bar)
-            detail_area = rows[0];
-            status_area = rows[1];
+        // Render card chain navigation strip
+        render_card_chain(frame, chain_area, &self.state, &self.effect_state);
 
-            // Bar overlay occupies the top 5 rows
-            let bar_height = 5u16.min(full_area.height.saturating_sub(1));
-            bar_area = Rect {
-                x: full_area.x,
-                y: full_area.y,
-                width: full_area.width,
-                height: bar_height,
-            };
+        // Main content area: butler chat fills main area; page detail when navigated
+        let active_section = self.state.card_chain.active_section();
+        let show_butler_chat = active_section == Some(MenuItem::Dashboard)
+            || active_section.is_none();
 
-            let top = Layout::default()
-                .direction(Direction::Horizontal)
-                .spacing(1)
-                .constraints([Constraint::Length(22), Constraint::Fill(1)])
-                .split(bar_area);
-
-            // Render page content first (behind the bar)
-            cards_area = top[1];
-
-            // Clear the bar area so content doesn't show through
-            frame.render_widget(ratatui::widgets::Clear, bar_area);
-
-            // Render sidebar + cards into the bar overlay
-            render_sidebar(frame, top[0], &self.state, &self.effect_state);
+        let detail_area = if show_butler_chat {
+            // Butler/Dashboard only — chat fills the whole main area
+            render_butler_main(frame, main_area, &self.state, &self.effect_state);
+            main_area
         } else {
-            // Fixed: classic 3-row split
-            let rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(5),
-                    Constraint::Fill(1),
-                    Constraint::Length(1),
-                ])
-                .split(full_area);
-
-            let top = Layout::default()
-                .direction(Direction::Horizontal)
-                .spacing(1)
-                .constraints([Constraint::Length(22), Constraint::Fill(1)])
-                .split(rows[0]);
-
-            render_sidebar(frame, top[0], &self.state, &self.effect_state);
-            cards_area = top[1];
-
-            // Render a top border on the main content pane for visual separation
+            // Non-butler page: render the page detail in the full main area
             let border_block = Block::default()
                 .borders(Borders::TOP)
                 .border_style(Style::default().fg(Color::DarkGray));
-            detail_area = border_block.inner(rows[1]);
-            frame.render_widget(border_block, rows[1]);
+            let inner = border_block.inner(main_area);
+            frame.render_widget(border_block, main_area);
 
-            status_area = rows[2];
-            bar_area = rows[0]; // unused in fixed mode
-        }
+            // Split into page cards + page content
+            let page_split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(5), Constraint::Fill(1)])
+                .split(inner);
+            let cards_area = page_split[0];
+            let page_detail = page_split[1];
 
-        // Content: page cards in top strip, detail in main area
-        match self.state.menu_item {
-            MenuItem::Dashboard => render_dashboard(
-                frame,
-                cards_area,
-                detail_area,
-                &self.state,
-                &self.effect_state,
-            ),
-            MenuItem::Credentials => render_credentials(
-                frame,
-                cards_area,
-                detail_area,
-                &self.state,
-                self.state.credentials_tab,
-                &self.effect_state,
-            ),
-            MenuItem::Agents => render_agents(
-                frame,
-                cards_area,
-                detail_area,
-                &self.state,
-                &self.effect_state,
-            ),
-            MenuItem::Sessions => render_sessions(
-                frame,
-                cards_area,
-                detail_area,
-                &self.state,
-                &self.effect_state,
-            ),
-            MenuItem::CronJobs => render_cron_jobs(
-                frame,
-                cards_area,
-                detail_area,
-                &self.state,
-                &self.effect_state,
-            ),
-            MenuItem::Models => render_models(
-                frame,
-                cards_area,
-                detail_area,
-                &self.state,
-                &self.effect_state,
-            ),
-            MenuItem::Settings => render_settings(
-                frame,
-                cards_area,
-                detail_area,
-                &self.state,
-                &self.effect_state,
-            ),
-        }
+            match active_section.unwrap_or(MenuItem::Dashboard) {
+                MenuItem::Dashboard => render_dashboard(
+                    frame,
+                    cards_area,
+                    page_detail,
+                    &self.state,
+                    &self.effect_state,
+                ),
+                MenuItem::Credentials => render_credentials(
+                    frame,
+                    cards_area,
+                    page_detail,
+                    &self.state,
+                    self.state.credentials_tab,
+                    &self.effect_state,
+                ),
+                MenuItem::Agents => render_agents(
+                    frame,
+                    cards_area,
+                    page_detail,
+                    &self.state,
+                    &self.effect_state,
+                ),
+                MenuItem::Sessions => render_sessions(
+                    frame,
+                    cards_area,
+                    page_detail,
+                    &self.state,
+                    &self.effect_state,
+                ),
+                MenuItem::CronJobs => render_cron_jobs(
+                    frame,
+                    cards_area,
+                    page_detail,
+                    &self.state,
+                    &self.effect_state,
+                ),
+                MenuItem::Models => render_models(
+                    frame,
+                    cards_area,
+                    page_detail,
+                    &self.state,
+                    &self.effect_state,
+                ),
+                MenuItem::Settings => render_settings(
+                    frame,
+                    cards_area,
+                    page_detail,
+                    &self.state,
+                    &self.effect_state,
+                ),
+            }
+            inner
+        };
 
         // Apply page transition effect
         let elapsed = self.last_frame.elapsed();
@@ -5455,3 +5593,54 @@ async fn create_session_via_gateway(
         Err(anyhow::anyhow!("Gateway error: {err_text}"))
     }
 }
+
+/// Render the butler chat as the main view area.
+///
+/// Shows butler conversation messages or a welcome screen if no messages yet.
+fn render_butler_main(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    _effect_state: &EffectState,
+) {
+    let chat = &state.butler_chat;
+
+    if chat.messages.is_empty() && !chat.loading {
+        // Welcome screen
+        let lines = vec![
+            Line::from(""),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Butler",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Your RockBot companion. Sassy. Helpful. Queer.",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Navigate with the card strip above, or type a message below.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        let welcome = Paragraph::new(lines).alignment(Alignment::Center);
+        frame.render_widget(welcome, area);
+        return;
+    }
+
+    // Render butler chat messages using the shared chat renderer
+    super::components::render_chat_messages(
+        frame,
+        area,
+        state,
+        &chat.messages,
+        chat.loading,
+        chat.scroll,
+        chat.auto_scroll,
+    );
+}
+
