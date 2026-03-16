@@ -26,11 +26,11 @@ exposed to the agent.
 - **Multi-channel** — Discord, Telegram, Signal
 - **Encrypted credential vault** — AES-256-GCM with Argon2id key derivation
 - **Human-in-the-loop approval** — sensitive operations require consent
-- **TLS by default** — self-signed cert generated on first run
+- **mTLS by default** — built-in PKI with CA, client certs, and enrollment
 - **Terminal UI + Web dashboard** — manage everything from either interface
 - **Multi-agent orchestration** — handoffs, swarm blackboards, graph workflows
 - **Remote tool execution** — Noise Protocol encrypted dispatch to clients
-- **Modular crate architecture** — 19 focused crates, compile only what you need
+- **Modular crate architecture** — 20 focused crates, compile only what you need
 
 ## Quick Start
 
@@ -59,6 +59,7 @@ rockbot tui -g 192.168.1.10:18080
 | [TUI Guide](docs/user-guide/tui-guide.md) | Navigating the terminal interface |
 | [Architecture](docs/architecture/overview.md) | System design and data flow |
 | [Crate Structure](docs/architecture/crates.md) | Workspace layout and dependency graph |
+| [PKI and mTLS](docs/architecture/pki.md) | Certificate authority, mutual TLS, enrollment |
 | [Security Model](docs/architecture/security.md) | Credential flow, capabilities, trust boundaries |
 | [API Reference](docs/api.md) | HTTP/WebSocket endpoints |
 | [Feature Matrix](docs/FEATURES.md) | Full implementation status |
