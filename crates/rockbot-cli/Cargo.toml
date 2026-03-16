@@ -22,8 +22,12 @@ tools-mcp = ["rockbot-core/tools-mcp"]
 tools-markdown = ["rockbot-core/tools-markdown"]
 # Embedded overseer
 overseer = ["rockbot-core/overseer"]
+# Embedded doctor AI for config diagnostics
+doctor-ai = ["dep:rockbot-doctor"]
 # Remote tool execution
 remote-exec = ["rockbot-core/remote-exec", "rockbot-client/remote-exec"]
+# S3 CA distribution + Route53 DNS
+bedrock-deploy = ["dep:rockbot-deploy", "rockbot-deploy/bedrock", "rockbot-core/bedrock-deploy"]
 # Allow plain-text HTTP/WS connections
 http-insecure = ["rockbot-core/http-insecure", "rockbot-client/http-insecure"]
 
@@ -40,6 +44,8 @@ rockbot-credentials = { path = "../rockbot-credentials" }
 rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
 rockbot-llm = { path = "../rockbot-llm", default-features = false }
 rockbot-pki = { path = "../rockbot-pki" }
+rockbot-doctor = { path = "../rockbot-doctor", optional = true }
+rockbot-deploy = { path = "../rockbot-deploy", optional = true }
 
 uuid = { workspace = true }
 chrono = { workspace = true }
@@ -68,7 +74,7 @@ atty = "0.2"
 # TUI
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 crossterm = "0.28"
-tachyonfx = "0.7"
+tachyonfx = { version = "0.10", features = ["std-duration"] }
 
 # WebSocket
 tokio-tungstenite = { workspace = true }

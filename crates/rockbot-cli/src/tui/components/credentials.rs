@@ -5,10 +5,13 @@
 //! a list item opens a read-only view modal.
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{
+        Block, BorderType, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
     Frame,
 };
 
@@ -67,10 +70,11 @@ fn render_tab_cards(
         .iter()
         .map(|_| Constraint::Length(CARD_WIDTH))
         .collect();
-    constraints.push(Constraint::Min(0));
+    constraints.push(Constraint::Fill(1));
 
     let card_chunks = Layout::default()
         .direction(Direction::Horizontal)
+        .flex(Flex::Start)
         .constraints(constraints)
         .split(area);
 
@@ -87,8 +91,8 @@ fn render_tab_cards(
             Style::default().fg(palette::INACTIVE_BORDER)
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(border_style);
 
         let inner = block.inner(card_chunks[idx]);
@@ -269,6 +273,17 @@ fn render_endpoints_list(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 
     frame.render_stateful_widget(list, body, &mut list_state);
+
+    // Scrollbar for endpoint list
+    if state.endpoints.len() > body.height as usize {
+        let mut sb_state =
+            ScrollbarState::new(state.endpoints.len()).position(state.selected_endpoint);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight),
+            body,
+            &mut sb_state,
+        );
+    }
 }
 
 /// Render the Providers tab as a selectable vertical list

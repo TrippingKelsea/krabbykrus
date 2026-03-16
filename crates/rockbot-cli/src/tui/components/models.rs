@@ -3,10 +3,10 @@
 //! Shows LLM provider configuration status dynamically loaded from the gateway.
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Paragraph, Wrap},
     Frame,
 };
 
@@ -91,10 +91,11 @@ fn render_provider_cards(
     let mut constraints: Vec<Constraint> = (0..visible_count)
         .map(|_| Constraint::Length(CARD_WIDTH))
         .collect();
-    constraints.push(Constraint::Min(0));
+    constraints.push(Constraint::Fill(1));
 
     let card_chunks = Layout::default()
         .direction(Direction::Horizontal)
+        .flex(Flex::Start)
         .constraints(constraints)
         .split(area);
 
@@ -110,8 +111,8 @@ fn render_provider_cards(
             Style::default().fg(palette::INACTIVE_BORDER)
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(border_style);
 
         let inner = block.inner(card_chunks[vi]);

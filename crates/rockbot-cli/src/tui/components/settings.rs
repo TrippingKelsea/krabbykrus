@@ -1,10 +1,10 @@
 //! Settings component - horizontal card strip + detail panel
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Paragraph, Wrap},
     Frame,
 };
 
@@ -37,10 +37,11 @@ fn render_settings_cards(
         .iter()
         .map(|_| Constraint::Length(CARD_WIDTH))
         .collect();
-    constraints.push(Constraint::Min(0));
+    constraints.push(Constraint::Fill(1));
 
     let card_chunks = Layout::default()
         .direction(Direction::Horizontal)
+        .flex(Flex::Start)
         .constraints(constraints)
         .split(area);
 
@@ -55,8 +56,8 @@ fn render_settings_cards(
             Style::default().fg(palette::INACTIVE_BORDER)
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(border_style);
 
         let inner = block.inner(card_chunks[idx]);

@@ -1,10 +1,13 @@
 //! Sessions component - horizontal card strip + full-width chat
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{
+        Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Wrap,
+    },
     Frame,
 };
 
@@ -100,8 +103,8 @@ fn render_session_cards(
     effect_state: &EffectState,
 ) {
     if state.sessions_loading {
-        let block = Block::default()
-            .borders(Borders::ALL)
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(effects::inactive_border_style())
             .title("Sessions");
         let inner = block.inner(area);
@@ -111,8 +114,8 @@ fn render_session_cards(
     }
 
     if state.sessions.is_empty() {
-        let block = Block::default()
-            .borders(Borders::ALL)
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(effects::inactive_border_style())
             .title("Sessions");
         let hint = Paragraph::new(Line::from(Span::styled(
@@ -146,10 +149,11 @@ fn render_session_cards(
     let mut constraints: Vec<Constraint> = (0..visible_count)
         .map(|_| Constraint::Length(CARD_WIDTH))
         .collect();
-    constraints.push(Constraint::Min(0)); // fill remaining space
+    constraints.push(Constraint::Fill(1));
 
     let card_chunks = Layout::default()
         .direction(Direction::Horizontal)
+        .flex(Flex::Start)
         .constraints(constraints)
         .split(area);
 
@@ -183,8 +187,8 @@ fn render_session_card(
         Style::default().fg(palette::INACTIVE_BORDER)
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(border_style);
 
     let inner = block.inner(area);
@@ -308,7 +312,7 @@ fn render_chat_area(frame: &mut Frame, area: Rect, state: &AppState, _effect_sta
     // Split into messages area + input bar
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(input_height)])
+        .constraints([Constraint::Fill(1), Constraint::Length(input_height)])
         .split(area);
 
     if !messages.is_empty() || chat_loading {
@@ -539,6 +543,22 @@ fn render_chat_messages(
         .scroll((effective_scroll as u16, 0));
 
     frame.render_widget(paragraph, inner);
+
+    // Vertical scrollbar
+    if total_visual_lines > view_height {
+        let sb_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: area.height,
+        };
+        let mut sb_state = ScrollbarState::new(max_scroll).position(effective_scroll);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight),
+            sb_area,
+            &mut sb_state,
+        );
+    }
 }
 
 fn render_chat_input(frame: &mut Frame, area: Rect, state: &AppState, is_active: bool) {
@@ -554,8 +574,8 @@ fn render_chat_input(frame: &mut Frame, area: Rect, state: &AppState, is_active:
         "Press 'c' to chat │ 'd' to archive"
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(border_style)
         .title(title);
 

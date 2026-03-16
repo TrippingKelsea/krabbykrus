@@ -610,7 +610,7 @@ impl CredentialsTui {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // Tabs
-                Constraint::Min(0),    // Content
+                Constraint::Fill(1),   // Content
                 Constraint::Length(3), // Status/Help
             ])
             .split(area);

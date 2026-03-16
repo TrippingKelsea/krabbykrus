@@ -1,10 +1,10 @@
 //! Cron jobs component - card strip + job list/detail
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Row, Table, Wrap},
+    widgets::{Block, BorderType, Paragraph, Row, Table, Wrap},
     Frame,
 };
 
@@ -33,10 +33,11 @@ fn render_cron_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_sta
         .iter()
         .map(|_| Constraint::Length(CARD_WIDTH))
         .collect();
-    constraints.push(Constraint::Min(0));
+    constraints.push(Constraint::Fill(1));
 
     let card_chunks = Layout::default()
         .direction(Direction::Horizontal)
+        .flex(Flex::Start)
         .constraints(constraints)
         .split(area);
 
@@ -55,8 +56,8 @@ fn render_cron_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_sta
             Style::default().fg(palette::INACTIVE_BORDER)
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(border_style);
 
         let inner = block.inner(card_chunks[idx]);
@@ -220,7 +221,7 @@ fn render_cron_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     let detail_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(0),
+            Constraint::Fill(1),
             Constraint::Length(footer_lines.len() as u16 + 1),
         ])
         .split(body);

@@ -632,6 +632,9 @@ pub struct AppState {
     /// Cursor byte position within input_buffer
     pub input_cursor: usize,
 
+    // TUI display preferences
+    pub tui_config: rockbot_core::TuiConfig,
+
     // Message sender for async updates
     pub tx: mpsc::UnboundedSender<Message>,
 }
@@ -685,6 +688,8 @@ pub enum InputMode {
     ViewContextFiles(ViewContextFilesState),
     /// Edit a context file (fullscreen markdown editor)
     EditContextFile(EditContextFileState),
+    /// Context menu (page-specific actions, opened with '?')
+    ContextMenu(ContextMenuState),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1561,6 +1566,121 @@ impl EditContextFileState {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Context menu types
+// ---------------------------------------------------------------------------
+
+/// A single item in the context menu
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextMenuItem {
+    pub label: String,
+    pub key: char,
+    pub action: ContextMenuAction,
+}
+
+/// Actions the context menu can dispatch
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextMenuAction {
+    OpenAddAgent,
+    OpenEditAgent,
+    DeleteAgent,
+    OpenAddCredential,
+    OpenCreateSession,
+    OpenContextFiles,
+    TriggerCronJob,
+    RefreshPage,
+}
+
+/// State for the context menu overlay
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextMenuState {
+    pub items: Vec<ContextMenuItem>,
+    pub selected: usize,
+    pub position: (u16, u16),
+}
+
+impl AppState {
+    /// Build a context menu with page-specific items
+    pub fn build_context_menu(&self) -> ContextMenuState {
+        let items = match self.menu_item {
+            MenuItem::Agents => vec![
+                ContextMenuItem {
+                    label: "Add Agent".to_string(),
+                    key: 'a',
+                    action: ContextMenuAction::OpenAddAgent,
+                },
+                ContextMenuItem {
+                    label: "Edit Agent".to_string(),
+                    key: 'e',
+                    action: ContextMenuAction::OpenEditAgent,
+                },
+                ContextMenuItem {
+                    label: "Delete Agent".to_string(),
+                    key: 'd',
+                    action: ContextMenuAction::DeleteAgent,
+                },
+                ContextMenuItem {
+                    label: "Context Files".to_string(),
+                    key: 'f',
+                    action: ContextMenuAction::OpenContextFiles,
+                },
+                ContextMenuItem {
+                    label: "Refresh".to_string(),
+                    key: 'r',
+                    action: ContextMenuAction::RefreshPage,
+                },
+            ],
+            MenuItem::Credentials => vec![
+                ContextMenuItem {
+                    label: "Add Credential".to_string(),
+                    key: 'a',
+                    action: ContextMenuAction::OpenAddCredential,
+                },
+                ContextMenuItem {
+                    label: "Refresh".to_string(),
+                    key: 'r',
+                    action: ContextMenuAction::RefreshPage,
+                },
+            ],
+            MenuItem::Sessions => vec![
+                ContextMenuItem {
+                    label: "New Session".to_string(),
+                    key: 'n',
+                    action: ContextMenuAction::OpenCreateSession,
+                },
+                ContextMenuItem {
+                    label: "Refresh".to_string(),
+                    key: 'r',
+                    action: ContextMenuAction::RefreshPage,
+                },
+            ],
+            MenuItem::CronJobs => vec![
+                ContextMenuItem {
+                    label: "Trigger Job".to_string(),
+                    key: 't',
+                    action: ContextMenuAction::TriggerCronJob,
+                },
+                ContextMenuItem {
+                    label: "Refresh".to_string(),
+                    key: 'r',
+                    action: ContextMenuAction::RefreshPage,
+                },
+            ],
+            _ => vec![ContextMenuItem {
+                label: "Refresh".to_string(),
+                key: 'r',
+                action: ContextMenuAction::RefreshPage,
+            }],
+        };
+
+        ContextMenuState {
+            items,
+            selected: 0,
+            position: (2, 6), // below the top bar
+        }
+    }
+}
+
 /// Session creation mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionMode {
@@ -2316,6 +2436,8 @@ impl AppState {
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
             input_cursor: 0,
+
+            tui_config: rockbot_core::TuiConfig::default(),
 
             tx,
         }

@@ -35,6 +35,37 @@ pub struct Config {
     /// Stored as raw Value so the config always deserializes even without the feature.
     #[serde(default)]
     pub overseer: Option<serde_json::Value>,
+    /// Doctor AI configuration (requires `doctor-ai` feature).
+    /// Stored as raw Value so the config always deserializes even without the feature.
+    #[serde(default)]
+    pub doctor: Option<serde_json::Value>,
+    /// Deploy configuration (requires `bedrock-deploy` feature).
+    /// Stored as raw Value so the config always deserializes even without the feature.
+    #[serde(default)]
+    pub deploy: Option<serde_json::Value>,
+    /// TUI display preferences
+    #[serde(default)]
+    pub tui: TuiConfig,
+}
+
+/// TUI display preferences
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TuiConfig {
+    /// Show the top navigation bar as a floating overlay (default: true)
+    #[serde(default = "default_true")]
+    pub floating_bar: bool,
+    /// Enable animated transitions and effects (default: true)
+    #[serde(default = "default_true")]
+    pub animations: bool,
+}
+
+impl Default for TuiConfig {
+    fn default() -> Self {
+        Self {
+            floating_bar: true,
+            animations: true,
+        }
+    }
 }
 
 /// PKI and TLS configuration shared across gateway, client, and agent consumers.
@@ -879,6 +910,9 @@ mod tests {
             credentials: CredentialsConfig::default(),
             providers: ProvidersConfig::default(),
             overseer: None,
+            doctor: None,
+            deploy: None,
+            tui: TuiConfig::default(),
         };
 
         assert!(config.validate().is_ok());

@@ -4,7 +4,10 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{
+        Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
     Frame,
 };
 
@@ -50,8 +53,8 @@ pub fn render_password_modal(
     let modal_area = centered_rect(50, 20, area);
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title("Vault");
 
@@ -79,7 +82,7 @@ pub fn render_password_modal(
 
     let input_para = Paragraph::new(format!("{display_value}█"))
         .style(Style::default().fg(Color::Yellow))
-        .block(Block::default().borders(Borders::ALL));
+        .block(Block::bordered().border_type(BorderType::Rounded));
     frame.render_widget(input_para, chunks[1]);
 
     let help = Paragraph::new("Enter to submit, Esc to cancel")
@@ -92,8 +95,8 @@ pub fn render_confirm_modal(frame: &mut Frame, area: Rect, message: &str) {
     let modal_area = centered_rect(40, 15, area);
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Yellow))
         .title("Confirm");
 
@@ -131,8 +134,8 @@ pub fn render_add_credential_modal(frame: &mut Frame, area: Rect, state: &AddCre
 
     let title_type_name = get_endpoint_type_name(state.endpoint_type);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title(format!("Add {title_type_name} Endpoint"));
 
@@ -148,7 +151,7 @@ pub fn render_add_credential_modal(frame: &mut Frame, area: Rect, state: &AddCre
         constraints.push(Constraint::Length(3));
     }
     constraints.push(Constraint::Length(2)); // Help
-    constraints.push(Constraint::Min(0)); // Spacer
+    constraints.push(Constraint::Fill(1)); // Spacer
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -278,8 +281,8 @@ fn render_input_field(
     ]);
 
     let paragraph = Paragraph::new(text).block(
-        Block::default()
-            .borders(Borders::ALL)
+        Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(border_style),
     );
 
@@ -303,8 +306,8 @@ pub fn render_edit_credential_modal(frame: &mut Frame, area: Rect, state: &EditC
 
     let title_type_name = get_endpoint_type_name(state.endpoint_type);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Green))
         .title(format!("Edit {title_type_name} Endpoint"));
 
@@ -319,7 +322,7 @@ pub fn render_edit_credential_modal(frame: &mut Frame, area: Rect, state: &EditC
         constraints.push(Constraint::Length(3));
     }
     constraints.push(Constraint::Length(2)); // Help
-    constraints.push(Constraint::Min(0)); // Spacer
+    constraints.push(Constraint::Fill(1)); // Spacer
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -394,8 +397,8 @@ pub fn render_view_session_modal(
     let modal_area = centered_rect(60, 50, area);
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title(format!("Session: {session_key}"));
 
@@ -465,7 +468,7 @@ pub fn render_view_session_modal(
     let inner_margin = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints([Constraint::Min(0)])
+        .constraints([Constraint::Fill(1)])
         .split(inner);
 
     frame.render_widget(paragraph, inner_margin[0]);
@@ -482,8 +485,8 @@ pub fn render_edit_provider_modal(frame: &mut Frame, area: Rect, state: &EditPro
     let modal_area = centered_rect(65, modal_percent, area);
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title(format!(" Configure {} ", state.provider_name));
 
@@ -667,7 +670,7 @@ pub fn render_edit_provider_modal(frame: &mut Frame, area: Rect, state: &EditPro
     let inner_margin = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints([Constraint::Min(0)])
+        .constraints([Constraint::Fill(1)])
         .split(inner);
 
     frame.render_widget(paragraph, inner_margin[0]);
@@ -711,8 +714,8 @@ pub fn render_edit_agent_modal(
         "Create Agent".to_string()
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title(title);
 
@@ -729,7 +732,7 @@ pub fn render_edit_agent_modal(
         Constraint::Length(3),             // Max Tokens
         Constraint::Length(prompt_height), // System Prompt (grows up to 12)
         Constraint::Length(2),             // Help/subagent info
-        Constraint::Min(0),                // Spacer
+        Constraint::Fill(1),               // Spacer
     ];
 
     let chunks = Layout::default()
@@ -788,8 +791,8 @@ pub fn render_edit_agent_modal(
         } else {
             Style::default().fg(Color::DarkGray)
         };
-        let block = Block::default()
-            .borders(Borders::ALL)
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(border_style)
             .title("Model");
         let text_style = if is_active {
@@ -889,8 +892,8 @@ pub fn render_edit_agent_modal(
             Style::default().fg(Color::DarkGray)
         };
         let label = "System Prompt";
-        let prompt_block = Block::default()
-            .borders(Borders::ALL)
+        let prompt_block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(border_style)
             .title(Span::styled(
                 label,
@@ -949,8 +952,8 @@ pub fn render_create_session_modal(frame: &mut Frame, area: Rect, state: &Create
     let modal_area = centered_rect(55, 40, area);
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title("Create Session");
 
@@ -964,7 +967,7 @@ pub fn render_create_session_modal(frame: &mut Frame, area: Rect, state: &Create
             Constraint::Length(3), // Mode selector
             Constraint::Length(4), // Model/Agent picker
             Constraint::Length(2), // Help text
-            Constraint::Min(0),    // Spacer
+            Constraint::Fill(1),   // Spacer
         ])
         .split(inner);
 
@@ -979,8 +982,8 @@ pub fn render_create_session_modal(frame: &mut Frame, area: Rect, state: &Create
         SessionMode::AdHoc => "◀ Ad-Hoc (no agent) ▶",
         SessionMode::AgentBound => "◀ Agent-Bound ▶",
     };
-    let mode_block = Block::default()
-        .borders(Borders::ALL)
+    let mode_block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(mode_border)
         .title("Session Type");
     let mode_style = if mode_active {
@@ -1006,8 +1009,8 @@ pub fn render_create_session_modal(frame: &mut Frame, area: Rect, state: &Create
 
     match state.mode {
         SessionMode::AdHoc => {
-            let block = Block::default()
-                .borders(Borders::ALL)
+            let block = Block::bordered()
+                .border_type(BorderType::Rounded)
                 .border_style(picker_border)
                 .title("Model");
 
@@ -1036,8 +1039,8 @@ pub fn render_create_session_modal(frame: &mut Frame, area: Rect, state: &Create
             frame.render_widget(para, chunks[1]);
         }
         SessionMode::AgentBound => {
-            let block = Block::default()
-                .borders(Borders::ALL)
+            let block = Block::bordered()
+                .border_type(BorderType::Rounded)
                 .border_style(picker_border)
                 .title("Agent");
 
@@ -1086,8 +1089,8 @@ pub fn render_view_endpoint_modal(
     let modal_area = centered_rect(60, 45, area);
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title("Endpoint Details");
 
@@ -1158,7 +1161,7 @@ pub fn render_view_endpoint_modal(
     let inner_margin = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints([Constraint::Min(0)])
+        .constraints([Constraint::Fill(1)])
         .split(inner);
 
     frame.render_widget(paragraph, inner_margin[0]);
@@ -1175,8 +1178,8 @@ pub fn render_view_provider_modal(
     let modal_area = centered_rect(60, 50, area);
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title("Provider Details");
 
@@ -1273,7 +1276,7 @@ pub fn render_view_provider_modal(
     let provider_inner = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints([Constraint::Min(0)])
+        .constraints([Constraint::Fill(1)])
         .split(inner);
 
     frame.render_widget(paragraph, provider_inner[0]);
@@ -1296,8 +1299,8 @@ pub fn render_view_model_list_modal(
         |p| format!("{} — {} models", p.name, p.models.len()),
     );
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title(title);
 
@@ -1408,10 +1411,20 @@ pub fn render_view_model_list_modal(
     let model_list_inner = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints([Constraint::Min(0)])
+        .constraints([Constraint::Fill(1)])
         .split(inner);
 
     frame.render_widget(paragraph, model_list_inner[0]);
+
+    // Scrollbar for model list
+    if provider.models.len() > usable_height / 3 {
+        let mut sb_state = ScrollbarState::new(provider.models.len()).position(scroll);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight),
+            inner,
+            &mut sb_state,
+        );
+    }
 }
 
 /// Render the permission editor modal
@@ -1425,8 +1438,8 @@ pub fn render_edit_permission_modal(frame: &mut Frame, area: Rect, state: &EditP
         "Add Permission".to_string()
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title(title);
 
@@ -1441,7 +1454,7 @@ pub fn render_edit_permission_modal(frame: &mut Frame, area: Rect, state: &EditP
             Constraint::Length(3), // Source selector
             Constraint::Length(3), // Access level selector
             Constraint::Length(2), // Help
-            Constraint::Min(0),    // Spacer
+            Constraint::Fill(1),   // Spacer
         ])
         .split(inner);
 
@@ -1454,8 +1467,8 @@ pub fn render_edit_permission_modal(frame: &mut Frame, area: Rect, state: &EditP
     };
     let ep_label = state.selected_endpoint_name();
     let ep_display = format!("◀ {ep_label} ▶");
-    let ep_block = Block::default()
-        .borders(Borders::ALL)
+    let ep_block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(ep_border)
         .title("Credential");
     let ep_style = if ep_active {
@@ -1491,8 +1504,8 @@ pub fn render_edit_permission_modal(frame: &mut Frame, area: Rect, state: &EditP
         crate::tui::state::PermissionSource::label,
     );
     let source_display = format!("◀ {source_label} ▶");
-    let source_block = Block::default()
-        .borders(Borders::ALL)
+    let source_block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(source_border)
         .title("Source");
     let source_style = if source_active {
@@ -1528,8 +1541,8 @@ pub fn render_edit_permission_modal(frame: &mut Frame, area: Rect, state: &EditP
     };
     let access_color = state.access.color();
     let access_display = format!("◀ {} ▶", state.access.label());
-    let access_block = Block::default()
-        .borders(Borders::ALL)
+    let access_block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(access_border)
         .title("Access Level");
     let access_style = if access_active {
@@ -1566,8 +1579,8 @@ pub fn render_view_permission_modal(
     };
 
     let title = format!("Permission Rule #{}", permission_index + 1);
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title(title);
 

@@ -1,20 +1,36 @@
 //! TUI visual effects using tachyonfx
 //!
 //! This module provides animated effects for the TUI, including:
-//! - Active pane glow/pulse effect
-//! - Transition animations
-//! - Status indicators
+//! - Active pane glow/pulse effect (tachyonfx hsl_shift_fg ping-pong)
+//! - Modal open/close transitions (coalesce/dissolve)
+//! - Page transition fades (fade_from_fg)
+//! - Background dimming for modal overlays
+//! - Static fallbacks when animations are disabled
 
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::Color;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tachyonfx::{fx, Effect, EffectTimer, Interpolation, Shader};
 
-/// Effect state for animated UI elements
-#[derive(Debug, Clone)]
+/// Effect state for animated UI elements.
+///
+/// Holds both the legacy sine-wave pulse (for border colors) and tachyonfx
+/// managed effects for richer transitions. Not `Clone` because `Effect`
+/// wraps a boxed shader.
 pub struct EffectState {
-    /// Start time for animation calculations
+    /// Start time for legacy pulse calculations
     start_time: Instant,
     /// Whether this element is currently active/focused
     pub is_active: bool,
+    /// Whether animations are enabled (from TuiConfig)
+    pub animations_enabled: bool,
+    /// tachyonfx effect: modal open animation
+    modal_open: Option<Effect>,
+    /// tachyonfx effect: modal close animation
+    modal_close: Option<Effect>,
+    /// tachyonfx effect: page transition fade
+    page_transition: Option<Effect>,
 }
 
 impl Default for EffectState {
@@ -22,7 +38,24 @@ impl Default for EffectState {
         Self {
             start_time: Instant::now(),
             is_active: false,
+            animations_enabled: true,
+            modal_open: None,
+            modal_close: None,
+            page_transition: None,
         }
+    }
+}
+
+// Manual Debug since Effect doesn't impl Debug
+impl std::fmt::Debug for EffectState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EffectState")
+            .field("is_active", &self.is_active)
+            .field("animations_enabled", &self.animations_enabled)
+            .field("modal_open", &self.modal_open.is_some())
+            .field("modal_close", &self.modal_close.is_some())
+            .field("page_transition", &self.page_transition.is_some())
+            .finish()
     }
 }
 
@@ -47,6 +80,118 @@ impl EffectState {
             self.reset();
         }
         self.is_active = active;
+    }
+
+    /// Set whether animations are enabled
+    pub fn set_animations_enabled(&mut self, enabled: bool) {
+        self.animations_enabled = enabled;
+    }
+
+    /// Trigger a modal-open animation (coalesce effect)
+    pub fn trigger_modal_open(&mut self) {
+        if !self.animations_enabled {
+            return;
+        }
+        self.modal_open = Some(fx::coalesce(EffectTimer::from_ms(
+            600,
+            Interpolation::CubicOut,
+        )));
+    }
+
+    /// Trigger a modal-close animation (dissolve effect)
+    pub fn trigger_modal_close(&mut self) {
+        if !self.animations_enabled {
+            return;
+        }
+        self.modal_close = Some(fx::dissolve(EffectTimer::from_ms(
+            300,
+            Interpolation::CubicIn,
+        )));
+    }
+
+    /// Trigger a page transition animation (fade from white)
+    pub fn trigger_page_transition(&mut self) {
+        if !self.animations_enabled {
+            return;
+        }
+        self.page_transition = Some(fx::fade_from_fg(
+            Color::White,
+            EffectTimer::from_ms(250, Interpolation::CubicOut),
+        ));
+    }
+
+    /// Process and render the modal-open effect on the given area.
+    /// Returns true if an animation is still running.
+    pub fn render_modal_open(&mut self, buf: &mut Buffer, area: Rect, elapsed: Duration) -> bool {
+        if let Some(ref mut effect) = self.modal_open {
+            let overflow = effect.process(elapsed, buf, area);
+            if overflow.is_some() {
+                self.modal_open = None;
+                return false;
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Process and render the modal-close effect on the given area.
+    /// Returns true if an animation is still running.
+    pub fn render_modal_close(&mut self, buf: &mut Buffer, area: Rect, elapsed: Duration) -> bool {
+        if let Some(ref mut effect) = self.modal_close {
+            let overflow = effect.process(elapsed, buf, area);
+            if overflow.is_some() {
+                self.modal_close = None;
+                return false;
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Process and render the page transition effect on the given area.
+    /// Returns true if an animation is still running.
+    pub fn render_page_transition(
+        &mut self,
+        buf: &mut Buffer,
+        area: Rect,
+        elapsed: Duration,
+    ) -> bool {
+        if let Some(ref mut effect) = self.page_transition {
+            let overflow = effect.process(elapsed, buf, area);
+            if overflow.is_some() {
+                self.page_transition = None;
+                return false;
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Dim the background buffer by reducing RGB values (~40% darker).
+    /// Used as a backdrop behind modals.
+    pub fn dim_background(buf: &mut Buffer, area: Rect) {
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    // Dim foreground
+                    if let Color::Rgb(r, g, b) = cell.fg {
+                        cell.set_fg(Color::Rgb(
+                            (r as u16 * 60 / 100) as u8,
+                            (g as u16 * 60 / 100) as u8,
+                            (b as u16 * 60 / 100) as u8,
+                        ));
+                    }
+                    // Dim background
+                    if let Color::Rgb(r, g, b) = cell.bg {
+                        cell.set_bg(Color::Rgb(
+                            (r as u16 * 60 / 100) as u8,
+                            (g as u16 * 60 / 100) as u8,
+                            (b as u16 * 60 / 100) as u8,
+                        ));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -170,8 +315,46 @@ mod tests {
     fn test_active_border_color() {
         let color = active_border_color(0.0);
         match color {
-            Color::Rgb(r, g, b) => {
+            Color::Rgb(r, _g, _b) => {
                 assert!(r > 100); // Should be in purple range
+            }
+            _ => panic!("Expected RGB color"),
+        }
+    }
+
+    #[test]
+    fn test_effect_state_animations_disabled() {
+        let mut state = EffectState::new();
+        state.set_animations_enabled(false);
+        state.trigger_modal_open();
+        assert!(state.modal_open.is_none());
+        state.trigger_page_transition();
+        assert!(state.page_transition.is_none());
+    }
+
+    #[test]
+    fn test_effect_state_animations_enabled() {
+        let mut state = EffectState::new();
+        state.trigger_modal_open();
+        assert!(state.modal_open.is_some());
+        state.trigger_page_transition();
+        assert!(state.page_transition.is_some());
+    }
+
+    #[test]
+    fn test_dim_background() {
+        let area = Rect::new(0, 0, 2, 2);
+        let mut buf = Buffer::empty(area);
+        // Set a known RGB color
+        buf.cell_mut((0, 0))
+            .unwrap()
+            .set_fg(Color::Rgb(100, 200, 50));
+        EffectState::dim_background(&mut buf, area);
+        match buf.cell((0, 0)).unwrap().fg {
+            Color::Rgb(r, g, b) => {
+                assert_eq!(r, 60); // 100 * 60/100
+                assert_eq!(g, 120); // 200 * 60/100
+                assert_eq!(b, 30); // 50 * 60/100
             }
             _ => panic!("Expected RGB color"),
         }

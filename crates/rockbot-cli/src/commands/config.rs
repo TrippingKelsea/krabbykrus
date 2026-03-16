@@ -151,5 +151,8 @@ fn create_default_config() -> Config {
         credentials: CredentialsConfig::default(),
         providers: rockbot_core::ProvidersConfig::default(),
         overseer: None,
+        doctor: None,
+        deploy: None,
+        tui: rockbot_core::TuiConfig::default(),
     }
 }

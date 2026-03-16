@@ -4,6 +4,7 @@
 //! Components are stateless renderers that read from AppState.
 
 pub mod agents;
+pub mod context_menu;
 pub mod credentials;
 pub mod cron;
 pub mod dashboard;
@@ -33,7 +34,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Paragraph, Wrap},
     Frame,
 };
 
@@ -52,8 +53,8 @@ pub fn render_spinner(frame: &mut Frame, area: Rect, message: &str, tick: usize)
 
 /// Render an error message block
 pub fn render_error(frame: &mut Frame, area: Rect, error: &str) {
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Red))
         .title(Span::styled("Error", Style::default().fg(Color::Red)));
 
@@ -120,7 +121,7 @@ pub fn key_hint(key: &str, action: &str) -> String {
 pub fn render_detail_header(frame: &mut Frame, area: Rect, title: &str) -> Rect {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([Constraint::Length(1), Constraint::Fill(1)])
         .split(area);
 
     let header = Paragraph::new(Line::from(vec![Span::styled(

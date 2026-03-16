@@ -1,10 +1,10 @@
 //! Agents management component - horizontal card strip + detail panel
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Paragraph, Wrap},
     Frame,
 };
 
@@ -29,8 +29,8 @@ pub fn render_agents(
 
 fn render_agent_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
     if state.agents_loading {
-        let block = Block::default()
-            .borders(Borders::ALL)
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(effects::inactive_border_style())
             .title("Agents");
         let inner = block.inner(area);
@@ -40,8 +40,8 @@ fn render_agent_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_st
     }
 
     if state.agents.is_empty() {
-        let block = Block::default()
-            .borders(Borders::ALL)
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(effects::inactive_border_style())
             .title("Agents");
         let hint = Paragraph::new(Line::from(Span::styled(
@@ -72,10 +72,11 @@ fn render_agent_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_st
     let mut constraints: Vec<Constraint> = (0..visible_count)
         .map(|_| Constraint::Length(CARD_WIDTH))
         .collect();
-    constraints.push(Constraint::Min(0));
+    constraints.push(Constraint::Fill(1));
 
     let card_chunks = Layout::default()
         .direction(Direction::Horizontal)
+        .flex(Flex::Start)
         .constraints(constraints)
         .split(area);
 
@@ -91,8 +92,8 @@ fn render_agent_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_st
             Style::default().fg(palette::INACTIVE_BORDER)
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .border_style(border_style);
 
         let inner = block.inner(card_chunks[vi]);

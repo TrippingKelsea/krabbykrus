@@ -5,13 +5,13 @@
 use anyhow::Result;
 use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     widgets::{Block, Borders},
     Frame,
 };
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use super::components::{
@@ -25,9 +25,10 @@ use super::components::{
 };
 use super::effects::EffectState;
 use super::state::{
-    AddCredentialState, AppState, ChatMessage, ConfirmAction, ContextFileInfo, CreateSessionState,
-    EditAgentState, EditCredentialState, EditProviderState, EndpointInfo, InputMode, MenuItem,
-    Message, PasswordAction, SessionMode, ToolCallInfo, UnlockMethod, ViewContextFilesState,
+    AddCredentialState, AppState, ChatMessage, ConfirmAction, ContextFileInfo, ContextMenuAction,
+    ContextMenuState, CreateSessionState, EditAgentState, EditCredentialState, EditProviderState,
+    EndpointInfo, InputMode, MenuItem, Message, PasswordAction, SessionMode, ToolCallInfo,
+    UnlockMethod, ViewContextFilesState,
 };
 
 /// Check if Claude Code OAuth credentials are available
@@ -96,6 +97,12 @@ pub struct App {
     rx: mpsc::UnboundedReceiver<Message>,
     /// Effect state for visual animations
     effect_state: EffectState,
+    /// Timestamp of last rendered frame (for per-frame elapsed duration)
+    last_frame: Instant,
+    /// Whether a modal was open on the previous frame (for transition detection)
+    was_modal_open: bool,
+    /// Previous menu_item index (for page transition detection)
+    prev_menu_index: usize,
     /// Current tab within Models view (for future use)
     models_tab: usize,
     /// Unlocked vault handle (None if locked or not initialized)
@@ -118,6 +125,9 @@ impl App {
             state: AppState::new(config_path, vault_path, gateway_url, tx),
             rx,
             effect_state: EffectState::new(),
+            last_frame: Instant::now(),
+            was_modal_open: false,
+            prev_menu_index: 0,
             models_tab: 0,
             vault: None,
             gateway_client: None,
@@ -168,6 +178,19 @@ impl App {
 
     /// Initialize app state - load initial data
     pub async fn init(&mut self) -> Result<()> {
+        // Load TUI config from config file (best-effort, defaults if missing/unparseable)
+        if let Ok(content) = std::fs::read_to_string(&self.state.config_path) {
+            if let Ok(table) = content.parse::<toml::Table>() {
+                if let Some(tui_val) = table.get("tui") {
+                    if let Ok(tui_cfg) = tui_val.clone().try_into::<rockbot_core::TuiConfig>() {
+                        self.state.tui_config = tui_cfg;
+                        self.effect_state
+                            .set_animations_enabled(self.state.tui_config.animations);
+                    }
+                }
+            }
+        }
+
         // Spawn background tasks for initial data loading
         self.spawn_gateway_check();
         self.spawn_agents_load();
@@ -537,6 +560,10 @@ impl App {
                 let state = state.clone();
                 self.handle_edit_context_file(key, state)
             }
+            InputMode::ContextMenu(menu_state) => {
+                let menu_state = menu_state.clone();
+                self.handle_context_menu(key, menu_state)
+            }
         }
     }
 
@@ -781,6 +808,12 @@ impl App {
                 self.handle_stop_action();
             }
 
+            // Context menu
+            KeyCode::Char('?') if !self.state.sidebar_focus => {
+                let menu = self.state.build_context_menu();
+                self.state.input_mode = InputMode::ContextMenu(menu);
+            }
+
             // Shift+Tab for backwards tab navigation
             KeyCode::BackTab => {
                 self.prev_content_tab();
@@ -789,6 +822,68 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_context_menu(&mut self, key: KeyEvent, mut menu: ContextMenuState) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('?') => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if menu.selected > 0 {
+                    menu.selected -= 1;
+                }
+                self.state.input_mode = InputMode::ContextMenu(menu);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if menu.selected + 1 < menu.items.len() {
+                    menu.selected += 1;
+                }
+                self.state.input_mode = InputMode::ContextMenu(menu);
+            }
+            KeyCode::Enter => {
+                let action = menu.items[menu.selected].action;
+                self.state.input_mode = InputMode::Normal;
+                self.dispatch_context_action(action);
+            }
+            KeyCode::Char(c) => {
+                if let Some(item) = menu.items.iter().find(|i| i.key == c) {
+                    let action = item.action;
+                    self.state.input_mode = InputMode::Normal;
+                    self.dispatch_context_action(action);
+                } else {
+                    self.state.input_mode = InputMode::ContextMenu(menu);
+                }
+            }
+            _ => {
+                self.state.input_mode = InputMode::ContextMenu(menu);
+            }
+        }
+        Ok(())
+    }
+
+    fn dispatch_context_action(&mut self, action: ContextMenuAction) {
+        match action {
+            ContextMenuAction::OpenAddAgent => self.handle_add_action(),
+            ContextMenuAction::OpenEditAgent => self.handle_edit_action(),
+            ContextMenuAction::DeleteAgent => self.handle_delete_action(),
+            ContextMenuAction::OpenAddCredential => self.handle_add_action(),
+            ContextMenuAction::OpenCreateSession => self.handle_new_session_action(),
+            ContextMenuAction::OpenContextFiles => {
+                if let Some(agent) = self.state.agents.get(self.state.selected_agent) {
+                    let agent_id = agent.id.clone();
+                    self.state.input_mode = InputMode::ViewContextFiles(ViewContextFilesState {
+                        agent_id: agent_id.clone(),
+                        files: Vec::new(),
+                        selected: 0,
+                        loading: true,
+                    });
+                    self.fetch_context_files(&agent_id);
+                }
+            }
+            ContextMenuAction::TriggerCronJob => self.handle_test_action(),
+            ContextMenuAction::RefreshPage => self.handle_refresh_action(),
+        }
     }
 
     fn handle_add_action(&mut self) {
@@ -3216,37 +3311,93 @@ impl App {
 
     /// Render the entire UI
     fn render(&mut self, frame: &mut Frame) {
-        // Layout: top strip (menu + cards) | main content | status bar
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(5),
-                Constraint::Min(0),
-                Constraint::Length(1),
-            ])
-            .split(frame.area());
+        // Detect modal and page transitions for tachyonfx effects
+        let is_modal = !matches!(
+            self.state.input_mode,
+            InputMode::Normal | InputMode::ChatInput
+        );
+        if is_modal && !self.was_modal_open {
+            self.effect_state.trigger_modal_open();
+        } else if !is_modal && self.was_modal_open {
+            self.effect_state.trigger_modal_close();
+        }
+        self.was_modal_open = is_modal;
 
-        // Top strip: menu (left) | 1-col gap | cards (right)
-        let top = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(22),
-                Constraint::Length(1),
-                Constraint::Min(0),
-            ])
-            .split(rows[0]);
+        if self.state.menu_index != self.prev_menu_index {
+            self.effect_state.trigger_page_transition();
+            self.prev_menu_index = self.state.menu_index;
+        }
 
-        // Sidebar menu — same height as cards
-        render_sidebar(frame, top[0], &self.state, &self.effect_state);
+        let floating_bar = self.state.tui_config.floating_bar;
+        let full_area = frame.area();
 
-        let cards_area = top[2];
+        // Compute layout areas depending on floating bar mode
+        let (cards_area, detail_area, status_area, bar_area);
 
-        // Render a top border on the main content pane for visual separation
-        let border_block = Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::DarkGray));
-        let detail_area = border_block.inner(rows[1]);
-        frame.render_widget(border_block, rows[1]);
+        if floating_bar {
+            // Floating: content fills full height, bar overlays top rows
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Fill(1), Constraint::Length(1)])
+                .split(full_area);
+
+            // Detail area starts at row 0 (content scrolls behind the bar)
+            detail_area = rows[0];
+            status_area = rows[1];
+
+            // Bar overlay occupies the top 5 rows
+            let bar_height = 5u16.min(full_area.height.saturating_sub(1));
+            bar_area = Rect {
+                x: full_area.x,
+                y: full_area.y,
+                width: full_area.width,
+                height: bar_height,
+            };
+
+            let top = Layout::default()
+                .direction(Direction::Horizontal)
+                .spacing(1)
+                .constraints([Constraint::Length(22), Constraint::Fill(1)])
+                .split(bar_area);
+
+            // Render page content first (behind the bar)
+            cards_area = top[1];
+
+            // Clear the bar area so content doesn't show through
+            frame.render_widget(ratatui::widgets::Clear, bar_area);
+
+            // Render sidebar + cards into the bar overlay
+            render_sidebar(frame, top[0], &self.state, &self.effect_state);
+        } else {
+            // Fixed: classic 3-row split
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(5),
+                    Constraint::Fill(1),
+                    Constraint::Length(1),
+                ])
+                .split(full_area);
+
+            let top = Layout::default()
+                .direction(Direction::Horizontal)
+                .spacing(1)
+                .constraints([Constraint::Length(22), Constraint::Fill(1)])
+                .split(rows[0]);
+
+            render_sidebar(frame, top[0], &self.state, &self.effect_state);
+            cards_area = top[1];
+
+            // Render a top border on the main content pane for visual separation
+            let border_block = Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(Color::DarkGray));
+            detail_area = border_block.inner(rows[1]);
+            frame.render_widget(border_block, rows[1]);
+
+            status_area = rows[2];
+            bar_area = rows[0]; // unused in fixed mode
+        }
 
         // Content: page cards in top strip, detail in main area
         match self.state.menu_item {
@@ -3302,20 +3453,36 @@ impl App {
             ),
         }
 
+        // Apply page transition effect
+        let elapsed = self.last_frame.elapsed();
+        self.last_frame = Instant::now();
+        self.effect_state
+            .render_page_transition(frame.buffer_mut(), detail_area, elapsed);
+
         // Status bar
         let help_text = self.get_help_text();
         render_status_bar(
             frame,
-            rows[2],
+            status_area,
             self.state.status_message.as_ref(),
             &help_text,
         );
 
-        // Render modals on top
-        self.render_modals(frame);
+        // Render modals on top (with background dimming and effects)
+        self.render_modals(frame, elapsed);
     }
 
-    fn render_modals(&self, frame: &mut Frame) {
+    fn render_modals(&mut self, frame: &mut Frame, elapsed: Duration) {
+        // Dim background behind modals
+        let is_modal = !matches!(
+            self.state.input_mode,
+            InputMode::Normal | InputMode::ChatInput
+        );
+        if is_modal {
+            let area = frame.area();
+            super::effects::EffectState::dim_background(frame.buffer_mut(), area);
+        }
+
         match &self.state.input_mode {
             InputMode::PasswordInput { prompt, masked, .. } => {
                 render_password_modal(
@@ -3393,7 +3560,21 @@ impl App {
             InputMode::EditContextFile(state) => {
                 render_edit_context_file_modal(frame, frame.area(), state);
             }
+            InputMode::ContextMenu(menu_state) => {
+                let area = frame.area();
+                super::components::context_menu::render_context_menu(frame, area, menu_state);
+            }
             _ => {}
+        }
+
+        // Apply modal open/close effects on top of rendered content
+        let full_area = frame.area();
+        if is_modal {
+            self.effect_state
+                .render_modal_open(frame.buffer_mut(), full_area, elapsed);
+        } else {
+            self.effect_state
+                .render_modal_close(frame.buffer_mut(), full_area, elapsed);
         }
     }
 
@@ -3468,6 +3649,7 @@ impl App {
             }
             InputMode::ViewContextFiles(_) => "↑↓:Select │ Enter:Edit │ Esc:Close".to_string(),
             InputMode::EditContextFile(_) => "Ctrl+S:Save │ ↑↓←→:Move │ Esc:Back".to_string(),
+            InputMode::ContextMenu(_) => "↑↓/jk:Navigate │ Enter:Select │ Esc:Close".to_string(),
         }
     }
 }

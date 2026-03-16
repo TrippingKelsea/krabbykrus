@@ -12,7 +12,8 @@ pub use config::{
     BedrockProviderConfig, CapabilityConfig, Config, ConfigWatcher, CredentialsConfig,
     EdgeCondition, FilesystemCapabilities, GatewayConfig, McpServerEntry, NetworkCapabilities,
     OllamaProviderConfig, OpenAiProviderConfig, PkiConfig, ProcessCapabilities, ProvidersConfig,
-    SandboxConfig, SecurityConfig, ToolConfig, WorkflowDefinition, WorkflowEdge, WorkflowNode,
+    SandboxConfig, SecurityConfig, ToolConfig, TuiConfig, WorkflowDefinition, WorkflowEdge,
+    WorkflowNode,
 };
 
 pub use error::{
