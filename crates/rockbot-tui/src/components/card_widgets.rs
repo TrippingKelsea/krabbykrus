@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::state::{AgentStatus, AppState, CardWidgetId};
+use crate::state::{AgentStatus, AppState, CardWidgetId};
 
 /// Render a compact widget inside a card's inner area (~12w x 1h).
 pub fn render_card_widget(id: &CardWidgetId, frame: &mut Frame, area: Rect, state: &AppState) {

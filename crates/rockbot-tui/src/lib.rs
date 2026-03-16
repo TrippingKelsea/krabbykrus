@@ -12,7 +12,7 @@
 //! # Navigation
 //!
 //! - **Tab**: Switch between sidebar and content pane
-//! - **↑/↓** or **j/k**: Navigate within pane
+//! - **Up/Down** or **j/k**: Navigate within pane
 //! - **Shift+[** / **Shift+]**: Switch between tabs within a view
 //! - **1-6**: Quick jump to section
 //! - **Enter**: Select / Confirm

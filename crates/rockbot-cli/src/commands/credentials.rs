@@ -75,7 +75,7 @@ pub async fn run(command: &CredentialsCommands, config_path: &PathBuf) -> Result
         }
         CredentialsCommands::Lock => lock_vault(&config).await,
         CredentialsCommands::Ui => {
-            crate::tui::credentials::run_credentials_tui(config.credentials.vault_path.clone())
+            rockbot_tui::credentials::run_credentials_tui(config.credentials.vault_path.clone())
                 .await
         }
     }

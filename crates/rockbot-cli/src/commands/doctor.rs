@@ -28,7 +28,7 @@ pub async fn run(command: &Option<DoctorCommands>, config_path: &PathBuf) -> Res
         #[cfg(feature = "doctor-ai")]
         Some(DoctorCommands::Status) => run_status().await,
         #[cfg(feature = "doctor-ai")]
-        Some(DoctorCommands::Tui) => crate::tui::doctor_tui::run_doctor_tui(config_path).await,
+        Some(DoctorCommands::Tui) => rockbot_tui::doctor_tui::run_doctor_tui(config_path).await,
     }
 }
 

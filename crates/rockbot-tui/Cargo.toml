@@ -1,0 +1,75 @@
+[package]
+name = "rockbot-tui"
+version.workspace = true
+edition = "2021"
+description = "Terminal user interface for RockBot"
+license = "MIT"
+
+[features]
+default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "tools-mcp", "tools-markdown"]
+# LLM providers
+anthropic = ["rockbot-llm/anthropic", "rockbot-core/anthropic"]
+openai = ["rockbot-llm/openai", "rockbot-core/openai"]
+ollama = ["rockbot-llm/ollama", "rockbot-core/ollama"]
+bedrock = ["rockbot-llm/bedrock", "rockbot-core/bedrock"]
+# Channel providers
+discord = ["rockbot-core/discord"]
+telegram = ["rockbot-core/telegram"]
+signal = ["rockbot-core/signal"]
+# Tool providers
+tools-credentials = ["rockbot-core/tools-credentials"]
+tools-mcp = ["rockbot-core/tools-mcp"]
+tools-markdown = ["rockbot-core/tools-markdown"]
+# Embedded overseer
+overseer = ["rockbot-core/overseer"]
+# Embedded doctor AI for config diagnostics
+doctor-ai = ["dep:rockbot-doctor"]
+# Embedded butler companion agent
+butler = ["dep:rockbot-butler", "rockbot-core/butler"]
+# Remote tool execution
+remote-exec = ["rockbot-core/remote-exec", "rockbot-client/remote-exec"]
+# Allow plain-text HTTP/WS connections
+http-insecure = ["rockbot-core/http-insecure", "rockbot-client/http-insecure"]
+
+[lints]
+workspace = true
+
+[dependencies]
+rockbot-client = { path = "../rockbot-client" }
+rockbot-core = { path = "../rockbot-core", default-features = false }
+rockbot-tools = { path = "../rockbot-tools" }
+rockbot-memory = { path = "../rockbot-memory" }
+rockbot-security = { path = "../rockbot-security" }
+rockbot-credentials = { path = "../rockbot-credentials" }
+rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
+rockbot-llm = { path = "../rockbot-llm", default-features = false }
+rockbot-pki = { path = "../rockbot-pki" }
+rockbot-doctor = { path = "../rockbot-doctor", optional = true }
+rockbot-butler = { path = "../rockbot-butler", optional = true }
+rockbot-store = { path = "../rockbot-store" }
+
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+dirs = { workspace = true }
+reqwest = { workspace = true }
+
+# TUI
+ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
+crossterm = "0.28"
+tachyonfx = { version = "0.10", features = ["std-duration"] }
+
+# WebSocket
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

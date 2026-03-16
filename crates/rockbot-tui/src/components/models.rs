@@ -10,8 +10,8 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::effects::{self, palette, EffectState};
-use crate::tui::state::AppState;
+use crate::effects::{self, palette, EffectState};
+use crate::state::AppState;
 
 /// Card width for provider cards
 const CARD_WIDTH: u16 = 16;
@@ -320,7 +320,7 @@ fn auth_type_label(auth_type: &str) -> &str {
 fn render_auth_hints(
     auth_type: &str,
     content: &mut Vec<Line>,
-    schema: Option<&crate::tui::state::CredentialSchemaInfo>,
+    schema: Option<&crate::state::CredentialSchemaInfo>,
 ) {
     if let Some(schema) = schema {
         if let Some(method) = schema.auth_methods.first() {

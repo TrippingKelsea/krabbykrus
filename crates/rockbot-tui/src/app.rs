@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-use super::components::{
+use crate::components::{
     render_add_credential_modal, render_agents, render_confirm_modal, render_credentials,
     render_cron_jobs, render_dashboard, render_edit_agent_modal, render_edit_context_file_modal,
     render_edit_credential_modal, render_edit_permission_modal, render_edit_provider_modal,
@@ -24,8 +24,8 @@ use super::components::{
     render_view_model_list_modal, render_view_permission_modal, render_view_provider_modal,
     render_view_session_modal,
 };
-use super::effects::EffectState;
-use super::state::{
+use crate::effects::EffectState;
+use crate::state::{
     AddCredentialState, AppState, ChatMessage, ConfirmAction, ContextFileInfo, ContextMenuAction,
     ContextMenuState, CreateSessionState, EditAgentState, EditCredentialState, EditProviderState,
     EndpointInfo, InputMode, MenuItem, Message, PasswordAction, SessionMode, ToolCallInfo,
@@ -640,7 +640,7 @@ impl App {
     }
 
     fn dispatch_action(&mut self, action: super::keybindings::TuiAction) {
-        use super::keybindings::TuiAction::*;
+        use crate::keybindings::TuiAction::*;
         match action {
             Quit => {
                 self.state.should_exit = true;
@@ -1304,7 +1304,7 @@ impl App {
 
     /// Open the edit credential modal for the given endpoint index (used from view modals)
     fn edit_endpoint_at(&mut self, endpoint_index: usize) {
-        use super::state::EditCredentialState;
+        use crate::state::EditCredentialState;
 
         if let Some(endpoint) = self.state.endpoints.get(endpoint_index) {
             let endpoint_type = match endpoint.endpoint_type.as_str() {
@@ -1348,7 +1348,7 @@ impl App {
 
     /// Open the edit permission modal for the given permission index (used from view modals)
     fn edit_permission_at(&mut self, permission_index: usize) {
-        use super::state::EditPermissionState;
+        use crate::state::EditPermissionState;
         if let Some(rule) = self.state.permissions.get(permission_index) {
             let edit_state =
                 EditPermissionState::from_rule(rule, &self.state.endpoints, &self.state.agents);
@@ -1423,7 +1423,7 @@ impl App {
     }
 
     fn handle_permission_action(&mut self) {
-        use super::state::EditPermissionState;
+        use crate::state::EditPermissionState;
 
         if self.state.menu_item != MenuItem::Credentials || self.state.endpoints.is_empty() {
             return;
@@ -1839,7 +1839,7 @@ impl App {
         key: KeyEvent,
         mut state: AddCredentialState,
     ) -> Result<()> {
-        use super::components::modals::ENDPOINT_TYPES;
+        use crate::components::modals::ENDPOINT_TYPES;
 
         match key.code {
             KeyCode::Esc => {
@@ -1931,7 +1931,7 @@ impl App {
                         .iter()
                         .find(|e| e.name == endpoint_name)
                     {
-                        use super::state::{AccessLevel, PermissionRule, PermissionSource};
+                        use crate::state::{AccessLevel, PermissionRule, PermissionSource};
                         let next_priority = self.state.permissions.len() + 1;
                         self.state.permissions.push(PermissionRule {
                             endpoint_id: ep.id.clone(),
@@ -2101,7 +2101,7 @@ impl App {
 
     /// Save provider configuration — routes through gateway API
     fn save_provider_config(&mut self, state: &super::state::EditProviderState) {
-        use super::state::ProviderAuthType;
+        use crate::state::ProviderAuthType;
 
         // Save auth mode preference to config file
         self.save_provider_auth_mode(state);
@@ -3090,7 +3090,7 @@ impl App {
     }
 
     fn handle_chat_input(&mut self, key: KeyEvent) -> Result<()> {
-        use super::keybindings::TuiAction;
+        use crate::keybindings::TuiAction;
 
         // Shift+Enter or Alt+Enter inserts a newline (up to 10 lines) — checked before lookup
         if key.code == KeyCode::Enter
@@ -3294,7 +3294,7 @@ impl App {
 
     /// Save provider auth mode preference to config file
     fn save_provider_auth_mode(&mut self, state: &super::state::EditProviderState) {
-        use super::state::ProviderAuthType;
+        use crate::state::ProviderAuthType;
 
         // Determine the auth mode string
         let auth_mode = match state.auth_type {
@@ -4517,7 +4517,7 @@ async fn handle_gateway_event(
     }
 }
 
-use super::state::{
+use crate::state::{
     AgentInfo, AgentStatus, AuthMethodInfo, CredentialFieldInfo, CredentialSchemaInfo, CronJobInfo,
     GatewayStatus, ModelProvider, ModelProviderModel, VaultStatus,
 };

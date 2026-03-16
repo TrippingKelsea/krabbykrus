@@ -15,7 +15,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use rockbot_cli::tui::state::{AppState, Message};
+//! use rockbot_tui::state::{AppState, Message};
 //! use tokio::sync::mpsc;
 //!
 //! let (tx, mut rx) = mpsc::unbounded_channel();
@@ -119,7 +119,7 @@ pub enum Message {
     Quit,
 
     /// Keybinding config reloaded from vault
-    KeybindingsReloaded(Box<super::keybindings::KeybindingConfig>),
+    KeybindingsReloaded(Box<crate::keybindings::KeybindingConfig>),
 
     // Butler chat
     ButlerChunk(String),
@@ -2271,7 +2271,7 @@ impl EditPermissionState {
 /// # Example
 ///
 /// ```
-/// use rockbot_cli::tui::state::FieldDef;
+/// use rockbot_tui::state::FieldDef;
 ///
 /// let field = FieldDef {
 ///     id: "api_key",
@@ -2493,7 +2493,7 @@ pub fn get_fields_for_endpoint_type(endpoint_type: usize) -> Vec<FieldDef> {
 /// # Example
 ///
 /// ```
-/// use rockbot_cli::tui::state::AddCredentialState;
+/// use rockbot_tui::state::AddCredentialState;
 ///
 /// let mut state = AddCredentialState::new();
 ///

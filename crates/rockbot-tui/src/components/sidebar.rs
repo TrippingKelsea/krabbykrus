@@ -8,8 +8,8 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::effects::{self, palette, EffectState};
-use crate::tui::state::{AppState, MenuItem};
+use crate::effects::{self, palette, EffectState};
+use crate::state::{AppState, MenuItem};
 
 /// Render the sidebar navigation as a compact scrollable menu.
 /// Fits within the same height as the card strip (typically 5 rows).

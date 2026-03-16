@@ -8,7 +8,6 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 pub mod commands;
-pub mod tui;
 
 /// RockBot: Next-generation AI agent framework
 #[derive(Parser)]
@@ -690,7 +689,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             // Load config to get vault path
             let config = load_config(&config_path).await?;
             let gateway_url = rockbot_client::normalize_gateway_url(gateway);
-            tui::run_app(
+            rockbot_tui::run_app(
                 config_path.clone(),
                 config.credentials.vault_path,
                 gateway_url,

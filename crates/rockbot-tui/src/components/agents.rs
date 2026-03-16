@@ -9,8 +9,8 @@ use ratatui::{
 };
 
 use super::render_spinner;
-use crate::tui::effects::{self, palette, EffectState};
-use crate::tui::state::{AgentStatus, AppState};
+use crate::effects::{self, palette, EffectState};
+use crate::state::{AgentStatus, AppState};
 
 /// Card width for agent cards
 const CARD_WIDTH: u16 = 16;

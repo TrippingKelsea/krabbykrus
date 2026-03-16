@@ -8,8 +8,8 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::effects::palette;
-use crate::tui::state::ContextMenuState;
+use crate::effects::palette;
+use crate::state::ContextMenuState;
 
 /// Render the context menu as a floating panel
 pub fn render_context_menu(frame: &mut Frame, _area: Rect, menu: &ContextMenuState) {

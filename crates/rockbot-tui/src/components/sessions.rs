@@ -12,8 +12,8 @@ use ratatui::{
 };
 
 use super::render_spinner;
-use crate::tui::effects::{self, palette, EffectState};
-use crate::tui::state::{AppState, ChatRole, InputMode};
+use crate::effects::{self, palette, EffectState};
+use crate::state::{AppState, ChatRole, InputMode};
 
 /// Card width: 2 border + 13 content = 15 columns
 const CARD_WIDTH: u16 = 15;
@@ -176,7 +176,7 @@ fn render_session_cards(
 fn render_session_card(
     frame: &mut Frame,
     area: Rect,
-    session: &crate::tui::state::SessionInfo,
+    session: &crate::state::SessionInfo,
     state: &AppState,
     is_selected: bool,
     elapsed: f64,
@@ -367,7 +367,7 @@ pub fn render_chat_messages(
     frame: &mut Frame,
     area: Rect,
     state: &AppState,
-    messages: &[crate::tui::state::ChatMessage],
+    messages: &[crate::state::ChatMessage],
     loading: bool,
     scroll: usize,
     auto_scroll: bool,

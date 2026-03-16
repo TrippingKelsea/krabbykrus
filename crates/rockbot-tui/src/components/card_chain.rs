@@ -8,8 +8,8 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::effects::{self, EffectState};
-use crate::tui::state::{AppState, SlotKind};
+use crate::effects::{self, EffectState};
+use crate::state::{AppState, SlotKind};
 
 const CARD_WIDTH: u16 = 14;
 const CARD_HEIGHT: u16 = 3;

@@ -8,30 +8,30 @@ license = "MIT"
 [features]
 default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "tools-mcp", "tools-markdown"]
 # LLM providers
-anthropic = ["rockbot-llm/anthropic", "rockbot-core/anthropic"]
-openai = ["rockbot-llm/openai", "rockbot-core/openai"]
-ollama = ["rockbot-llm/ollama", "rockbot-core/ollama"]
-bedrock = ["rockbot-llm/bedrock", "rockbot-core/bedrock"]
+anthropic = ["rockbot-llm/anthropic", "rockbot-core/anthropic", "rockbot-tui/anthropic"]
+openai = ["rockbot-llm/openai", "rockbot-core/openai", "rockbot-tui/openai"]
+ollama = ["rockbot-llm/ollama", "rockbot-core/ollama", "rockbot-tui/ollama"]
+bedrock = ["rockbot-llm/bedrock", "rockbot-core/bedrock", "rockbot-tui/bedrock"]
 # Channel providers
-discord = ["rockbot-core/discord"]
-telegram = ["rockbot-core/telegram"]
-signal = ["rockbot-core/signal"]
+discord = ["rockbot-core/discord", "rockbot-tui/discord"]
+telegram = ["rockbot-core/telegram", "rockbot-tui/telegram"]
+signal = ["rockbot-core/signal", "rockbot-tui/signal"]
 # Tool providers
-tools-credentials = ["rockbot-core/tools-credentials"]
-tools-mcp = ["rockbot-core/tools-mcp"]
-tools-markdown = ["rockbot-core/tools-markdown"]
+tools-credentials = ["rockbot-core/tools-credentials", "rockbot-tui/tools-credentials"]
+tools-mcp = ["rockbot-core/tools-mcp", "rockbot-tui/tools-mcp"]
+tools-markdown = ["rockbot-core/tools-markdown", "rockbot-tui/tools-markdown"]
 # Embedded overseer
-overseer = ["rockbot-core/overseer"]
+overseer = ["rockbot-core/overseer", "rockbot-tui/overseer"]
 # Embedded doctor AI for config diagnostics
-doctor-ai = ["dep:rockbot-doctor"]
+doctor-ai = ["dep:rockbot-doctor", "rockbot-tui/doctor-ai"]
 # Embedded butler companion agent
-butler = ["dep:rockbot-butler", "rockbot-core/butler"]
+butler = ["dep:rockbot-butler", "rockbot-core/butler", "rockbot-tui/butler"]
 # Remote tool execution
-remote-exec = ["rockbot-core/remote-exec", "rockbot-client/remote-exec"]
+remote-exec = ["rockbot-core/remote-exec", "rockbot-client/remote-exec", "rockbot-tui/remote-exec"]
 # S3 CA distribution + Route53 DNS
 bedrock-deploy = ["dep:rockbot-deploy", "rockbot-deploy/bedrock", "rockbot-core/bedrock-deploy"]
 # Allow plain-text HTTP/WS connections
-http-insecure = ["rockbot-core/http-insecure", "rockbot-client/http-insecure"]
+http-insecure = ["rockbot-core/http-insecure", "rockbot-client/http-insecure", "rockbot-tui/http-insecure"]
 
 [lints]
 workspace = true
@@ -50,6 +50,7 @@ rockbot-doctor = { path = "../rockbot-doctor", optional = true }
 rockbot-deploy = { path = "../rockbot-deploy", optional = true }
 rockbot-butler = { path = "../rockbot-butler", optional = true }
 rockbot-store = { path = "../rockbot-store" }
+rockbot-tui = { path = "../rockbot-tui", default-features = false }
 
 uuid = { workspace = true }
 chrono = { workspace = true }
@@ -74,15 +75,6 @@ time = { workspace = true }
 rpassword = "7"
 getrandom = "0.2"
 atty = "0.2"
-
-# TUI
-ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
-crossterm = "0.28"
-tachyonfx = { version = "0.10", features = ["std-duration"] }
-
-# WebSocket
-tokio-tungstenite = { workspace = true }
-futures-util = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -12,7 +12,7 @@ use ratatui::{
 };
 
 use super::centered_rect;
-use crate::tui::state::{
+use crate::state::{
     get_fields_for_endpoint_type, AddCredentialState, AgentInfo, CreateSessionState,
     CredentialSchemaInfo, EditAgentState, EditContextFileState, EditCredentialState,
     EditPermissionState, EditProviderState, EndpointInfo, ModelProvider, PermissionRule,
@@ -1501,7 +1501,7 @@ pub fn render_edit_permission_modal(frame: &mut Frame, area: Rect, state: &EditP
     };
     let source_label = state.sources.get(state.selected_source).map_or_else(
         || "(none)".to_string(),
-        crate::tui::state::PermissionSource::label,
+        crate::state::PermissionSource::label,
     );
     let source_display = format!("◀ {source_label} ▶");
     let source_block = Block::bordered()
