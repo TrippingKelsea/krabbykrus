@@ -464,13 +464,45 @@ impl BedrockProvider {
         ]
     }
 
-    /// Normalize model ID (strip provider prefix)
-    #[allow(clippy::unused_self)]
+    /// Normalize model ID: strip "bedrock/" prefix, then prepend a cross-region
+    /// inference profile prefix for models that require it.
     fn normalize_model(&self, model_id: &str) -> String {
-        model_id
-            .strip_prefix("bedrock/")
-            .unwrap_or(model_id)
-            .to_string()
+        let stripped = model_id.strip_prefix("bedrock/").unwrap_or(model_id);
+
+        // Already has a region prefix — pass through unchanged
+        if stripped.starts_with("us.") || stripped.starts_with("eu.") || stripped.starts_with("ap.")
+        {
+            return stripped.to_string();
+        }
+
+        if Self::requires_inference_profile(stripped) {
+            let prefix = Self::region_to_inference_prefix(&self.region);
+            return format!("{prefix}{stripped}");
+        }
+
+        stripped.to_string()
+    }
+
+    /// Returns true when a model requires a cross-region inference profile.
+    fn requires_inference_profile(model_id: &str) -> bool {
+        model_id.contains("claude-3")
+            || model_id.contains("claude-4")
+            || model_id.contains("claude-opus-4")
+            || model_id.contains("claude-sonnet-4")
+            || model_id.starts_with("amazon.nova-")
+    }
+
+    /// Map an AWS region to the corresponding inference profile prefix.
+    fn region_to_inference_prefix(region: &str) -> &'static str {
+        if region.starts_with("us-") {
+            "us."
+        } else if region.starts_with("eu-") {
+            "eu."
+        } else if region.starts_with("ap-") {
+            "ap."
+        } else {
+            "us." // conservative default
+        }
     }
 
     /// Convert our messages to Bedrock format, extracting system prompt
@@ -1368,12 +1400,83 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_normalize_model() {
+    fn test_requires_inference_profile() {
+        // Claude 3 and 4 models require inference profiles
+        assert!(BedrockProvider::requires_inference_profile(
+            "anthropic.claude-3-5-haiku-20241022-v1:0"
+        ));
+        assert!(BedrockProvider::requires_inference_profile(
+            "anthropic.claude-sonnet-4-20250514-v1:0"
+        ));
+        assert!(BedrockProvider::requires_inference_profile(
+            "anthropic.claude-opus-4-20250514-v1:0"
+        ));
+        // Amazon Nova models require inference profiles
+        assert!(BedrockProvider::requires_inference_profile(
+            "amazon.nova-pro-v1:0"
+        ));
+        assert!(BedrockProvider::requires_inference_profile(
+            "amazon.nova-lite-v1:0"
+        ));
+        // Older models do not require inference profiles
+        assert!(!BedrockProvider::requires_inference_profile(
+            "anthropic.claude-v2"
+        ));
+        assert!(!BedrockProvider::requires_inference_profile(
+            "anthropic.claude-instant-v1"
+        ));
+        assert!(!BedrockProvider::requires_inference_profile(
+            "meta.llama3-8b-instruct-v1:0"
+        ));
+    }
+
+    #[test]
+    fn test_region_to_inference_prefix() {
         assert_eq!(
-            "anthropic.claude-sonnet-4-20250514-v1:0",
-            "bedrock/anthropic.claude-sonnet-4-20250514-v1:0"
-                .strip_prefix("bedrock/")
-                .unwrap_or("anthropic.claude-sonnet-4-20250514-v1:0")
+            BedrockProvider::region_to_inference_prefix("us-east-1"),
+            "us."
+        );
+        assert_eq!(
+            BedrockProvider::region_to_inference_prefix("us-west-2"),
+            "us."
+        );
+        assert_eq!(
+            BedrockProvider::region_to_inference_prefix("eu-west-1"),
+            "eu."
+        );
+        assert_eq!(
+            BedrockProvider::region_to_inference_prefix("eu-central-1"),
+            "eu."
+        );
+        assert_eq!(
+            BedrockProvider::region_to_inference_prefix("ap-southeast-1"),
+            "ap."
+        );
+        assert_eq!(
+            BedrockProvider::region_to_inference_prefix("ap-northeast-1"),
+            "ap."
+        );
+        // Unknown region falls back to "us."
+        assert_eq!(
+            BedrockProvider::region_to_inference_prefix("sa-east-1"),
+            "us."
+        );
+    }
+
+    #[test]
+    fn test_normalize_model_pass_through_prefixed() {
+        // Already-prefixed IDs must not gain a second prefix
+        assert!(
+            "us.anthropic.claude-sonnet-4-20250514-v1:0".starts_with("us."),
+            "us-prefixed IDs pass through unchanged"
+        );
+        assert!(
+            "eu.anthropic.claude-3-5-haiku-20241022-v1:0".starts_with("eu."),
+            "eu-prefixed IDs pass through unchanged"
+        );
+        assert!(
+            "ap.amazon.nova-pro-v1:0".starts_with("ap."),
+            "ap-prefixed IDs pass through unchanged"
         );
     }
 
