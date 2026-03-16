@@ -29,6 +29,7 @@ pub fn render_card_widget(id: &CardWidgetId, frame: &mut Frame, area: Rect, stat
         CardWidgetId::CronOverview => render_cron_overview(frame, area, state),
         CardWidgetId::ModelsOverview => render_models_overview(frame, area, state),
         CardWidgetId::SettingsGeneral => render_settings_general(frame, area),
+        CardWidgetId::Alerts => render_alerts(frame, area, state),
     }
 }
 
@@ -346,4 +347,51 @@ fn render_settings_general(frame: &mut Frame, area: Rect) {
         Style::default().fg(Color::Cyan),
     ));
     frame.render_widget(value, rows[1]);
+}
+
+fn render_alerts(frame: &mut Frame, area: Rect, state: &AppState) {
+    use crate::state::AlertSeverity;
+
+    let rows = card_rows(area);
+    let label = Paragraph::new(Span::styled(
+        "Alerts",
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    ));
+    frame.render_widget(label, rows[0]);
+
+    let error_count = state
+        .alerts
+        .iter()
+        .filter(|a| a.severity == AlertSeverity::Error)
+        .count();
+    let warn_count = state
+        .alerts
+        .iter()
+        .filter(|a| a.severity == AlertSeverity::Warning)
+        .count();
+    let total = state.alerts.len();
+
+    let (text, color) = if error_count > 0 {
+        (format!("{error_count} errors"), Color::Red)
+    } else if warn_count > 0 {
+        (format!("{warn_count} warnings"), Color::Yellow)
+    } else if total > 0 {
+        (format!("{total} info"), Color::Cyan)
+    } else {
+        ("None".to_string(), Color::Green)
+    };
+    let value = Paragraph::new(Span::styled(text, Style::default().fg(color)));
+    frame.render_widget(value, rows[1]);
+
+    if let Some(latest) = state.alerts.last() {
+        let max_w = area.width as usize;
+        let preview: String = latest.message.chars().take(max_w).collect();
+        let detail = Paragraph::new(Span::styled(
+            preview,
+            Style::default().fg(Color::DarkGray),
+        ));
+        frame.render_widget(detail, rows[2]);
+    }
 }

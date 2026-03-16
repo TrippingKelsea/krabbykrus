@@ -222,6 +222,24 @@ pub enum CardWidgetId {
     CronOverview,
     ModelsOverview,
     SettingsGeneral,
+    Alerts,
+}
+
+/// Severity level for alerts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+/// A single alert item.
+#[derive(Debug, Clone)]
+pub struct AlertItem {
+    pub severity: AlertSeverity,
+    pub message: String,
+    pub source: String,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
 /// What kind of slot this is.
@@ -347,6 +365,18 @@ impl SlottedCardBar {
             MenuItem::Settings => build_settings_slots(),
         };
         self.slots.extend(new_slots);
+        // Pinned alerts card — always rightmost
+        self.slots.push(CardSlot {
+            label: "Alerts".to_string(),
+            icon: '!',
+            badge: None,
+            views: vec![SlotView {
+                label: "Alerts".to_string(),
+                widget: CardWidgetId::Alerts,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        });
         if self.active_slot >= self.slots.len() {
             self.active_slot = self.slots.len().saturating_sub(1);
         }
@@ -1055,6 +1085,9 @@ pub struct AppState {
 
     // Credential schemas (from gateway — drives Credentials->Providers forms)
     pub credential_schemas: Vec<CredentialSchemaInfo>,
+
+    // Alerts
+    pub alerts: Vec<AlertItem>,
 
     // UI state
     pub status_message: Option<(String, bool)>, // (message, is_error)
@@ -2879,6 +2912,8 @@ impl AppState {
             selected_settings_card: 0,
             credential_schemas: Vec::new(),
 
+            alerts: Vec::new(),
+
             status_message: None,
             should_exit: false,
             tick_count: 0,
@@ -2894,6 +2929,19 @@ impl AppState {
     }
 
     /// Process a message and update state
+    /// Push an alert. Keeps most recent 100.
+    pub fn push_alert(&mut self, severity: AlertSeverity, source: &str, message: String) {
+        self.alerts.push(AlertItem {
+            severity,
+            message,
+            source: source.to_string(),
+            timestamp: chrono::Utc::now(),
+        });
+        if self.alerts.len() > 100 {
+            self.alerts.remove(0);
+        }
+    }
+
     pub fn update(&mut self, msg: Message) {
         match msg {
             Message::Navigate(item) => {
@@ -2917,6 +2965,7 @@ impl AppState {
             }
             Message::GatewayStatusError(err) => {
                 self.gateway_loading = false;
+                self.push_alert(AlertSeverity::Warning, "gateway", err.clone());
                 self.gateway_error = Some(err);
             }
 
@@ -2927,6 +2976,7 @@ impl AppState {
             }
             Message::AgentsError(err) => {
                 self.agents_loading = false;
+                self.push_alert(AlertSeverity::Error, "agents", err.clone());
                 self.agents_error = Some(err);
             }
             Message::ReloadAgents => {
@@ -2946,6 +2996,7 @@ impl AppState {
             }
             Message::SessionsError(err) => {
                 self.sessions_loading = false;
+                self.push_alert(AlertSeverity::Error, "sessions", err.clone());
                 self.sessions_error = Some(err);
             }
             Message::ReloadSessions => {
@@ -2986,6 +3037,7 @@ impl AppState {
             }
             Message::VaultError(err) => {
                 self.vault_loading = false;
+                self.push_alert(AlertSeverity::Error, "vault", err.clone());
                 self.status_message = Some((err, true));
             }
             Message::EndpointsLoaded(endpoints) => {
@@ -3151,6 +3203,7 @@ impl AppState {
             }
             Message::CronJobError(err) => {
                 self.cron_loading = false;
+                self.push_alert(AlertSeverity::Error, "cron", err.clone());
                 self.status_message = Some((err, true));
             }
 
