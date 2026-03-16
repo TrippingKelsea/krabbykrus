@@ -1,11 +1,11 @@
 //! Configuration management commands
 
+use crate::{load_config, ConfigCommands};
 use anyhow::Result;
-use rockbot_core::Config;
 use rockbot_core::config::*;
+use rockbot_core::Config;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::{ConfigCommands, load_config};
 
 /// Run configuration commands
 pub async fn run(command: &ConfigCommands, config_path: &PathBuf) -> Result<()> {
@@ -21,10 +21,10 @@ pub async fn run(command: &ConfigCommands, config_path: &PathBuf) -> Result<()> 
 /// Show current configuration
 async fn show_config(config_path: &PathBuf) -> Result<()> {
     let config = load_config(config_path).await?;
-    
+
     let toml_string = toml::to_string_pretty(&config)?;
     println!("{toml_string}");
-    
+
     Ok(())
 }
 
@@ -33,7 +33,10 @@ async fn validate_config(config_path: &PathBuf) -> Result<()> {
     match load_config(config_path).await {
         Ok(config) => {
             println!("✅ Configuration is valid");
-            println!("   Gateway: {}:{}", config.gateway.bind_host, config.gateway.port);
+            println!(
+                "   Gateway: {}:{}",
+                config.gateway.bind_host, config.gateway.port
+            );
             println!("   Agents: {} configured", config.agents.list.len());
             println!("   Tools: {} profile", config.tools.profile);
             println!("   Security: {} sandbox", config.security.sandbox.mode);
@@ -43,7 +46,7 @@ async fn validate_config(config_path: &PathBuf) -> Result<()> {
             std::process::exit(1);
         }
     }
-    
+
     Ok(())
 }
 
@@ -57,7 +60,8 @@ async fn init_config(output_path: &PathBuf, force: bool) -> Result<()> {
     }
 
     // Create parent directory if it doesn't exist
-    let config_dir = output_path.parent()
+    let config_dir = output_path
+        .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
     tokio::fs::create_dir_all(config_dir).await?;
 
@@ -73,8 +77,8 @@ async fn init_config(output_path: &PathBuf, force: bool) -> Result<()> {
 
     // Create default configuration with TLS paths
     let mut default_config = create_default_config();
-    default_config.gateway.tls_cert = Some(cert_path);
-    default_config.gateway.tls_key = Some(key_path);
+    default_config.gateway.pki.tls_cert = Some(cert_path);
+    default_config.gateway.pki.tls_key = Some(key_path);
 
     // Write configuration
     let toml_string = toml::to_string_pretty(&default_config)?;
@@ -95,12 +99,7 @@ fn create_default_config() -> Config {
             max_connections: 1000,
             request_timeout: 30,
             require_api_key: None, // Auto-detect: false for localhost, true otherwise
-            tls_cert: None,
-            tls_key: None,
-            tls_ca: None,
-            require_client_cert: false,
-            pki_dir: None,
-            enrollment_psk: None,
+            pki: PkiConfig::default(),
         },
         agents: AgentConfig {
             defaults: AgentDefaults {
@@ -112,31 +111,29 @@ fn create_default_config() -> Config {
                 heartbeat_interval: "5m".to_string(),
                 max_context_tokens: 128000,
             },
-            list: vec![
-                AgentInstance {
-                    id: "main".to_string(),
-                    workspace: None,
-                    model: None,
-                    max_tool_calls: None,
-                    temperature: Some(0.3),
-                    max_tokens: Some(16000),
-                    parent_id: None,
-                    system_prompt: None,
-                    enabled: true,
-                    mcp_servers: HashMap::new(),
-                    config: HashMap::new(),
-                    max_context_tokens: 128000,
-                    guardrails: Vec::new(),
-                    reflection_enabled: false,
-                    breakpoint_tools: Vec::new(),
-                    planning_mode: "never".to_string(),
-                    expose_as_tool: None,
-                    episodic_memory: false,
-                    workflow: None,
-                    llm_timeout_secs: 45,
-                    tool_timeout_secs: 120,
-                },
-            ],
+            list: vec![AgentInstance {
+                id: "main".to_string(),
+                workspace: None,
+                model: None,
+                max_tool_calls: None,
+                temperature: Some(0.3),
+                max_tokens: Some(16000),
+                parent_id: None,
+                system_prompt: None,
+                enabled: true,
+                mcp_servers: HashMap::new(),
+                config: HashMap::new(),
+                max_context_tokens: 128000,
+                guardrails: Vec::new(),
+                reflection_enabled: false,
+                breakpoint_tools: Vec::new(),
+                planning_mode: "never".to_string(),
+                expose_as_tool: None,
+                episodic_memory: false,
+                workflow: None,
+                llm_timeout_secs: 45,
+                tool_timeout_secs: 120,
+            }],
         },
         tools: ToolConfig {
             profile: "standard".to_string(),

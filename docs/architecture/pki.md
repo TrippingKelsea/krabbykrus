@@ -297,10 +297,78 @@ rockbot gateway run
 rockbot tui
 ```
 
+## Shared PKI Configuration
+
+TLS/PKI settings are defined in a shared `PkiConfig` struct, reusable by
+gateway, client, and agent consumers:
+
+```toml
+# Gateway: PkiConfig fields live at the [gateway] level (serde flatten)
+[gateway]
+tls_cert = "/path/to/cert.pem"
+tls_key  = "/path/to/key.pem"
+tls_ca   = "/path/to/ca.crt"
+require_client_cert = true
+pki_dir  = "/path/to/pki"
+enrollment_psk = "secret"
+```
+
+The `PkiConfig` struct is used as `gateway.pki` in the Rust config, but
+flattened into the `[gateway]` TOML section for backward compatibility.
+Client and agent consumers can reference the same struct for outbound mTLS
+identity configuration.
+
+## Certificate Extensions (Nebula-inspired)
+
+Inspired by [Nebula](https://github.com/slackhq/nebula), RockBot embeds
+authorization metadata directly in certificates using custom x.509 v3
+extensions under a private OID arc:
+
+```
+1.3.6.1.4.1.59584.1.1  — Roles  (SEQUENCE OF UTF8String)
+1.3.6.1.4.1.59584.1.2  — Groups (SEQUENCE OF UTF8String)
+```
+
+Extensions are DER-encoded and marked **non-critical** so that TLS libraries
+that don't understand them still accept the certificate for transport auth.
+
+### Usage
+
+```rust
+use rockbot_pki::{PkiManager, CertRole};
+
+let mut mgr = PkiManager::new("/tmp/pki".into())?;
+mgr.init_ca(3650)?;
+
+// Issue a cert with roles and groups baked in
+let info = mgr.generate_client(
+    "deploy-agent", CertRole::Agent,
+    &["10.0.0.5".to_string()], 365,
+    &["admin".to_string(), "deploy".to_string()],      // roles
+    &["engineering".to_string(), "us-west-2".to_string()], // groups
+)?;
+
+// Later, parse extensions from a presented cert
+let der = std::fs::read(info.cert_path)?;
+let exts = rockbot_pki::parse_extensions(&der)?;
+assert_eq!(exts.roles, vec!["admin", "deploy"]);
+assert_eq!(exts.groups, vec!["engineering", "us-west-2"]);
+```
+
+The certificate itself becomes the single source of truth for identity and
+authorization — no external directory lookups at connection time.
+
+## Vault Replication
+
+For multi-node deployments, the PKI vault (index, CRL, credentials) can be
+replicated over the existing Noise Protocol links. See
+[vault-replication.md](vault-replication.md) for the full design.
+
 ## Future Work
 
 - **Hardware key backends** — PKCS#11 (HSM), PIV (YubiKey), cloud KMS
-- **Client-side cert loading** — TUI/agent load client cert from config for outbound TLS
+- **Client-side cert loading** — TUI/agent load client cert from `PkiConfig` for outbound TLS
 - **OCSP stapling** — online certificate status protocol as alternative to CRL
 - **Certificate transparency** — append-only cert log for audit
 - **Automatic rotation** — cron-based cert renewal before expiry
+- **Vault replication** — PKI state sync over Noise protocol (see design doc)

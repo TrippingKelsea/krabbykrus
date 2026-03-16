@@ -149,7 +149,10 @@ impl PkiManager {
 
     /// Load the CA key handle.
     pub fn ca_key_handle(&self) -> anyhow::Result<KeyHandle> {
-        let key_path = self.pki_dir.join(KEYS_DIR).join(format!("{CA_KEY_LABEL}.key"));
+        let key_path = self
+            .pki_dir
+            .join(KEYS_DIR)
+            .join(format!("{CA_KEY_LABEL}.key"));
         self.backend.load(&key_path)
     }
 
@@ -158,12 +161,17 @@ impl PkiManager {
     // -------------------------------------------------------------------------
 
     /// Generate a new client certificate signed by the CA.
+    ///
+    /// `roles` and `groups` are embedded as custom x.509 extensions for
+    /// certificate-based authorization (Nebula-inspired).
     pub fn generate_client(
         &mut self,
         name: &str,
         role: CertRole,
         sans: &[String],
         days: u32,
+        roles: &[String],
+        groups: &[String],
     ) -> anyhow::Result<ClientCertInfo> {
         let ca_pem = self.ca_cert_pem()?;
         let ca_key = self.ca_key_handle()?;
@@ -171,8 +179,18 @@ impl PkiManager {
         let serial = self.index.next_serial();
         let client_key = self.backend.generate(name)?;
 
-        let (cert_pem, entry) =
-            ca::generate_client_cert(&client_key, &ca_pem, &ca_key, name, role, sans, days, serial)?;
+        let (cert_pem, entry) = ca::generate_client_cert(
+            &client_key,
+            &ca_pem,
+            &ca_key,
+            name,
+            role,
+            sans,
+            days,
+            serial,
+            roles,
+            groups,
+        )?;
 
         // Save cert to certs/<name>.crt
         let cert_path = self.pki_dir.join(CERTS_DIR).join(format!("{name}.crt"));
@@ -215,18 +233,22 @@ impl PkiManager {
     }
 
     /// Rotate a client certificate: revoke the old one, issue a fresh one.
+    ///
+    /// Preserves the existing role, roles, and groups from the previous certificate.
     pub fn rotate_client(
         &mut self,
         name: &str,
         sans: &[String],
         days: u32,
     ) -> anyhow::Result<ClientCertInfo> {
-        // Find the existing role before revoking
-        let role = self
+        // Find the existing entry before revoking (preserve role, roles, groups)
+        let existing = self
             .index
             .find_by_name(name)
-            .ok_or_else(|| anyhow::anyhow!("Certificate '{name}' not found"))?
-            .role;
+            .ok_or_else(|| anyhow::anyhow!("Certificate '{name}' not found"))?;
+        let role = existing.role;
+        let roles = existing.roles.clone();
+        let groups = existing.groups.clone();
 
         self.revoke_client(name)?;
 
@@ -236,24 +258,30 @@ impl PkiManager {
             fs::remove_file(&old_key)?;
         }
 
-        self.generate_client(name, role, sans, days)
+        self.generate_client(name, role, sans, days, &roles, &groups)
     }
 
     /// Sign an externally-provided CSR with the CA.
     ///
     /// Returns the signed certificate as a PEM string.
+    /// `roles` and `groups` are recorded in the index (and embedded in the cert
+    /// when the signing path supports extension injection).
     pub fn sign_csr(
         &mut self,
         csr_pem: &str,
         name: &str,
         role: CertRole,
         days: u32,
+        roles: &[String],
+        groups: &[String],
     ) -> anyhow::Result<String> {
         let ca_pem = self.ca_cert_pem()?;
         let ca_key = self.ca_key_handle()?;
         let serial = self.index.next_serial();
 
-        let (cert_pem, entry) = ca::sign_csr(csr_pem, &ca_pem, &ca_key, name, role, days, serial)?;
+        let (cert_pem, entry) = ca::sign_csr(
+            csr_pem, &ca_pem, &ca_key, name, role, days, serial, roles, groups,
+        )?;
 
         self.index.add_entry(entry);
         self.save_index()?;
@@ -341,7 +369,7 @@ impl PkiManager {
 }
 
 /// Decode the first PEM block in `pem_str` to raw DER bytes.
-fn pem_to_der(pem_str: &str) -> anyhow::Result<Vec<u8>> {
+pub fn pem_to_der(pem_str: &str) -> anyhow::Result<Vec<u8>> {
     let mut cursor = std::io::Cursor::new(pem_str.as_bytes());
     let item = rustls_pemfile::read_one(&mut cursor)?
         .ok_or_else(|| anyhow::anyhow!("No PEM block found"))?;
@@ -357,17 +385,11 @@ fn parse_cert_validity(pem_str: &str) -> anyhow::Result<(DateTime<Utc>, DateTime
     let (_, cert) = x509_parser::parse_x509_certificate(&der)
         .map_err(|e| anyhow::anyhow!("Failed to parse certificate: {e}"))?;
 
-    let not_before = chrono::DateTime::from_timestamp(
-        cert.validity().not_before.timestamp(),
-        0,
-    )
-    .unwrap_or_default();
+    let not_before = chrono::DateTime::from_timestamp(cert.validity().not_before.timestamp(), 0)
+        .unwrap_or_default();
 
-    let not_after = chrono::DateTime::from_timestamp(
-        cert.validity().not_after.timestamp(),
-        0,
-    )
-    .unwrap_or_default();
+    let not_after = chrono::DateTime::from_timestamp(cert.validity().not_after.timestamp(), 0)
+        .unwrap_or_default();
 
     Ok((not_before, not_after))
 }
@@ -394,10 +416,10 @@ mod tests {
 
         // Generate two clients
         let alice = mgr
-            .generate_client("alice", CertRole::Agent, &[], 365)
+            .generate_client("alice", CertRole::Agent, &[], 365, &[], &[])
             .unwrap();
         let _bob = mgr
-            .generate_client("bob", CertRole::Tui, &[], 365)
+            .generate_client("bob", CertRole::Tui, &[], 365, &[], &[])
             .unwrap();
 
         assert!(alice.cert_path.exists());
@@ -442,16 +464,26 @@ mod tests {
         let mut mgr = PkiManager::new(dir.path().to_path_buf()).unwrap();
         mgr.init_ca(3650).unwrap();
 
-        mgr.generate_client("svc", CertRole::Agent, &[], 365).unwrap();
+        mgr.generate_client(
+            "svc",
+            CertRole::Agent,
+            &[],
+            365,
+            &["operator".to_string()],
+            &["team-a".to_string()],
+        )
+        .unwrap();
         let old_serial = mgr.client_info("svc").unwrap().serial;
 
         mgr.rotate_client("svc", &[], 365).unwrap();
 
         let all_clients = mgr.list_clients();
-        let svc_entries: Vec<_> = all_clients.iter()
-            .filter(|e| e.name == "svc")
-            .collect();
-        assert_eq!(svc_entries.len(), 2, "Should have old (revoked) + new entry");
+        let svc_entries: Vec<_> = all_clients.iter().filter(|e| e.name == "svc").collect();
+        assert_eq!(
+            svc_entries.len(),
+            2,
+            "Should have old (revoked) + new entry"
+        );
 
         // The new entry has the higher serial number
         let new_entry = svc_entries.iter().max_by_key(|e| e.serial).unwrap();
@@ -477,7 +509,7 @@ mod tests {
         let csr_pem = csr.pem().unwrap();
 
         let cert_pem = mgr
-            .sign_csr(&csr_pem, "external-svc", CertRole::Agent, 365)
+            .sign_csr(&csr_pem, "external-svc", CertRole::Agent, 365, &[], &[])
             .unwrap();
         assert!(cert_pem.contains("BEGIN CERTIFICATE"));
         assert_eq!(mgr.list_clients().len(), 1);
@@ -489,7 +521,9 @@ mod tests {
         let mut mgr = PkiManager::new(dir.path().to_path_buf()).unwrap();
         mgr.init_ca(3650).unwrap();
 
-        let token = mgr.create_enrollment(CertRole::Agent, Some(2), None).unwrap();
+        let token = mgr
+            .create_enrollment(CertRole::Agent, Some(2), None)
+            .unwrap();
         assert!(!token.is_empty());
 
         // First use

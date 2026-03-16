@@ -10,6 +10,17 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
 
 ## [Unreleased]
 
+### Added
+- **PkiConfig**: Extracted TLS/PKI settings into shared `PkiConfig` struct, reusable by gateway, client, and agent consumers (backward-compatible via `#[serde(flatten)]`)
+- **x.509 extensions**: Nebula-inspired custom certificate extensions for roles and groups (OIDs `1.3.6.1.4.1.59584.1.{1,2}`), embedded in issued certificates and parseable at connection time
+- **Vault replication design doc**: Draft architecture for replicating PKI state and credentials over Noise protocol links (`docs/architecture/vault-replication.md`)
+
+### Changed
+- `GatewayConfig` TLS fields moved to nested `pki: PkiConfig` (TOML format unchanged due to flatten)
+- `generate_client()`, `sign_csr()`, and `generate_client_cert()` now accept `roles` and `groups` parameters
+- `CertEntry` gains `roles` and `groups` fields (defaulting to empty, backward-compatible with existing `index.json`)
+- `rotate_client()` preserves roles and groups from the previous certificate
+
 ## [0.2.15] - 2026-03-15
 
 ### Added

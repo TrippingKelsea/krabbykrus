@@ -10,7 +10,8 @@
 
 - [Overview](architecture/overview.md) — High-level architecture and data flow
 - [Crate Structure](architecture/crates.md) — Workspace layout, dependency graph, feature flags
-- [PKI and mTLS](architecture/pki.md) — Certificate authority, mutual TLS, enrollment
+- [PKI and mTLS](architecture/pki.md) — Certificate authority, mutual TLS, enrollment, x.509 extensions
+- [Vault Replication](architecture/vault-replication.md) — PKI/credential sync over Noise protocol (draft)
 - [Security Model](architecture/security.md) — Credential flow, capabilities, trust boundaries
 
 ## Reference

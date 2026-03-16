@@ -37,6 +37,42 @@ pub struct Config {
     pub overseer: Option<serde_json::Value>,
 }
 
+/// PKI and TLS configuration shared across gateway, client, and agent consumers.
+///
+/// When nested inside `[gateway]` it configures the server-side TLS listener.
+/// When nested inside a client or agent section it configures outbound mTLS identity.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PkiConfig {
+    /// Path to TLS certificate file (PEM) — server cert for gateway, client cert for agents/TUI.
+    #[serde(default)]
+    pub tls_cert: Option<std::path::PathBuf>,
+    /// Path to TLS private key file (PEM).
+    #[serde(default)]
+    pub tls_key: Option<std::path::PathBuf>,
+    /// Path to CA certificate for peer verification (enables mTLS).
+    #[serde(default)]
+    pub tls_ca: Option<std::path::PathBuf>,
+    /// Require valid client certificate (mTLS) — only meaningful on the gateway/server side.
+    /// When false + tls_ca is set: optional client auth (accepts but doesn't require).
+    /// When true + tls_ca is set: mandatory mTLS.
+    #[serde(default)]
+    pub require_client_cert: bool,
+    /// Path to the PKI directory (default: ~/.config/rockbot/pki/).
+    #[serde(default)]
+    pub pki_dir: Option<std::path::PathBuf>,
+    /// Pre-shared key for CSR enrollment endpoint.
+    /// If set, enables POST /api/cert/sign with PSK auth.
+    #[serde(default)]
+    pub enrollment_psk: Option<String>,
+}
+
+impl PkiConfig {
+    /// Check if mTLS client verification is configured.
+    pub fn has_mtls(&self) -> bool {
+        self.tls_ca.is_some()
+    }
+}
+
 /// Gateway server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
@@ -55,27 +91,9 @@ pub struct GatewayConfig {
     /// Require API key for programmatic access (default: false for localhost, true otherwise)
     #[serde(default)]
     pub require_api_key: Option<bool>,
-    /// Path to TLS certificate file (PEM)
-    #[serde(default)]
-    pub tls_cert: Option<std::path::PathBuf>,
-    /// Path to TLS private key file (PEM)
-    #[serde(default)]
-    pub tls_key: Option<std::path::PathBuf>,
-    /// Path to CA certificate for client verification (enables mTLS)
-    #[serde(default)]
-    pub tls_ca: Option<std::path::PathBuf>,
-    /// Require valid client certificate (mTLS).
-    /// When false + tls_ca is set: optional client auth (accepts but doesn't require).
-    /// When true + tls_ca is set: mandatory mTLS.
-    #[serde(default)]
-    pub require_client_cert: bool,
-    /// Path to the PKI directory (default: ~/.config/rockbot/pki/)
-    #[serde(default)]
-    pub pki_dir: Option<std::path::PathBuf>,
-    /// Pre-shared key for CSR enrollment endpoint.
-    /// If set, enables POST /api/cert/sign with PSK auth.
-    #[serde(default)]
-    pub enrollment_psk: Option<String>,
+    /// PKI / TLS settings for the gateway listener and mTLS.
+    #[serde(default, flatten)]
+    pub pki: PkiConfig,
 }
 
 impl GatewayConfig {
@@ -89,9 +107,9 @@ impl GatewayConfig {
         self.require_api_key.unwrap_or_else(|| !self.is_localhost())
     }
 
-    /// Check if mTLS client verification is configured
+    /// Check if mTLS client verification is configured (delegates to `pki`).
     pub fn has_mtls(&self) -> bool {
-        self.tls_ca.is_some()
+        self.pki.has_mtls()
     }
 }
 
@@ -274,8 +292,7 @@ impl Default for CredentialsConfig {
 }
 
 /// LLM provider configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProvidersConfig {
     /// Anthropic provider settings
     #[serde(default)]
@@ -490,11 +507,12 @@ impl Config {
     /// Load configuration from a TOML file
     pub async fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
-        let content = tokio::fs::read_to_string(path).await.map_err(|_| {
-            ConfigError::FileNotFound {
-                path: path.to_path_buf(),
-            }
-        })?;
+        let content =
+            tokio::fs::read_to_string(path)
+                .await
+                .map_err(|_| ConfigError::FileNotFound {
+                    path: path.to_path_buf(),
+                })?;
 
         Self::from_toml(&content)
     }
@@ -502,11 +520,10 @@ impl Config {
     /// Parse configuration from TOML string
     pub fn from_toml(content: &str) -> Result<Self> {
         let expanded_content = expand_env_vars(content)?;
-        let config: Config = toml::from_str(&expanded_content).map_err(|e| {
-            ConfigError::Invalid {
+        let config: Config =
+            toml::from_str(&expanded_content).map_err(|e| ConfigError::Invalid {
                 message: e.to_string(),
-            }
-        })?;
+            })?;
         config.validate()?;
         Ok(config)
     }
@@ -555,10 +572,12 @@ impl Config {
         let path_for_closure = path.clone();
         let (tx, rx) = mpsc::channel(16);
 
-        let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-            match res {
+        let mut watcher =
+            notify::recommended_watcher(move |res: notify::Result<Event>| match res {
                 Ok(event) => {
-                    if matches!(event.kind, EventKind::Modify(_)) && event.paths.contains(&path_for_closure) {
+                    if matches!(event.kind, EventKind::Modify(_))
+                        && event.paths.contains(&path_for_closure)
+                    {
                         debug!("Config file changed, reloading...");
 
                         match std::fs::read_to_string(&path_for_closure) {
@@ -582,8 +601,7 @@ impl Config {
                 Err(e) => {
                     warn!("Config watcher error: {}", e);
                 }
-            }
-        })?;
+            })?;
 
         watcher.watch(&path, RecursiveMode::NonRecursive)?;
 
@@ -834,12 +852,7 @@ mod tests {
                 max_connections: 1000,
                 request_timeout: 30,
                 require_api_key: None,
-                tls_cert: None,
-                tls_key: None,
-                tls_ca: None,
-                require_client_cert: false,
-                pki_dir: None,
-                enrollment_psk: None,
+                pki: PkiConfig::default(),
             },
             agents: AgentConfig {
                 defaults: AgentDefaults {

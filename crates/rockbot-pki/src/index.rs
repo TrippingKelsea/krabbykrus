@@ -83,6 +83,13 @@ pub struct CertEntry {
     pub subject: String,
     /// Subject alternative names included in the certificate.
     pub sans: Vec<String>,
+    /// Authorization roles embedded in the certificate via x.509 extension.
+    /// Nebula-inspired: the cert is the single source of truth for authorization.
+    #[serde(default)]
+    pub roles: Vec<String>,
+    /// Group memberships embedded in the certificate via x.509 extension.
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 /// A one-time (or limited-use) enrollment token used by agents/TUIs to obtain a certificate
@@ -175,7 +182,9 @@ impl PkiIndex {
 
     /// Iterate over all active (non-revoked, non-expired) entries.
     pub fn active_entries(&self) -> impl Iterator<Item = &CertEntry> {
-        self.entries.iter().filter(|e| e.status == CertStatus::Active)
+        self.entries
+            .iter()
+            .filter(|e| e.status == CertStatus::Active)
     }
 
     /// Append an enrollment token.
@@ -255,6 +264,8 @@ mod tests {
             fingerprint_sha256: "AA:BB".to_string(),
             subject: format!("CN={name}"),
             sans: vec![],
+            roles: vec![],
+            groups: vec![],
         }
     }
 
@@ -318,15 +329,19 @@ mod tests {
         idx.add_enrollment(token);
 
         // First use should succeed
-        idx.validate_enrollment("secret-abc", CertRole::Agent).unwrap();
+        idx.validate_enrollment("secret-abc", CertRole::Agent)
+            .unwrap();
         assert_eq!(idx.enrollments[0].remaining_uses, Some(1));
 
         // Second use should consume and remove the token
-        idx.validate_enrollment("secret-abc", CertRole::Agent).unwrap();
+        idx.validate_enrollment("secret-abc", CertRole::Agent)
+            .unwrap();
         assert!(idx.enrollments.is_empty());
 
         // Third use should fail
-        assert!(idx.validate_enrollment("secret-abc", CertRole::Agent).is_err());
+        assert!(idx
+            .validate_enrollment("secret-abc", CertRole::Agent)
+            .is_err());
     }
 
     #[test]

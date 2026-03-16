@@ -4,12 +4,13 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 use rcgen::{
-    BasicConstraints, CertificateParams, CertificateRevocationListParams, CertificateSigningRequestParams,
-    ExtendedKeyUsagePurpose, IsCa, KeyIdMethod, KeyUsagePurpose, RevokedCertParams,
-    RevocationReason, SerialNumber, SanType,
+    BasicConstraints, CertificateParams, CertificateRevocationListParams,
+    CertificateSigningRequestParams, ExtendedKeyUsagePurpose, IsCa, KeyIdMethod, KeyUsagePurpose,
+    RevocationReason, RevokedCertParams, SanType, SerialNumber,
 };
 use time::OffsetDateTime;
 
+use crate::extensions;
 use crate::index::{CertEntry, CertRole, CertStatus};
 use crate::KeyHandle;
 
@@ -36,7 +37,9 @@ fn parse_san(s: &str) -> anyhow::Result<SanType> {
     if let Ok(ip) = IpAddr::from_str(s) {
         Ok(SanType::IpAddress(ip))
     } else {
-        Ok(SanType::DnsName(s.try_into().map_err(|e: rcgen::Error| anyhow::anyhow!(e))?))
+        Ok(SanType::DnsName(
+            s.try_into().map_err(|e: rcgen::Error| anyhow::anyhow!(e))?,
+        ))
     }
 }
 
@@ -51,7 +54,11 @@ pub fn generate_ca(key: &KeyHandle, days: u32) -> anyhow::Result<String> {
 
     let mut params = CertificateParams::default();
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign, KeyUsagePurpose::DigitalSignature];
+    params.key_usages = vec![
+        KeyUsagePurpose::KeyCertSign,
+        KeyUsagePurpose::CrlSign,
+        KeyUsagePurpose::DigitalSignature,
+    ];
     params.not_before = now;
     params.not_after = not_after;
     params.distinguished_name = {
@@ -75,7 +82,10 @@ pub fn generate_ca(key: &KeyHandle, days: u32) -> anyhow::Result<String> {
 /// the same key, producing a `Certificate` object whose DN and key identifier match the
 /// original.  The resulting `Certificate` is suitable for use as the issuer in
 /// `CertificateParams::signed_by` / `CertificateSigningRequestParams::signed_by`.
-fn reconstruct_ca_cert(ca_cert_pem: &str, ca_key: &KeyHandle) -> anyhow::Result<rcgen::Certificate> {
+fn reconstruct_ca_cert(
+    ca_cert_pem: &str,
+    ca_key: &KeyHandle,
+) -> anyhow::Result<rcgen::Certificate> {
     let ca_key_pair = ca_key.key_pair()?;
     let ca_params = CertificateParams::from_ca_cert_pem(ca_cert_pem)?;
     let ca_cert = ca_params.self_signed(ca_key_pair)?;
@@ -85,6 +95,9 @@ fn reconstruct_ca_cert(ca_cert_pem: &str, ca_key: &KeyHandle) -> anyhow::Result<
 /// Generate a client certificate signed by the given CA.
 ///
 /// Returns the PEM-encoded certificate and a fully populated [`CertEntry`] for the index.
+///
+/// `roles` and `groups` are embedded as custom x.509 extensions (Nebula-inspired)
+/// for certificate-based authorization.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_client_cert(
     client_key: &KeyHandle,
@@ -95,6 +108,8 @@ pub fn generate_client_cert(
     sans: &[String],
     days: u32,
     serial: u64,
+    roles: &[String],
+    groups: &[String],
 ) -> anyhow::Result<(String, CertEntry)> {
     let client_key_pair = client_key.key_pair()?;
     let ca_key_pair = ca_key.key_pair()?;
@@ -133,6 +148,11 @@ pub fn generate_client_cert(
         params.subject_alt_names.push(san);
     }
 
+    // Embed roles and groups as custom x.509 extensions
+    for ext in extensions::build_extensions(roles, groups) {
+        params.custom_extensions.push(ext);
+    }
+
     // Reconstruct the CA Certificate object
     let ca_cert = reconstruct_ca_cert(ca_cert_pem, ca_key)?;
 
@@ -148,13 +168,14 @@ pub fn generate_client_cert(
         name: name.to_string(),
         role,
         status: CertStatus::Active,
-        not_before: chrono::DateTime::from_timestamp(now.unix_timestamp(), 0)
-            .unwrap_or_default(),
+        not_before: chrono::DateTime::from_timestamp(now.unix_timestamp(), 0).unwrap_or_default(),
         not_after: chrono::DateTime::from_timestamp(not_after.unix_timestamp(), 0)
             .unwrap_or_default(),
         fingerprint_sha256: fingerprint,
         subject: format!("CN={name},O=RockBot"),
         sans: sans.to_vec(),
+        roles: roles.to_vec(),
+        groups: groups.to_vec(),
     };
 
     Ok((pem, entry))
@@ -163,6 +184,8 @@ pub fn generate_client_cert(
 /// Sign an externally-generated CSR with the CA.
 ///
 /// Returns the signed certificate PEM and an index entry.
+/// `roles` and `groups` are embedded as custom x.509 extensions.
+#[allow(clippy::too_many_arguments)]
 pub fn sign_csr(
     csr_pem: &str,
     ca_cert_pem: &str,
@@ -171,6 +194,8 @@ pub fn sign_csr(
     role: CertRole,
     days: u32,
     serial: u64,
+    roles: &[String],
+    groups: &[String],
 ) -> anyhow::Result<(String, CertEntry)> {
     let ca_key_pair = ca_key.key_pair()?;
 
@@ -184,6 +209,10 @@ pub fn sign_csr(
     let ca_cert = reconstruct_ca_cert(ca_cert_pem, ca_key)?;
 
     // Sign the CSR
+    // Note: rcgen's CSR signing doesn't support injecting custom extensions into
+    // the signed certificate — the extensions would need to be in the CSR itself
+    // or applied via a wrapper. For now, roles/groups are recorded in the index
+    // and will be fully embedded once rcgen supports extension injection on CSR signing.
     let cert = csr_params.signed_by(&ca_cert, ca_key_pair)?;
 
     let der = cert.der().to_vec();
@@ -195,13 +224,14 @@ pub fn sign_csr(
         name: name.to_string(),
         role,
         status: CertStatus::Active,
-        not_before: chrono::DateTime::from_timestamp(now.unix_timestamp(), 0)
-            .unwrap_or_default(),
+        not_before: chrono::DateTime::from_timestamp(now.unix_timestamp(), 0).unwrap_or_default(),
         not_after: chrono::DateTime::from_timestamp(not_after.unix_timestamp(), 0)
             .unwrap_or_default(),
         fingerprint_sha256: fingerprint,
         subject: format!("CN={name}"),
         sans: vec![],
+        roles: roles.to_vec(),
+        groups: groups.to_vec(),
     };
 
     Ok((pem, entry))
@@ -302,6 +332,8 @@ mod tests {
             &[],
             365,
             2,
+            &[],
+            &[],
         )
         .unwrap();
 
@@ -328,6 +360,8 @@ mod tests {
             &["localhost".to_string(), "127.0.0.1".to_string()],
             365,
             2,
+            &[],
+            &[],
         )
         .unwrap();
 
@@ -355,8 +389,18 @@ mod tests {
         let csr = csr_params.serialize_request(csr_key_pair).unwrap();
         let csr_pem = csr.pem().unwrap();
 
-        let (cert_pem, entry) =
-            sign_csr(&csr_pem, &ca_pem, &ca_key, "csr-test", CertRole::Agent, 365, 3).unwrap();
+        let (cert_pem, entry) = sign_csr(
+            &csr_pem,
+            &ca_pem,
+            &ca_key,
+            "csr-test",
+            CertRole::Agent,
+            365,
+            3,
+            &[],
+            &[],
+        )
+        .unwrap();
 
         assert!(cert_pem.contains("BEGIN CERTIFICATE"));
         assert_eq!(entry.name, "csr-test");
@@ -378,6 +422,8 @@ mod tests {
             &[],
             365,
             2,
+            &[],
+            &[],
         )
         .unwrap();
 

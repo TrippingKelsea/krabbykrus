@@ -4,9 +4,7 @@ use anyhow::{Context, Result};
 use rockbot_pki::{CertRole, KeyBackend, PkiManager};
 use std::path::{Path, PathBuf};
 
-use crate::{
-    CaCertCommands, CertCommands, ClientCertCommands, EnrollCommands, load_config,
-};
+use crate::{load_config, CaCertCommands, CertCommands, ClientCertCommands, EnrollCommands};
 
 /// Run certificate commands.
 pub async fn run(command: &CertCommands, config_path: &PathBuf) -> Result<()> {
@@ -35,15 +33,13 @@ pub async fn run(command: &CertCommands, config_path: &PathBuf) -> Result<()> {
 
 fn resolve_pki_dir(config_path: &Path) -> PathBuf {
     // Try reading config for pki_dir, fall back to default
-    let config_dir = config_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     config_dir.join("pki")
 }
 
 async fn resolve_pki_dir_from_config(config_path: &Path) -> Result<PathBuf> {
     if let Ok(config) = load_config(&config_path.to_path_buf()).await {
-        if let Some(dir) = &config.gateway.pki_dir {
+        if let Some(dir) = &config.gateway.pki.pki_dir {
             return Ok(expand_tilde(dir));
         }
     }
@@ -171,7 +167,7 @@ async fn run_client(command: &ClientCertCommands, config_path: &PathBuf) -> Resu
             let mut mgr = open_pki(dir)?;
             let role = parse_role(role)?;
 
-            let info = mgr.generate_client(name, role, san, *days)?;
+            let info = mgr.generate_client(name, role, san, *days, &[], &[])?;
             println!("Client certificate generated:");
             println!("  Name: {name}");
             println!("  Role: {role}");
@@ -256,7 +252,10 @@ async fn run_client(command: &ClientCertCommands, config_path: &PathBuf) -> Resu
                 let key_file = dir.join("keys").join(format!("{name}.key"));
                 for path in [&cert_file, &key_file] {
                     if path.exists() {
-                        let bak_name = format!("{}.bak.{ts}", path.file_name().unwrap_or_default().to_string_lossy());
+                        let bak_name = format!(
+                            "{}.bak.{ts}",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        );
                         let bak = path.with_file_name(bak_name);
                         std::fs::copy(path, &bak)?;
                         println!("Backed up: {}", bak.display());
@@ -293,7 +292,7 @@ async fn cmd_sign(
     let csr_pem = std::fs::read_to_string(csr_path)
         .with_context(|| format!("Failed to read CSR: {}", csr_path.display()))?;
 
-    let cert_pem = mgr.sign_csr(&csr_pem, name, role, days)?;
+    let cert_pem = mgr.sign_csr(&csr_pem, name, role, days, &[], &[])?;
 
     if let Some(out) = output {
         std::fs::write(out, &cert_pem)?;
@@ -334,26 +333,21 @@ async fn cmd_install(config_path: &Path, name: &str) -> Result<()> {
         .await
         .with_context(|| format!("Failed to read config: {}", config_path.display()))?;
 
-    let mut doc: toml_edit::DocumentMut = content
-        .parse()
-        .context("Failed to parse config as TOML")?;
+    let mut doc: toml_edit::DocumentMut =
+        content.parse().context("Failed to parse config as TOML")?;
 
     if doc.get("gateway").is_none() {
         doc["gateway"] = toml_edit::Item::Table(toml_edit::Table::new());
     }
 
-    doc["gateway"]["tls_cert"] =
-        toml_edit::value(cert_path.to_string_lossy().as_ref());
-    doc["gateway"]["tls_key"] =
-        toml_edit::value(key_path.to_string_lossy().as_ref());
+    doc["gateway"]["tls_cert"] = toml_edit::value(cert_path.to_string_lossy().as_ref());
+    doc["gateway"]["tls_key"] = toml_edit::value(key_path.to_string_lossy().as_ref());
 
     if ca_path.exists() {
-        doc["gateway"]["tls_ca"] =
-            toml_edit::value(ca_path.to_string_lossy().as_ref());
+        doc["gateway"]["tls_ca"] = toml_edit::value(ca_path.to_string_lossy().as_ref());
     }
 
-    doc["gateway"]["pki_dir"] =
-        toml_edit::value(dir.to_string_lossy().as_ref());
+    doc["gateway"]["pki_dir"] = toml_edit::value(dir.to_string_lossy().as_ref());
 
     // Set require_client_cert based on role
     if entry.role == CertRole::Gateway {
@@ -363,7 +357,10 @@ async fn cmd_install(config_path: &Path, name: &str) -> Result<()> {
 
     tokio::fs::write(config_path, doc.to_string()).await?;
 
-    println!("Installed certificate '{name}' (role: {}) into config:", entry.role);
+    println!(
+        "Installed certificate '{name}' (role: {}) into config:",
+        entry.role
+    );
     println!("  tls_cert: {}", cert_path.display());
     println!("  tls_key:  {}", key_path.display());
     if ca_path.exists() {
@@ -391,8 +388,7 @@ async fn cmd_verify(
     key: Option<&Path>,
     ca: Option<&Path>,
 ) -> Result<()> {
-    let (cert_path, key_path) =
-        resolve_cert_key_paths(cert, key, config_path).await?;
+    let (cert_path, key_path) = resolve_cert_key_paths(cert, key, config_path).await?;
 
     let cert_pem = tokio::fs::read(&cert_path)
         .await
@@ -447,20 +443,23 @@ async fn cmd_verify(
         }
 
         // Verify the leaf cert against the CA
-        let verifier = rustls::server::WebPkiClientVerifier::builder(
-            std::sync::Arc::new(root_store),
-        )
-        .build()
-        .context("Failed to build verifier")?;
+        let verifier =
+            rustls::server::WebPkiClientVerifier::builder(std::sync::Arc::new(root_store))
+                .build()
+                .context("Failed to build verifier")?;
 
         // Simple check: try to verify the end entity
-        println!("CA chain:    {} (loaded {} CA cert(s))", ca_path.display(), ca_certs.len());
+        println!(
+            "CA chain:    {} (loaded {} CA cert(s))",
+            ca_path.display(),
+            ca_certs.len()
+        );
         // The full verification happens at TLS handshake time;
         // here we just confirm the CA loaded successfully
         drop(verifier);
         println!("Chain:       OK (CA loaded, full verification at TLS handshake)");
     } else if let Ok(config) = load_config(&config_path.to_path_buf()).await {
-        if let Some(ca_cfg) = &config.gateway.tls_ca {
+        if let Some(ca_cfg) = &config.gateway.pki.tls_ca {
             println!(
                 "Hint: use --ca {} to verify chain against configured CA",
                 ca_cfg.display()
@@ -478,8 +477,7 @@ async fn cmd_verify(
     if x509_cert.validity().not_after < now {
         println!("Status:      EXPIRED");
     } else {
-        let remaining =
-            x509_cert.validity().not_after.timestamp() - now.timestamp();
+        let remaining = x509_cert.validity().not_after.timestamp() - now.timestamp();
         let days = remaining / 86400;
         println!("Expiry:      {days} days remaining");
     }
@@ -660,9 +658,7 @@ async fn run_enroll(command: &EnrollCommands, config_path: &PathBuf) -> Result<(
             psk,
             name,
             role,
-        } => {
-            cmd_enroll_submit(config_path, gateway, psk, name, role).await
-        }
+        } => cmd_enroll_submit(config_path, gateway, psk, name, role).await,
     }
 }
 
@@ -772,11 +768,11 @@ async fn resolve_cert_key_paths(
             let config = load_config(&config_path.to_path_buf()).await?;
             let c = cert
                 .map(|p| expand_tilde(p))
-                .or(config.gateway.tls_cert.map(|p| expand_tilde(&p)))
+                .or(config.gateway.pki.tls_cert.map(|p| expand_tilde(&p)))
                 .context("No --cert provided and no tls_cert in config")?;
             let k = key
                 .map(|p| expand_tilde(p))
-                .or(config.gateway.tls_key.map(|p| expand_tilde(&p)))
+                .or(config.gateway.pki.tls_key.map(|p| expand_tilde(&p)))
                 .context("No --key provided and no tls_key in config")?;
             Ok((c, k))
         }
@@ -822,8 +818,12 @@ pub async fn generate_self_signed_cert(
     let key_pair = KeyPair::generate()?;
     let mut params = CertificateParams::new(Vec::<String>::new())?;
     params.subject_alt_names = san_names;
-    params.distinguished_name.push(DnType::CommonName, "RockBot Gateway");
-    params.distinguished_name.push(DnType::OrganizationName, "RockBot");
+    params
+        .distinguished_name
+        .push(DnType::CommonName, "RockBot Gateway");
+    params
+        .distinguished_name
+        .push(DnType::OrganizationName, "RockBot");
 
     let now = time::OffsetDateTime::now_utc();
     params.not_before = now;
