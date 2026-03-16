@@ -10,6 +10,43 @@
 - Never amend published commits without explicit permission
 - Never force-push to `main`
 
+## Versioning and Tagging
+
+Every commit is automatically versioned and tagged:
+
+- **Pre-commit hook** bumps the patch version in `Cargo.toml` (`[workspace.package]`)
+- **Post-commit hook** creates a git tag `vX.Y.Z` matching the workspace version
+- Tags are created locally — push them with `git push --tags` when ready
+
+### Release Channels
+
+| Channel | Tag pattern | CI trigger | Artifact path | GitHub Release |
+|---------|-------------|------------|---------------|----------------|
+| `development` | `v0.2.16` (bare) | CI + build | `development/rockbot-v0.2.16-{target}` | none |
+| `preview` | `v0.2.16-preview` | CI + build + pre-release | `preview/rockbot-v0.2.16-{target}` | pre-release |
+| `release` | `v0.2.16-release` | CI + build + release | `release/rockbot-v0.2.16-{target}` | full release |
+
+### Promoting a version
+
+```bash
+# Every commit auto-tags as development (e.g. v0.2.16)
+git push --tags
+
+# Promote to preview
+git tag v0.2.16-preview
+git push origin v0.2.16-preview
+
+# Promote to release (must be on main)
+git tag v0.2.16-release
+git push origin v0.2.16-release
+```
+
+### Version bumps
+
+- Patch: automatic (every commit)
+- Minor: manually edit `Cargo.toml` `[workspace.package] version` before committing
+- Major: manually edit version before committing
+
 ## Documentation Standards
 
 - All new features must update relevant docs before committing

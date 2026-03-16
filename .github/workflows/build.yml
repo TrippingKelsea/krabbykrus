@@ -3,15 +3,46 @@ name: Build
 on:
   push:
     tags:
-      - "pv*"
       - "v*"
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Determine the release channel from the tag
+  resolve-channel:
+    name: Resolve channel
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+      version: ${{ steps.channel.outputs.version }}
+    steps:
+      - name: Parse tag
+        id: channel
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # Extract version (strip leading 'v')
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          # Determine channel from tag annotation or version pattern
+          # Pre-commit tags are development by default
+          # Override by pushing a tag with -development, -preview, or -release suffix
+          # Or by creating an annotated tag with the channel in the message
+          if [[ "$TAG" == *"-preview"* ]]; then
+            echo "channel=preview" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" == *"-release"* ]]; then
+            echo "channel=release" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" == *"-dev"* ]] || [[ "$TAG" == *"-development"* ]]; then
+            echo "channel=development" >> "$GITHUB_OUTPUT"
+          else
+            # Default: use git tag annotation if present, otherwise development
+            echo "channel=development" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build (${{ matrix.target }})
+    needs: resolve-channel
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -46,9 +77,23 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
+      - name: Package
+        shell: bash
+        run: |
+          CHANNEL="${{ needs.resolve-channel.outputs.channel }}"
+          VERSION="${{ needs.resolve-channel.outputs.version }}"
+          ARTIFACT_NAME="rockbot-v${VERSION}-${{ matrix.target }}.tar.gz"
+
+          cd target/${{ matrix.target }}/release
+          tar czf "../../../${ARTIFACT_NAME}" rockbot
+          cd ../../..
+
+          echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
+          echo "channel=${CHANNEL}" >> "$GITHUB_ENV"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rockbot-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/rockbot
+          name: ${{ env.channel }}/rockbot-v${{ needs.resolve-channel.outputs.version }}-${{ matrix.target }}
+          path: ${{ env.artifact_name }}
           if-no-files-found: error

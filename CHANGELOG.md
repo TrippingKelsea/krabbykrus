@@ -5,6 +5,31 @@ All notable changes to RockBot are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+Every commit is automatically tagged `vX.Y.Z` (patch auto-incremented).
+Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
+
+## [Unreleased]
+
+## [0.2.15] - 2026-03-15
+
+### Added
+- CHANGELOG.md (this file), CLAUDE.md with documentation and commit standards
+- Configuration reference (`docs/user-guide/configuration.md`)
+- Security model documentation (`docs/architecture/security.md`)
+- LICENSE file (MIT)
+- CI tag-based release channels (development / preview / release)
+- Post-commit hook for automatic `vX.Y.Z` git tagging
+- Preview workflow (`.github/workflows/preview.yml`)
+
+### Fixed
+- Broken README links: `configuration.md`, `security.md`, `LICENSE` now exist
+
+### Changed
+- CI/CD workflows use tag-based artifact paths (`{channel}/rockbot-vX.Y.Z-{target}`)
+- Release workflow triggers on `v*-release` tags only
+- Build artifacts named `rockbot-vX.Y.Z-{target}.tar.gz`
+- Updated CONTRIBUTING.md with versioning and release channel docs
+
 ## [0.2.14] - 2026-03-15
 
 ### Added

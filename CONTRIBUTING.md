@@ -147,6 +147,30 @@ mod tests {
 }
 ```
 
+## Versioning and Releases
+
+Every commit is automatically versioned:
+
+1. **Pre-commit hook** bumps the patch version in `Cargo.toml`
+2. **Post-commit hook** creates a git tag `vX.Y.Z`
+3. Push tags to trigger CI: `git push --tags`
+
+### Release Channels
+
+| Channel | Tag | What happens |
+|---------|-----|-------------|
+| Development | `v0.2.16` | CI runs, build artifacts uploaded |
+| Preview | `v0.2.16-preview` | CI + build + GitHub pre-release created |
+| Release | `v0.2.16-release` | CI + build + full GitHub release (main only) |
+
+To promote a version:
+
+```bash
+git tag v0.2.16-preview    # mark as preview
+git tag v0.2.16-release    # mark as release
+git push origin v0.2.16-preview v0.2.16-release
+```
+
 ## Pull Request Process
 
 1. **Title**: Use conventional commit format
