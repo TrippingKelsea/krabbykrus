@@ -15,7 +15,7 @@ path = "src/main.rs"
 default = ["conservative"]
 # Meta profiles
 conservative = ["bedrock", "telegram", "signal", "tools-credentials", "tools-mcp", "tools-markdown"]
-enhanced = ["conservative", "overseer", "doctor-ai", "vault-replication"]
+enhanced = ["conservative", "overseer", "doctor-ai", "butler", "vault-replication"]
 experimental = ["enhanced", "otel", "bedrock-deploy"]
 enshitify = ["discord"]
 # LLM providers
@@ -42,6 +42,8 @@ overseer = ["rockbot-cli/overseer", "rockbot-core/overseer"]
 remote-exec = ["rockbot-cli/remote-exec", "rockbot-core/remote-exec"]
 # Embedded doctor AI for config diagnostics
 doctor-ai = ["rockbot-cli/doctor-ai"]
+# Embedded butler companion agent
+butler = ["rockbot-cli/butler", "rockbot-core/butler"]
 # Vault replication (OpenRaft)
 vault-replication = ["rockbot-credentials/vault-replication"]
 # S3 CA distribution + Route53 DNS

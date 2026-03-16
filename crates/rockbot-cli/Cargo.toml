@@ -24,6 +24,8 @@ tools-markdown = ["rockbot-core/tools-markdown"]
 overseer = ["rockbot-core/overseer"]
 # Embedded doctor AI for config diagnostics
 doctor-ai = ["dep:rockbot-doctor"]
+# Embedded butler companion agent
+butler = ["dep:rockbot-butler", "rockbot-core/butler"]
 # Remote tool execution
 remote-exec = ["rockbot-core/remote-exec", "rockbot-client/remote-exec"]
 # S3 CA distribution + Route53 DNS
@@ -46,6 +48,8 @@ rockbot-llm = { path = "../rockbot-llm", default-features = false }
 rockbot-pki = { path = "../rockbot-pki" }
 rockbot-doctor = { path = "../rockbot-doctor", optional = true }
 rockbot-deploy = { path = "../rockbot-deploy", optional = true }
+rockbot-butler = { path = "../rockbot-butler", optional = true }
+rockbot-store = { path = "../rockbot-store" }
 
 uuid = { workspace = true }
 chrono = { workspace = true }

@@ -24,6 +24,8 @@ tools-markdown = ["rockbot-gateway/tools-markdown"]
 otel = ["rockbot-agent/otel", "rockbot-gateway/otel"]
 # Embedded overseer
 overseer = ["rockbot-gateway/overseer"]
+# Embedded butler companion agent
+butler = ["rockbot-gateway/butler"]
 # Remote tool execution over Noise Protocol
 remote-exec = ["rockbot-client/remote-exec", "rockbot-agent/remote-exec", "rockbot-gateway/remote-exec"]
 # S3 CA distribution + Route53 DNS
