@@ -4,6 +4,7 @@
 //! guardrails, hooks, trajectories, skills, and orchestration.
 
 pub mod agent;
+pub mod chat_commands;
 pub mod credential_bridge;
 pub mod error;
 pub mod guardrails;

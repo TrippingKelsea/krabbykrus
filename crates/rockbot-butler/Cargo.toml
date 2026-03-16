@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+rockbot-chat = { path = "../rockbot-chat" }
 rockbot-overseer = { path = "../rockbot-overseer" }
 rockbot-config = { path = "../rockbot-config" }
 serde = { workspace = true }

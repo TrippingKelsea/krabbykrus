@@ -14,6 +14,7 @@
 //! This crate is compiled in only when `doctor-ai` is enabled at the binary level.
 //! The `[doctor]` config section is silently ignored when the feature is off.
 
+pub mod chat_commands;
 pub mod diagnosis;
 pub mod learned;
 pub mod migration;

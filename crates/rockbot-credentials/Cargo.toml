@@ -13,6 +13,8 @@ vault-replication = ["rockbot-store/replication"]
 workspace = true
 
 [dependencies]
+rockbot-chat = { path = "../rockbot-chat" }
+
 # Age encryption
 age = { version = "0.10", features = ["armor"] }
 

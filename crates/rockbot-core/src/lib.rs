@@ -75,6 +75,7 @@ pub mod acp {
 pub mod cron {
     pub use rockbot_gateway::cron::*;
 }
+pub mod chat_commands;
 // slash_commands: pub(crate) in rockbot-gateway, not re-exported
 pub mod web_ui {
     pub use rockbot_webui::*;

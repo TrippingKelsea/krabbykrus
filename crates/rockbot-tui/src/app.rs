@@ -128,6 +128,22 @@ pub struct App {
     command_registry: rockbot_chat::ChatCommandRegistry,
 }
 
+/// Build the unified command registry from all crates.
+fn build_command_registry() -> rockbot_chat::ChatCommandRegistry {
+    let mut reg = rockbot_chat::ChatCommandRegistry::new();
+    // TUI-local commands: /exit, /help, /clear, /mode, /alerts
+    crate::chat_commands::register_chat_commands(&mut reg);
+    // Per-crate commands
+    rockbot_credentials::chat_commands::register_chat_commands(&mut reg);
+    // rockbot-core re-exports its own cron commands
+    rockbot_core::chat_commands::register_chat_commands(&mut reg);
+    #[cfg(feature = "doctor-ai")]
+    rockbot_doctor::chat_commands::register_chat_commands(&mut reg);
+    #[cfg(feature = "butler")]
+    rockbot_butler::chat_commands::register_chat_commands(&mut reg);
+    reg
+}
+
 impl App {
     pub fn new(config_path: PathBuf, vault_path: PathBuf, gateway_url: String) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -150,11 +166,7 @@ impl App {
             butler: None,
             #[cfg(feature = "butler")]
             butler_session: None,
-            command_registry: {
-                let mut reg = rockbot_chat::ChatCommandRegistry::new();
-                crate::chat_commands::register_chat_commands(&mut reg);
-                reg
-            },
+            command_registry: build_command_registry(),
         }
     }
 

@@ -2,6 +2,7 @@
 //!
 //! This is a leaf crate providing shared types used across the RockBot workspace.
 
+pub mod chat_commands;
 pub mod config;
 pub mod error;
 pub mod message;

@@ -12,6 +12,7 @@
 //! - `/butler mood` — ask Butler how it's feeling
 //! - `/butler help` — command listing
 
+pub mod chat_commands;
 pub mod commands;
 
 use rockbot_overseer::inference::{InferenceConfig, InferenceEngine};

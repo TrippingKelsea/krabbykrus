@@ -9,6 +9,7 @@ license = "MIT"
 workspace = true
 
 [dependencies]
+rockbot-chat = { path = "../rockbot-chat" }
 rockbot-client = { path = "../rockbot-client", optional = true }
 rockbot-config = { path = "../rockbot-config" }
 rockbot-tools-mcp = { path = "../rockbot-tools-mcp", optional = true }

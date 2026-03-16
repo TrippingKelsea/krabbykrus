@@ -37,6 +37,7 @@ http-insecure = ["rockbot-gateway/http-insecure", "rockbot-client/http-insecure"
 workspace = true
 
 [dependencies]
+rockbot-chat = { path = "../rockbot-chat" }
 rockbot-agent = { path = "../rockbot-agent" }
 rockbot-client = { path = "../rockbot-client" }
 rockbot-config = { path = "../rockbot-config" }

@@ -57,6 +57,7 @@
 //! ```
 
 pub mod audit;
+pub mod chat_commands;
 pub mod crypto;
 pub mod error;
 pub mod manager;
