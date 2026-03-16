@@ -47,6 +47,7 @@ rockbot-pki = { path = "../rockbot-pki" }
 rockbot-doctor = { path = "../rockbot-doctor", optional = true }
 rockbot-butler = { path = "../rockbot-butler", optional = true }
 rockbot-store = { path = "../rockbot-store" }
+rockbot-chat = { path = "../rockbot-chat" }
 
 uuid = { workspace = true }
 chrono = { workspace = true }

@@ -242,6 +242,16 @@ pub struct AlertItem {
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
+impl AlertItem {
+    pub fn severity_str(&self) -> &'static str {
+        match self.severity {
+            AlertSeverity::Info => "INFO",
+            AlertSeverity::Warning => "WARN",
+            AlertSeverity::Error => "ERROR",
+        }
+    }
+}
+
 /// What kind of slot this is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotKind {

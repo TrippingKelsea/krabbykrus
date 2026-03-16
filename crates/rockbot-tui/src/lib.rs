@@ -19,6 +19,7 @@
 //! - **Esc**: Cancel / Back
 
 pub mod app;
+pub mod chat_commands;
 pub mod components;
 pub mod credentials;
 #[cfg(feature = "doctor-ai")]

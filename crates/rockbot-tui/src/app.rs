@@ -124,6 +124,8 @@ pub struct App {
     /// Butler conversation session
     #[cfg(feature = "butler")]
     butler_session: Option<rockbot_butler::ButlerSession>,
+    /// Chat command registry for slash command dispatch
+    command_registry: rockbot_chat::ChatCommandRegistry,
 }
 
 impl App {
@@ -148,6 +150,11 @@ impl App {
             butler: None,
             #[cfg(feature = "butler")]
             butler_session: None,
+            command_registry: {
+                let mut reg = rockbot_chat::ChatCommandRegistry::new();
+                crate::chat_commands::register_chat_commands(&mut reg);
+                reg
+            },
         }
     }
 
@@ -3269,15 +3276,141 @@ impl App {
 
     fn send_chat_buffer(&mut self) {
         let message = self.state.input_buffer.trim().to_string();
-        if !message.is_empty() {
-            if let Some(chat) = self.state.active_chat_mut() {
-                chat.messages.push(ChatMessage::user(message.clone()));
-                chat.loading = true;
-                chat.auto_scroll = true;
-            }
-            self.spawn_chat_request(message);
+        if message.is_empty() {
+            self.state.clear_input();
+            return;
         }
+
+        // Dispatch slash commands through the registry
+        if message.starts_with('/') {
+            let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            let ctx = rockbot_chat::CommandContext {
+                tx: cmd_tx,
+                gateway_url: self.state.gateway_url.clone(),
+                active_agent_id: self
+                    .state
+                    .agents
+                    .get(self.state.selected_agent)
+                    .map(|a| a.id.clone()),
+                active_session_key: self.state.active_session_key().map(|s| s.to_string()),
+            };
+            match self.command_registry.dispatch(&message, &ctx) {
+                rockbot_chat::CommandResult::Handled(text) => {
+                    if let Some(chat) = self.state.active_chat_mut() {
+                        chat.messages.push(ChatMessage::system(text));
+                        chat.auto_scroll = true;
+                    }
+                    self.state.clear_input();
+                    return;
+                }
+                rockbot_chat::CommandResult::Action(action) => {
+                    self.handle_command_action(action);
+                    self.state.clear_input();
+                    return;
+                }
+                rockbot_chat::CommandResult::NotHandled => {
+                    // Fall through to normal chat send
+                }
+            }
+        }
+
+        if let Some(chat) = self.state.active_chat_mut() {
+            chat.messages.push(ChatMessage::user(message.clone()));
+            chat.loading = true;
+            chat.auto_scroll = true;
+        }
+        self.spawn_chat_request(message);
         self.state.clear_input();
+    }
+
+    /// Handle a CommandAction from the slash command registry.
+    fn handle_command_action(&mut self, action: rockbot_chat::CommandAction) {
+        use rockbot_chat::CommandAction;
+        match action {
+            CommandAction::Quit => {
+                self.state.should_exit = true;
+            }
+            CommandAction::ClearChat => {
+                if let Some(chat) = self.state.active_chat_mut() {
+                    chat.messages.clear();
+                }
+            }
+            CommandAction::ShowOverlay(name) => {
+                if name == "help" {
+                    let help_text = self
+                        .command_registry
+                        .list_commands()
+                        .iter()
+                        .map(|c| format!("  {} — {}", c.usage, c.description))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if let Some(chat) = self.state.active_chat_mut() {
+                        chat.messages
+                            .push(ChatMessage::system(format!("Available commands:\n{help_text}")));
+                        chat.auto_scroll = true;
+                    }
+                } else if name == "alerts" {
+                    // Show alerts in chat
+                    let alerts_text = if self.state.alerts.is_empty() {
+                        "No alerts.".to_string()
+                    } else {
+                        self.state
+                            .alerts
+                            .iter()
+                            .map(|a| format!("  [{}] {}", a.severity_str(), a.message))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    };
+                    if let Some(chat) = self.state.active_chat_mut() {
+                        chat.messages.push(ChatMessage::system(alerts_text));
+                        chat.auto_scroll = true;
+                    }
+                }
+            }
+            CommandAction::SwitchMode(mode) => {
+                let target = match mode.as_str() {
+                    "dashboard" => Some(super::state::MenuItem::Dashboard),
+                    "agents" => Some(super::state::MenuItem::Agents),
+                    "sessions" => Some(super::state::MenuItem::Sessions),
+                    "credentials" => Some(super::state::MenuItem::Credentials),
+                    "cron" => Some(super::state::MenuItem::CronJobs),
+                    "models" => Some(super::state::MenuItem::Models),
+                    "settings" => Some(super::state::MenuItem::Settings),
+                    _ => None,
+                };
+                if let Some(item) = target {
+                    self.state.menu_item = item;
+                    let agents = self.state.agents.clone();
+                    let sessions = self.state.sessions.clone();
+                    self.state
+                        .slot_bar
+                        .rebuild_content_slots(&agents, &sessions);
+                } else {
+                    if let Some(chat) = self.state.active_chat_mut() {
+                        chat.messages.push(ChatMessage::system(format!(
+                            "Unknown mode: {mode}. Try: dashboard, agents, sessions, credentials, cron, models, settings"
+                        )));
+                        chat.auto_scroll = true;
+                    }
+                }
+            }
+            CommandAction::SetStatus(msg, is_error) => {
+                self.state.status_message = Some((msg, is_error));
+            }
+            CommandAction::SendToAgent(agent_id, message) => {
+                // Route to specific agent — for now just show in chat
+                if let Some(chat) = self.state.active_chat_mut() {
+                    chat.messages
+                        .push(ChatMessage::user(format!("@{agent_id}: {message}")));
+                    chat.loading = true;
+                    chat.auto_scroll = true;
+                }
+                self.spawn_chat_request(message);
+            }
+            CommandAction::SpawnAsync => {
+                // Command spawned async work via tx — nothing to do here
+            }
+        }
     }
 
     /// Retry the last user message (removes error message and re-sends)
