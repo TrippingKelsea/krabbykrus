@@ -1,5 +1,6 @@
 #!/bin/sh
 # post-commit hook: tag every commit with its workspace version (v0.x.y)
+# Only tags if the version actually changed (i.e. pre-commit bumped it).
 
 CARGO_TOML="$(git rev-parse --show-toplevel)/Cargo.toml"
 

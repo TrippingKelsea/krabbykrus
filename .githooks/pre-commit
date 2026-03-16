@@ -1,7 +1,16 @@
 #!/bin/sh
 # pre-commit hook: increment patch version in [workspace.package] section of Cargo.toml
+# Only fires when staged changes include source code (not docs-only or config-only commits).
 
 CARGO_TOML="$(git rev-parse --show-toplevel)/Cargo.toml"
+
+# Check if any staged files are source code (Rust, TOML in crates/, build scripts, CI).
+# Skip version bump for docs-only, markdown-only, or asset-only commits.
+source_changes=$(git diff --cached --name-only | grep -cE '\.(rs|toml)$|\.github/|\.githooks/|build\.rs' || true)
+
+if [ "$source_changes" -eq 0 ]; then
+    exit 0
+fi
 
 # Extract the current version from the [workspace.package] section only.
 # Strategy: read the file, find [workspace.package], then grab the version line
