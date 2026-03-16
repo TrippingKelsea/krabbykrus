@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 use std::path::PathBuf;
@@ -670,104 +670,101 @@ impl App {
             Quit => {
                 self.state.should_exit = true;
             }
-            NavUp => {
-                match self.state.menu_item {
-                    MenuItem::Credentials => self.state.credential_list_prev(),
-                    MenuItem::Sessions => {
-                        if let Some(chat) = self.state.active_chat_mut() {
-                            if chat.auto_scroll {
-                                chat.scroll = chat.max_scroll.get();
-                                chat.auto_scroll = false;
-                            }
-                            chat.scroll = chat.scroll.saturating_sub(1);
+            NavUp => match self.state.menu_item {
+                MenuItem::Credentials => self.state.credential_list_prev(),
+                MenuItem::Sessions => {
+                    if let Some(chat) = self.state.active_chat_mut() {
+                        if chat.auto_scroll {
+                            chat.scroll = chat.max_scroll.get();
+                            chat.auto_scroll = false;
                         }
+                        chat.scroll = chat.scroll.saturating_sub(1);
                     }
-                    MenuItem::CronJobs => {
-                        if !self.state.cron_jobs.is_empty() {
-                            self.state.selected_cron_job = if self.state.selected_cron_job == 0
-                            {
-                                self.state.cron_jobs.len() - 1
-                            } else {
-                                self.state.selected_cron_job - 1
-                            };
-                        }
-                    }
-                    _ => {}
                 }
-            }
-            NavDown => {
-                match self.state.menu_item {
-                    MenuItem::Credentials => self.state.credential_list_next(),
-                    MenuItem::Sessions => {
-                        if let Some(chat) = self.state.active_chat_mut() {
-                            if chat.auto_scroll {
-                                return;
-                            }
-                            chat.scroll = chat.scroll.saturating_add(1);
-                            if chat.scroll >= chat.max_scroll.get() {
-                                chat.auto_scroll = true;
-                            }
-                        }
+                MenuItem::CronJobs => {
+                    if !self.state.cron_jobs.is_empty() {
+                        self.state.selected_cron_job = if self.state.selected_cron_job == 0 {
+                            self.state.cron_jobs.len() - 1
+                        } else {
+                            self.state.selected_cron_job - 1
+                        };
                     }
-                    MenuItem::CronJobs => {
-                        if !self.state.cron_jobs.is_empty() {
-                            self.state.selected_cron_job =
-                                (self.state.selected_cron_job + 1) % self.state.cron_jobs.len();
-                        }
-                    }
-                    _ => {}
                 }
-            }
+                _ => {}
+            },
+            NavDown => match self.state.menu_item {
+                MenuItem::Credentials => self.state.credential_list_next(),
+                MenuItem::Sessions => {
+                    if let Some(chat) = self.state.active_chat_mut() {
+                        if chat.auto_scroll {
+                            return;
+                        }
+                        chat.scroll = chat.scroll.saturating_add(1);
+                        if chat.scroll >= chat.max_scroll.get() {
+                            chat.auto_scroll = true;
+                        }
+                    }
+                }
+                MenuItem::CronJobs => {
+                    if !self.state.cron_jobs.is_empty() {
+                        self.state.selected_cron_job =
+                            (self.state.selected_cron_job + 1) % self.state.cron_jobs.len();
+                    }
+                }
+                _ => {}
+            },
             NavLeft => {
                 self.state.select_prev();
+                self.sync_slot_bar_from_selection();
                 if self.state.menu_item == MenuItem::Sessions {
                     self.on_session_selection_changed();
                 }
             }
             NavRight => {
                 self.state.select_next();
+                self.sync_slot_bar_from_selection();
                 if self.state.menu_item == MenuItem::Sessions {
                     self.on_session_selection_changed();
                 }
             }
-            Enter => {
-                match self.state.menu_item {
-                    MenuItem::Credentials => match self.state.credentials_tab {
-                        0 if !self.state.endpoints.is_empty() => {
-                            self.state.input_mode = InputMode::ViewEndpoint {
-                                endpoint_index: self.state.selected_endpoint,
-                            };
-                        }
-                        1 => {
-                            self.state.input_mode = InputMode::ViewProvider {
-                                provider_index: self.state.selected_provider_index,
-                            };
-                        }
-                        2 if !self.state.permissions.is_empty() => {
-                            self.state.input_mode = InputMode::ViewPermission {
-                                permission_index: self.state.selected_permission,
-                            };
-                        }
-                        _ => {}
-                    },
-                    MenuItem::Models if !self.state.providers.is_empty() => {
-                        self.state.input_mode = InputMode::ViewModelList {
-                            provider_index: self.state.selected_provider,
-                            scroll: 0,
+            Enter => match self.state.menu_item {
+                MenuItem::Credentials => match self.state.credentials_tab {
+                    0 if !self.state.endpoints.is_empty() => {
+                        self.state.input_mode = InputMode::ViewEndpoint {
+                            endpoint_index: self.state.selected_endpoint,
+                        };
+                    }
+                    1 => {
+                        self.state.input_mode = InputMode::ViewProvider {
+                            provider_index: self.state.selected_provider_index,
+                        };
+                    }
+                    2 if !self.state.permissions.is_empty() => {
+                        self.state.input_mode = InputMode::ViewPermission {
+                            permission_index: self.state.selected_permission,
                         };
                     }
                     _ => {}
+                },
+                MenuItem::Models if !self.state.providers.is_empty() => {
+                    self.state.input_mode = InputMode::ViewModelList {
+                        provider_index: self.state.selected_provider,
+                        scroll: 0,
+                    };
                 }
-            }
+                _ => {}
+            },
             Escape => {
                 // No-op in normal mode (was: return to sidebar)
             }
             // Card bar navigation via Alt+arrows
             CardLeft => {
                 self.state.slot_bar.select_left();
+                self.sync_selection_from_slot_bar();
             }
             CardRight => {
                 self.state.slot_bar.select_right();
+                self.sync_selection_from_slot_bar();
             }
             CardUp => {
                 let agents = self.state.agents.clone();
@@ -788,13 +785,11 @@ impl App {
             CardActivate => {
                 // Open card detail overlay for the active slot (slot 1+)
                 if self.state.slot_bar.active_slot > 0 {
-                    self.state.input_mode = InputMode::CardDetail(
-                        crate::state::CardDetailState {
-                            mode: self.state.menu_item,
-                            slot_index: self.state.slot_bar.active_slot,
-                            scroll: 0,
-                        },
-                    );
+                    self.state.input_mode = InputMode::CardDetail(crate::state::CardDetailState {
+                        mode: self.state.menu_item,
+                        slot_index: self.state.slot_bar.active_slot,
+                        scroll: 0,
+                    });
                 }
             }
             JumpToSection(n) => {
@@ -855,14 +850,10 @@ impl App {
                 }
             }
             Add => {
-                {
-                    self.handle_add_action();
-                }
+                self.handle_add_action();
             }
             Delete => {
-                {
-                    self.handle_delete_action();
-                }
+                self.handle_delete_action();
             }
             Refresh => {
                 self.handle_refresh_action();
@@ -874,14 +865,10 @@ impl App {
                 self.handle_unlock_action();
             }
             LockVault => {
-                {
-                    self.handle_lock_action();
-                }
+                self.handle_lock_action();
             }
             Chat => {
-                {
-                    self.handle_chat_action();
-                }
+                self.handle_chat_action();
             }
             NewSession => {
                 if self.state.menu_item == MenuItem::Sessions {
@@ -889,9 +876,7 @@ impl App {
                 }
             }
             Edit => {
-                {
-                    self.handle_edit_action();
-                }
+                self.handle_edit_action();
             }
             ContextFiles => {
                 if self.state.menu_item == MenuItem::Agents {
@@ -909,40 +894,26 @@ impl App {
                 }
             }
             Permissions => {
-                {
-                    self.handle_permission_action();
-                }
+                self.handle_permission_action();
             }
             Kill => {
-                {
-                    self.handle_kill_action();
-                }
+                self.handle_kill_action();
             }
             View => {
-                {
-                    self.handle_view_action();
-                }
+                self.handle_view_action();
             }
             TestAction => {
-                {
-                    self.handle_test_action();
-                }
+                self.handle_test_action();
             }
             StartGateway => {
-                {
-                    self.handle_start_action();
-                }
+                self.handle_start_action();
             }
             StopGateway => {
-                {
-                    self.handle_stop_action();
-                }
+                self.handle_stop_action();
             }
             OpenContextMenu => {
-                {
-                    let menu = self.state.build_context_menu();
-                    self.state.input_mode = InputMode::ContextMenu(menu);
-                }
+                let menu = self.state.build_context_menu();
+                self.state.input_mode = InputMode::ContextMenu(menu);
             }
         }
     }
@@ -1011,6 +982,56 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Sync per-mode `selected_*` index from slot_bar.active_slot (after CardLeft/CardRight)
+    fn sync_selection_from_slot_bar(&mut self) {
+        let idx = self.state.slot_bar.active_slot.saturating_sub(1);
+        match self.state.menu_item {
+            MenuItem::Agents => {
+                if !self.state.agents.is_empty() {
+                    self.state.selected_agent = idx.min(self.state.agents.len() - 1);
+                }
+            }
+            MenuItem::Sessions => {
+                if !self.state.sessions.is_empty() {
+                    self.state.selected_session = idx.min(self.state.sessions.len() - 1);
+                    self.on_session_selection_changed();
+                }
+            }
+            MenuItem::Models => {
+                if !self.state.providers.is_empty() {
+                    self.state.selected_provider = idx.min(self.state.providers.len() - 1);
+                }
+            }
+            MenuItem::Credentials => {
+                self.state.credentials_tab = idx.min(3);
+            }
+            MenuItem::Settings => {
+                self.state.selected_settings_card = idx.min(2);
+            }
+            MenuItem::CronJobs => {
+                self.state.selected_cron_card = idx.min(2);
+            }
+            MenuItem::Dashboard => {}
+        }
+    }
+
+    /// Sync slot_bar.active_slot from per-mode `selected_*` index (after NavLeft/NavRight)
+    fn sync_slot_bar_from_selection(&mut self) {
+        let idx = match self.state.menu_item {
+            MenuItem::Agents => self.state.selected_agent,
+            MenuItem::Sessions => self.state.selected_session,
+            MenuItem::Models => self.state.selected_provider,
+            MenuItem::Credentials => self.state.credentials_tab,
+            MenuItem::Settings => self.state.selected_settings_card,
+            MenuItem::CronJobs => self.state.selected_cron_card,
+            MenuItem::Dashboard => return,
+        };
+        // slot 0 is the mode selector; data slots start at 1
+        let slot = idx + 1;
+        let max_slot = self.state.slot_bar.slots.len().saturating_sub(1);
+        self.state.slot_bar.active_slot = slot.min(max_slot);
     }
 
     fn dispatch_context_action(&mut self, action: ContextMenuAction) {
@@ -3372,8 +3393,9 @@ impl App {
                         .collect::<Vec<_>>()
                         .join("\n");
                     if let Some(chat) = self.state.active_chat_mut() {
-                        chat.messages
-                            .push(ChatMessage::system(format!("Available commands:\n{help_text}")));
+                        chat.messages.push(ChatMessage::system(format!(
+                            "Available commands:\n{help_text}"
+                        )));
                         chat.auto_scroll = true;
                     }
                 } else if name == "alerts" {
@@ -3673,65 +3695,28 @@ impl App {
             let inner = border_block.inner(main_area);
             frame.render_widget(border_block, main_area);
 
-            // Split into page cards + page content
-            let page_split = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(5), Constraint::Fill(1)])
-                .split(inner);
-            let cards_area = page_split[0];
-            let page_detail = page_split[1];
-
             match active_section {
-                MenuItem::Dashboard => render_dashboard(
-                    frame,
-                    cards_area,
-                    page_detail,
-                    &self.state,
-                    &self.effect_state,
-                ),
+                MenuItem::Dashboard => {
+                    render_dashboard(frame, inner, &self.state, &self.effect_state)
+                }
                 MenuItem::Credentials => render_credentials(
                     frame,
-                    cards_area,
-                    page_detail,
+                    inner,
                     &self.state,
                     self.state.credentials_tab,
                     &self.effect_state,
                 ),
-                MenuItem::Agents => render_agents(
-                    frame,
-                    cards_area,
-                    page_detail,
-                    &self.state,
-                    &self.effect_state,
-                ),
-                MenuItem::Sessions => render_sessions(
-                    frame,
-                    cards_area,
-                    page_detail,
-                    &self.state,
-                    &self.effect_state,
-                ),
-                MenuItem::CronJobs => render_cron_jobs(
-                    frame,
-                    cards_area,
-                    page_detail,
-                    &self.state,
-                    &self.effect_state,
-                ),
-                MenuItem::Models => render_models(
-                    frame,
-                    cards_area,
-                    page_detail,
-                    &self.state,
-                    &self.effect_state,
-                ),
-                MenuItem::Settings => render_settings(
-                    frame,
-                    cards_area,
-                    page_detail,
-                    &self.state,
-                    &self.effect_state,
-                ),
+                MenuItem::Agents => render_agents(frame, inner, &self.state, &self.effect_state),
+                MenuItem::Sessions => {
+                    render_sessions(frame, inner, &self.state, &self.effect_state)
+                }
+                MenuItem::CronJobs => {
+                    render_cron_jobs(frame, inner, &self.state, &self.effect_state)
+                }
+                MenuItem::Models => render_models(frame, inner, &self.state, &self.effect_state),
+                MenuItem::Settings => {
+                    render_settings(frame, inner, &self.state, &self.effect_state)
+                }
             }
             inner
         };
@@ -3883,7 +3868,10 @@ impl App {
             MenuItem::Agents => {
                 if let Some(agent) = self.state.agents.get(self.state.selected_agent) {
                     let model = agent.model.as_deref().unwrap_or("default");
-                    format!(" \u{25b8} {} \u{00b7} {} \u{00b7} {:?}", agent.id, model, agent.status)
+                    format!(
+                        " \u{25b8} {} \u{00b7} {} \u{00b7} {:?}",
+                        agent.id, model, agent.status
+                    )
                 } else {
                     " \u{25b8} No agents configured".to_string()
                 }
@@ -3899,14 +3887,20 @@ impl App {
                 }
             }
             MenuItem::Credentials => {
-                let tab = self.credentials_tab().label();
-                let count = match self.state.credentials_tab {
-                    0 => self.state.endpoints.len(),
-                    1 => self.state.credential_schemas.len(),
-                    2 => self.state.permissions.len(),
-                    _ => 0,
-                };
-                format!(" \u{25b8} {tab} \u{00b7} {count} items")
+                if !self.state.vault.initialized {
+                    " \u{25b8} Vault not initialized \u{00b7} press 'i' to initialize".to_string()
+                } else if self.state.vault.locked {
+                    " \u{25b8} Vault locked \u{00b7} press 'u' to unlock".to_string()
+                } else {
+                    let tab = self.credentials_tab().label();
+                    let count = match self.state.credentials_tab {
+                        0 => self.state.endpoints.len(),
+                        1 => self.state.credential_schemas.len(),
+                        2 => self.state.permissions.len(),
+                        _ => 0,
+                    };
+                    format!(" \u{25b8} {tab} \u{00b7} {count} items")
+                }
             }
             MenuItem::CronJobs => {
                 let total = self.state.cron_jobs.len();
@@ -3926,16 +3920,14 @@ impl App {
 
     /// Render a card detail overlay modal (80% centered).
     fn render_card_detail_modal(&self, frame: &mut Frame, detail: &crate::state::CardDetailState) {
-        use ratatui::widgets::{Clear, Wrap};
         use super::components::centered_rect;
+        use ratatui::widgets::Clear;
 
         let area = centered_rect(80, 80, frame.area());
         frame.render_widget(Clear, area);
 
         let slot = self.state.slot_bar.slots.get(detail.slot_index);
-        let title = slot
-            .map(|s| s.label.as_str())
-            .unwrap_or("Detail");
+        let title = slot.map(|s| s.label.as_str()).unwrap_or("Detail");
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -3951,81 +3943,460 @@ impl App {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        // Build content lines based on mode + slot
-        let lines = self.build_card_detail_content(detail);
+        // Per-mode detail rendering
+        match detail.mode {
+            MenuItem::Dashboard => self.render_dashboard_detail(frame, inner, detail),
+            MenuItem::Agents => self.render_agents_detail(frame, inner, detail),
+            MenuItem::Sessions => self.render_sessions_detail(frame, inner, detail),
+            MenuItem::Models => self.render_models_detail(frame, inner, detail),
+            MenuItem::Credentials => self.render_credentials_detail(frame, inner, detail),
+            _ => self.render_generic_detail(frame, inner, detail),
+        }
+    }
+
+    fn render_dashboard_detail(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        detail: &crate::state::CardDetailState,
+    ) {
+        use ratatui::widgets::Sparkline;
+
+        let slot = self.state.slot_bar.slots.get(detail.slot_index);
+        let label = slot.map(|s| s.label.as_str()).unwrap_or("");
+
+        // Split: sparkline area (top) + stats text (bottom)
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(5), Constraint::Fill(1)])
+            .split(area);
+
+        // Sparkline for gateway load / message history
+        let (spark_data, spark_label): (Vec<u64>, &str) = match label {
+            "Gateway" => (
+                self.state.gateway_load_history.iter().copied().collect(),
+                "Gateway Load",
+            ),
+            "Client" => (
+                self.state.client_msg_history.iter().copied().collect(),
+                "Messages/min",
+            ),
+            _ => (Vec::new(), ""),
+        };
+
+        if !spark_data.is_empty() {
+            let sparkline = Sparkline::default()
+                .data(&spark_data)
+                .style(Style::default().fg(Color::Cyan));
+            let spark_block = Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(Span::styled(
+                    format!(" {spark_label} "),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            let spark_inner = spark_block.inner(chunks[0]);
+            frame.render_widget(spark_block, chunks[0]);
+            frame.render_widget(sparkline, spark_inner);
+        }
+
+        // Stats text below sparkline
+        let mut lines: Vec<Line<'_>> = Vec::new();
+        match label {
+            "Gateway" => {
+                lines.push(Line::from(vec![
+                    Span::styled("Status: ", Style::default().fg(Color::Cyan)),
+                    Span::styled(
+                        if self.state.gateway.connected {
+                            "Online"
+                        } else {
+                            "Offline"
+                        },
+                        Style::default().fg(if self.state.gateway.connected {
+                            Color::Green
+                        } else {
+                            Color::Red
+                        }),
+                    ),
+                ]));
+                if let Some(v) = &self.state.gateway.version {
+                    lines.push(Line::from(vec![
+                        Span::styled("Version: ", Style::default().fg(Color::Cyan)),
+                        Span::raw(v.as_str()),
+                    ]));
+                }
+                if let Some(up) = self.state.gateway.uptime_secs {
+                    let hours = up / 3600;
+                    let mins = (up % 3600) / 60;
+                    lines.push(Line::from(vec![
+                        Span::styled("Uptime: ", Style::default().fg(Color::Cyan)),
+                        Span::raw(format!("{hours}h {mins}m")),
+                    ]));
+                }
+                lines.push(Line::from(vec![
+                    Span::styled("Sessions: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(format!("{}", self.state.gateway.active_sessions)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Agents: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(format!("{}", self.state.agents.len())),
+                ]));
+            }
+            "Client" => {
+                lines.push(Line::from(vec![
+                    Span::styled("Active Sessions: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(format!("{}", self.state.sessions.len())),
+                ]));
+                let total_msgs: usize = self.state.sessions.iter().map(|s| s.message_count).sum();
+                lines.push(Line::from(vec![
+                    Span::styled("Total Messages: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(format!("{total_msgs}")),
+                ]));
+            }
+            "Agents" => {
+                for agent in &self.state.agents {
+                    let status_color = match agent.status {
+                        crate::state::AgentStatus::Active => Color::Green,
+                        crate::state::AgentStatus::Pending => Color::Yellow,
+                        crate::state::AgentStatus::Error => Color::Red,
+                        crate::state::AgentStatus::Disabled => Color::DarkGray,
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("{:16}", agent.id),
+                            Style::default().fg(Color::White),
+                        ),
+                        Span::styled(
+                            format!(" {:?}", agent.status),
+                            Style::default().fg(status_color),
+                        ),
+                        Span::styled(
+                            format!("  {} sess", agent.session_count),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+                if self.state.agents.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "No agents configured",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+            "Vault" => {
+                let (status, color) = if !self.state.vault.initialized {
+                    ("Not Initialized", Color::Yellow)
+                } else if self.state.vault.locked {
+                    ("Locked", Color::Yellow)
+                } else {
+                    ("Unlocked", Color::Green)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("Status: ", Style::default().fg(Color::Cyan)),
+                    Span::styled(status, Style::default().fg(color)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Endpoints: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(format!("{}", self.state.vault.endpoint_count)),
+                ]));
+            }
+            _ => {
+                lines.push(Line::from("No additional details available."));
+            }
+        }
+
+        let text_area = if spark_data.is_empty() {
+            area
+        } else {
+            chunks[1]
+        };
+        let paragraph = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((detail.scroll as u16, 0));
+        frame.render_widget(paragraph, text_area);
+    }
+
+    fn render_agents_detail(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        detail: &crate::state::CardDetailState,
+    ) {
+        let mut lines: Vec<Line<'_>> = Vec::new();
+        if let Some(agent) = self.state.agents.get(detail.slot_index.saturating_sub(1)) {
+            let status_color = match agent.status {
+                crate::state::AgentStatus::Active => Color::Green,
+                crate::state::AgentStatus::Pending => Color::Yellow,
+                crate::state::AgentStatus::Error => Color::Red,
+                crate::state::AgentStatus::Disabled => Color::DarkGray,
+            };
+            lines.push(Line::from(vec![
+                Span::styled("ID: ", Style::default().fg(Color::Cyan)),
+                Span::raw(&agent.id),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Model: ", Style::default().fg(Color::Cyan)),
+                Span::raw(agent.model.as_deref().unwrap_or("default")),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(Color::Cyan)),
+                Span::styled(agent.status.label(), Style::default().fg(status_color)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Sessions: ", Style::default().fg(Color::Cyan)),
+                Span::raw(format!("{}", agent.session_count)),
+            ]));
+            if let Some(ref ws) = agent.workspace {
+                lines.push(Line::from(vec![
+                    Span::styled("Workspace: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(ws.as_str()),
+                ]));
+            }
+            if let Some(ref parent) = agent.parent_id {
+                lines.push(Line::from(vec![
+                    Span::styled("Parent: ", Style::default().fg(Color::Cyan)),
+                    Span::styled(parent.as_str(), Style::default().fg(Color::Yellow)),
+                ]));
+            }
+            // Subagents
+            let subagents: Vec<&str> = self
+                .state
+                .agents
+                .iter()
+                .filter(|a| a.parent_id.as_deref() == Some(&agent.id))
+                .map(|a| a.id.as_str())
+                .collect();
+            if !subagents.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("Subagents: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(subagents.join(", ")),
+                ]));
+            }
+            if let Some(ref prompt) = agent.system_prompt {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "System Prompt:",
+                    Style::default().fg(Color::Cyan),
+                )));
+                for line in prompt.lines().take(10) {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {line}"),
+                        Style::default().fg(Color::Gray),
+                    )));
+                }
+                if prompt.lines().count() > 10 {
+                    lines.push(Line::from(Span::styled(
+                        "  ...",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+        } else {
+            lines.push(Line::from("No agent selected."));
+        }
 
         let paragraph = Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .scroll((detail.scroll as u16, 0));
-        frame.render_widget(paragraph, inner);
+        frame.render_widget(paragraph, area);
     }
 
-    /// Build content for the card detail overlay.
-    fn build_card_detail_content(&self, detail: &crate::state::CardDetailState) -> Vec<Line<'_>> {
-        let mut lines = Vec::new();
-        match detail.mode {
-            MenuItem::Dashboard => {
-                let slot = self.state.slot_bar.slots.get(detail.slot_index);
-                let label = slot.map(|s| s.label.as_str()).unwrap_or("");
-                match label {
-                    "Gateway" => {
-                        lines.push(Line::from(Span::styled(
-                            format!("Status: {}", if self.state.gateway.connected { "Online" } else { "Offline" }),
-                            Style::default().fg(if self.state.gateway.connected { Color::Green } else { Color::Red }),
-                        )));
-                        if let Some(v) = &self.state.gateway.version {
-                            lines.push(Line::from(format!("Version: {v}")));
-                        }
-                        if let Some(up) = self.state.gateway.uptime_secs {
-                            lines.push(Line::from(format!("Uptime: {}s", up)));
-                        }
-                        lines.push(Line::from(format!("Active sessions: {}", self.state.gateway.active_sessions)));
-                    }
-                    "Agents" => {
-                        for agent in &self.state.agents {
-                            let status_color = match agent.status {
-                                crate::state::AgentStatus::Active => Color::Green,
-                                crate::state::AgentStatus::Pending => Color::Yellow,
-                                crate::state::AgentStatus::Error => Color::Red,
-                                crate::state::AgentStatus::Disabled => Color::DarkGray,
-                            };
-                            lines.push(Line::from(vec![
-                                Span::styled(format!("{:16}", agent.id), Style::default().fg(Color::White)),
-                                Span::styled(format!(" {:?}", agent.status), Style::default().fg(status_color)),
-                            ]));
-                        }
-                    }
-                    _ => {
-                        lines.push(Line::from("No additional details available."));
-                    }
+    fn render_sessions_detail(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        detail: &crate::state::CardDetailState,
+    ) {
+        let mut lines: Vec<Line<'_>> = Vec::new();
+        if let Some(session) = self.state.sessions.get(detail.slot_index.saturating_sub(1)) {
+            lines.push(Line::from(vec![
+                Span::styled("Session: ", Style::default().fg(Color::Cyan)),
+                Span::raw(&session.key),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Agent: ", Style::default().fg(Color::Cyan)),
+                Span::raw(&session.agent_id),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Messages: ", Style::default().fg(Color::Cyan)),
+                Span::raw(format!("{}", session.message_count)),
+            ]));
+            if let Some(ref model) = session.model {
+                lines.push(Line::from(vec![
+                    Span::styled("Model: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(model.as_str()),
+                ]));
+            }
+            // Show recent messages preview
+            if let Some(chat) = self.state.session_chats.get(&session.key) {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Recent Messages:",
+                    Style::default().fg(Color::Cyan),
+                )));
+                for msg in chat
+                    .messages
+                    .iter()
+                    .rev()
+                    .take(8)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                {
+                    let role_color = match msg.role {
+                        crate::state::ChatRole::User => Color::Green,
+                        crate::state::ChatRole::Assistant => Color::Cyan,
+                        crate::state::ChatRole::System => Color::Yellow,
+                    };
+                    let preview: String = msg.content.chars().take(60).collect();
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("  {:?}: ", msg.role),
+                            Style::default().fg(role_color),
+                        ),
+                        Span::raw(preview),
+                    ]));
                 }
             }
-            MenuItem::Agents => {
-                if let Some(agent) = self.state.agents.get(detail.slot_index.saturating_sub(1)) {
-                    lines.push(Line::from(format!("Agent: {}", agent.id)));
-                    lines.push(Line::from(format!("Model: {}", agent.model.as_deref().unwrap_or("default"))));
-                    lines.push(Line::from(format!("Status: {:?}", agent.status)));
-                    lines.push(Line::from(format!("Sessions: {}", agent.session_count)));
-                    if let Some(ws) = &agent.workspace {
-                        lines.push(Line::from(format!("Workspace: {ws}")));
-                    }
+        } else {
+            lines.push(Line::from("No session selected."));
+        }
+
+        let paragraph = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((detail.scroll as u16, 0));
+        frame.render_widget(paragraph, area);
+    }
+
+    fn render_models_detail(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        detail: &crate::state::CardDetailState,
+    ) {
+        let mut lines: Vec<Line<'_>> = Vec::new();
+        let idx = detail.slot_index.saturating_sub(1);
+        if let Some(provider) = self.state.providers.get(idx) {
+            let status_color = if provider.available {
+                Color::Green
+            } else {
+                Color::Red
+            };
+            lines.push(Line::from(vec![Span::styled(
+                &provider.name,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+            lines.push(Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    if provider.available {
+                        "Available"
+                    } else {
+                        "Not Available"
+                    },
+                    Style::default().fg(status_color),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Auth: ", Style::default().fg(Color::Cyan)),
+                Span::raw(&provider.auth_type),
+            ]));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("Models ({}):", provider.models.len()),
+                Style::default().fg(Color::Cyan),
+            )));
+            for model in &provider.models {
+                let tokens_info = model.max_output_tokens.map_or_else(
+                    || format!(" ({}k ctx)", model.context_window / 1000),
+                    |t| format!(" ({}k ctx, {}k out)", model.context_window / 1000, t / 1000),
+                );
+                lines.push(Line::from(vec![
+                    Span::styled("  • ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(&model.name, Style::default().fg(Color::White)),
+                    Span::styled(tokens_info, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        } else {
+            lines.push(Line::from("No provider selected."));
+        }
+
+        let paragraph = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((detail.scroll as u16, 0));
+        frame.render_widget(paragraph, area);
+    }
+
+    fn render_credentials_detail(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        detail: &crate::state::CardDetailState,
+    ) {
+        let mut lines: Vec<Line<'_>> = Vec::new();
+        let slot = self.state.slot_bar.slots.get(detail.slot_index);
+        let label = slot.map(|s| s.label.as_str()).unwrap_or("");
+        match label {
+            "Endpoints" => {
+                lines.push(Line::from(Span::styled(
+                    "Stored Credentials",
+                    Style::default().fg(Color::Cyan),
+                )));
+                lines.push(Line::from(""));
+                for ep in &self.state.endpoints {
+                    lines.push(Line::from(vec![
+                        Span::styled("  • ", Style::default().fg(Color::DarkGray)),
+                        Span::raw(&ep.name),
+                    ]));
+                }
+                if self.state.endpoints.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "  No endpoints configured",
+                        Style::default().fg(Color::DarkGray),
+                    )));
                 }
             }
-            MenuItem::Sessions => {
-                if let Some(session) = self.state.sessions.get(detail.slot_index.saturating_sub(1)) {
-                    lines.push(Line::from(format!("Session: {}", session.key)));
-                    lines.push(Line::from(format!("Agent: {}", session.agent_id)));
-                    lines.push(Line::from(format!("Messages: {}", session.message_count)));
+            "Providers" => {
+                lines.push(Line::from(Span::styled(
+                    "Credential Schemas",
+                    Style::default().fg(Color::Cyan),
+                )));
+                lines.push(Line::from(""));
+                for schema in &self.state.credential_schemas {
+                    lines.push(Line::from(vec![
+                        Span::styled("  • ", Style::default().fg(Color::DarkGray)),
+                        Span::raw(&schema.provider_name),
+                        Span::styled(
+                            format!(" ({} methods)", schema.auth_methods.len()),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
                 }
             }
             _ => {
-                lines.push(Line::from("Detail view for this mode."));
+                lines.push(Line::from("Detail view for this tab."));
             }
         }
-        if lines.is_empty() {
-            lines.push(Line::from("No details available."));
-        }
-        lines
+
+        let paragraph = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((detail.scroll as u16, 0));
+        frame.render_widget(paragraph, area);
+    }
+
+    fn render_generic_detail(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        detail: &crate::state::CardDetailState,
+    ) {
+        let lines = vec![Line::from("Detail view for this mode.")];
+        let paragraph = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((detail.scroll as u16, 0));
+        frame.render_widget(paragraph, area);
     }
 
     fn get_help_text(&self) -> String {
@@ -4033,7 +4404,7 @@ impl App {
             InputMode::Normal => {
                 match self.state.menu_item {
                     MenuItem::Dashboard => {
-                        "←→:Select │ r:Refresh │ Alt+←→:Cards │ 1-7:Jump".to_string()
+                        "Alt+←→:Cards │ r:Refresh │ 1-7:Jump │ Alt+Enter:Detail".to_string()
                     }
                     MenuItem::Credentials => {
                         let tab_help = match self.state.credentials_tab {
@@ -4042,22 +4413,22 @@ impl App {
                             2 => "Enter:View │ p:Add Rule │ ↑↓:Navigate",
                             _ => "Enter:View",
                         };
-                        format!("←→:Tab │ {tab_help} │ Alt+←→:Cards ({})", self.credentials_tab().label())
+                        format!("Alt+←→:Tab │ {tab_help} │ ↑↓:Navigate")
                     }
                     MenuItem::Agents => {
-                        "←→:Select │ a:Add │ e:Edit │ d:Disable │ r:Reload │ Alt+←→:Cards".to_string()
+                        "Alt+←→:Select │ Enter:Detail │ a:Add │ e:Edit │ d:Disable │ f:Files".to_string()
                     }
                     MenuItem::Sessions => {
-                        "←→:Select │ n:New │ c:Chat │ k:Kill │ Alt+←→:Cards".to_string()
+                        "Alt+←→:Session │ n:New │ c:Chat │ k:Kill │ Alt+Enter:Detail".to_string()
                     }
                     MenuItem::CronJobs => {
-                        "←→:Filter │ ↑↓:Select │ e:Enable/Disable │ d:Delete │ t:Trigger │ r:Refresh".to_string()
+                        "Alt+←→:Filter │ ↑↓:Select │ e:Enable/Disable │ d:Delete │ t:Trigger │ r:Refresh".to_string()
                     }
                     MenuItem::Models => {
-                        "←→:Select │ Enter:Models │ e:Edit │ t:Test │ Alt+←→:Cards".to_string()
+                        "Alt+←→:Provider │ Enter:Models │ e:Configure │ Alt+Enter:Detail".to_string()
                     }
                     MenuItem::Settings => {
-                        "←→:Select │ s:Start │ S:Stop │ r:Restart │ Alt+←→:Cards".to_string()
+                        "Alt+←→:Section │ s:Start │ S:Stop │ r:Restart".to_string()
                     }
                 }
             }

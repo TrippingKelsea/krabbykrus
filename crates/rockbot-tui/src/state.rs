@@ -496,15 +496,20 @@ fn build_agents_slots_from(agents: &[AgentInfo]) -> Vec<CardSlot> {
 }
 
 fn build_sessions_slots_from(sessions: &[SessionInfo]) -> Vec<CardSlot> {
-    sessions
-        .iter()
-        .map(|s| CardSlot {
-            label: s.key.clone(),
-            icon: 'S',
-            badge: Some(format!("{}", s.message_count)),
+    // Group sessions by agent — one card per agent group
+    let mut by_agent: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for s in sessions {
+        *by_agent.entry(s.agent_id.clone()).or_default() += 1;
+    }
+    by_agent
+        .into_iter()
+        .map(|(agent_id, count)| CardSlot {
+            label: agent_id,
+            icon: 'A',
+            badge: Some(format!("{count}")),
             views: vec![SlotView {
-                label: "Messages".to_string(),
-                widget: CardWidgetId::ClientMessages,
+                label: "Sessions".to_string(),
+                widget: CardWidgetId::AgentSessions,
             }],
             active_view: 0,
             kind: SlotKind::InfoCard,

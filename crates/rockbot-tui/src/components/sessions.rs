@@ -1,7 +1,7 @@
-//! Sessions component - horizontal card strip + full-width chat
+//! Sessions component - chat fills full area (card bar is in top slot bar)
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
@@ -11,12 +11,8 @@ use ratatui::{
     Frame,
 };
 
-use super::render_spinner;
-use crate::effects::{self, palette, EffectState};
+use crate::effects::{palette, EffectState};
 use crate::state::{AppState, ChatRole, InputMode};
-
-/// Card width: 2 border + 13 content = 15 columns
-const CARD_WIDTH: u16 = 15;
 
 /// Rotating words shown while the model is processing
 const THINKING_WORDS: &[&str] = &[
@@ -44,245 +40,14 @@ fn thinking_word(tick: usize, tool_name: Option<&str>) -> String {
     THINKING_WORDS[idx].to_string()
 }
 
-/// Derive a 3-character provider code from provider ID
-fn provider_short_code(provider_id: &str) -> &'static str {
-    match provider_id {
-        "bedrock" => "BDR",
-        "anthropic" => "ANT",
-        "openai" => "OAI",
-        "mock" => "MOK",
-        _ => "UNK",
-    }
-}
-
-/// Extract provider ID and model short name from a full model string like "bedrock/anthropic.claude-sonnet-4-20250514-v1:0"
-fn format_model_short(model: &str) -> String {
-    let (provider_part, model_part) = model.split_once('/').unwrap_or(("", model));
-    let code = provider_short_code(provider_part);
-    // Shorten model name: take last segment after '.', then truncate
-    let short_model = model_part.rsplit('.').next().unwrap_or(model_part);
-    // Further shorten: strip common prefixes/suffixes, truncate to 8 chars
-    let short = shorten_model_name(short_model);
-    format!("{code}:{short}")
-}
-
-/// Shorten a model name for card display
-fn shorten_model_name(name: &str) -> String {
-    // Remove version suffixes like "-v1:0", "-20250514"
-    let s = name.split("-v1").next().unwrap_or(name);
-    // Remove date stamps (8+ digit sequences)
-    let parts: Vec<&str> = s
-        .split('-')
-        .filter(|p| !(p.len() >= 8 && p.chars().all(|c| c.is_ascii_digit())))
-        .collect();
-    let joined = parts.join("-");
-    if joined.len() > 9 {
-        joined[..9].to_string()
-    } else {
-        joined
-    }
-}
-
-/// Render the sessions page — card strip on top, chat below
+/// Render the sessions page — chat fills the full area (cards are in top slot bar)
 pub fn render_sessions(
     frame: &mut Frame,
-    cards_area: Rect,
-    detail_area: Rect,
-    state: &AppState,
-    effect_state: &EffectState,
-) {
-    render_session_cards(frame, cards_area, state, effect_state);
-    render_chat_area(frame, detail_area, state, effect_state);
-}
-
-/// Render the horizontal session card strip
-fn render_session_cards(
-    frame: &mut Frame,
     area: Rect,
     state: &AppState,
     effect_state: &EffectState,
 ) {
-    if state.sessions_loading {
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(effects::inactive_border_style())
-            .title("Sessions");
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        render_spinner(frame, inner, "Loading...", state.tick_count);
-        return;
-    }
-
-    if state.sessions.is_empty() {
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(effects::inactive_border_style())
-            .title("Sessions");
-        let hint = Paragraph::new(Line::from(Span::styled(
-            " Press 'n' to create a new session ",
-            Style::default().fg(Color::DarkGray),
-        )))
-        .block(block)
-        .alignment(Alignment::Center);
-        frame.render_widget(hint, area);
-        return;
-    }
-
-    // Calculate visible card range based on selected session
-    let total = state.sessions.len();
-    let max_visible = (area.width / CARD_WIDTH) as usize;
-    let max_visible = max_visible.max(1);
-
-    // Center the selected session in the visible range
-    let half = max_visible / 2;
-    let start = if state.selected_session <= half {
-        0
-    } else if state.selected_session + half >= total {
-        total.saturating_sub(max_visible)
-    } else {
-        state.selected_session - half
-    };
-    let end = (start + max_visible).min(total);
-    let visible_count = end - start;
-
-    // Build constraints for visible cards + optional spacer
-    let mut constraints: Vec<Constraint> = (0..visible_count)
-        .map(|_| Constraint::Length(CARD_WIDTH))
-        .collect();
-    constraints.push(Constraint::Fill(1));
-
-    let card_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .flex(Flex::Start)
-        .constraints(constraints)
-        .split(area);
-
-    let elapsed = effect_state.elapsed_secs();
-
-    for (vi, idx) in (start..end).enumerate() {
-        let session = &state.sessions[idx];
-        let is_selected = idx == state.selected_session;
-
-        render_session_card(frame, card_chunks[vi], session, state, is_selected, elapsed);
-    }
-
-    // Fill remaining space with scroll hint
-    if visible_count < card_chunks.len() {
-        super::render_card_scroll_hint(frame, card_chunks[visible_count], start > 0, end < total);
-    }
-}
-
-/// Render a single session card
-fn render_session_card(
-    frame: &mut Frame,
-    area: Rect,
-    session: &crate::state::SessionInfo,
-    state: &AppState,
-    is_selected: bool,
-    elapsed: f64,
-) {
-    let border_style = if is_selected {
-        effects::active_border_style(elapsed)
-    } else {
-        Style::default().fg(palette::INACTIVE_BORDER)
-    };
-
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(border_style);
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height < 3 || inner.width < 3 {
-        return;
-    }
-
-    // Line 1: last 6 chars of session key
-    let id_short = if session.key.len() > 6 {
-        &session.key[session.key.len() - 6..]
-    } else {
-        &session.key
-    };
-
-    // Line 2: agent name truncated to inner width
-    let max_name = inner.width as usize;
-    let agent_display = if session.agent_id.starts_with("ad-hoc") {
-        "ad-hoc"
-    } else {
-        &session.agent_id
-    };
-    let agent_short: String = if agent_display.len() > max_name {
-        agent_display[..max_name].to_string()
-    } else {
-        agent_display.to_string()
-    };
-
-    // Line 3: provider:model short code
-    let model_line = session
-        .model
-        .as_ref()
-        .map_or_else(|| "no model".to_string(), |m| format_model_short(m));
-    let model_display: String = if model_line.len() > max_name {
-        model_line[..max_name].to_string()
-    } else {
-        model_line
-    };
-
-    // Message count badge
-    let msg_count = state
-        .session_chats
-        .get(&session.key)
-        .map_or(session.message_count, |c| c.messages.len());
-
-    let id_style = if is_selected {
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let agent_style = if is_selected {
-        Style::default()
-            .fg(palette::ACTIVE_SECONDARY)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::White)
-    };
-    let model_style = if is_selected {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-
-    // Render each line, adding msg count to ID line if space allows
-    let id_text = if msg_count > 0 {
-        let badge = format!("{id_short} {msg_count}");
-        if badge.len() <= max_name {
-            badge
-        } else {
-            id_short.to_string()
-        }
-    } else {
-        id_short.to_string()
-    };
-
-    let lines = vec![
-        Line::from(Span::styled(id_text, id_style)),
-        Line::from(Span::styled(agent_short, agent_style)),
-        Line::from(Span::styled(model_display, model_style)),
-    ];
-
-    let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
-
-    // Only render 3 lines
-    let render_area = Rect {
-        x: inner.x,
-        y: inner.y,
-        width: inner.width,
-        height: inner.height.min(3),
-    };
-    frame.render_widget(paragraph, render_area);
+    render_chat_area(frame, area, state, effect_state);
 }
 
 /// Render the chat area (messages + input) — takes full width

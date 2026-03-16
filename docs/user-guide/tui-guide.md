@@ -10,30 +10,47 @@ rockbot tui
 
 ## Navigation
 
+### Layout
+
+The TUI uses a unified card bar layout:
+
+```
+Row 0: SlottedCardBar (top)  — mode selector + per-mode info cards
+Row 1: Status strip          — contextual info line
+Row 2: Main content area     — full-height page content
+Row 3: Status bar            — help text / errors
+```
+
+All card navigation lives in the top card bar. There are no inner card strips — each page gets the full content area.
+
 ### Global Keys
 
 | Key | Action |
 |-----|--------|
 | `q` | Quit |
-| `?` | Help |
-| `Tab` | Toggle sidebar focus |
-| `↑` / `↓` | Navigate menu / lists |
-| `←` / `→` | Sidebar ↔ Content |
+| `?` | Context menu |
+| `Alt+←` / `Alt+→` | Navigate cards in top bar |
+| `Alt+↑` / `Alt+↓` | Switch section (mode) |
+| `Alt+Enter` | Open card detail overlay |
+| `↑` / `↓` | Navigate lists |
+| `←` / `→` | Navigate per-mode items |
+| `1-7` | Jump to section |
 | `Enter` | Select / Confirm |
 | `Esc` | Cancel / Back |
 
-### Sidebar Navigation
+### Sections
 
-The sidebar shows six main sections:
+The card bar mode selector provides seven sections:
 
-| Icon | Section | Description |
-|------|---------|-------------|
-| 📊 | Dashboard | Overview and status |
-| 🔐 | Credentials | Manage secure credential vault |
-| 🤖 | Agents | View and control agents |
-| 💬 | Sessions | Browse conversation history |
-| 🧠 | Models | Configure LLM providers |
-| ⚙️ | Settings | Application settings |
+| # | Section | Description |
+|---|---------|-------------|
+| 1 | Dashboard | Butler chat + status overview |
+| 2 | Credentials | Manage secure credential vault |
+| 3 | Agents | View and control agents |
+| 4 | Sessions | Chat sessions (grouped by agent) |
+| 5 | Cron Jobs | Scheduled task management |
+| 6 | Models | Configure LLM providers |
+| 7 | Settings | Application settings |
 
 ## Screens
 
@@ -81,43 +98,55 @@ When adding a credential, the form fields change based on the selected endpoint 
 
 ### Agents
 
-View configured agents and their status.
+View configured agents and their status. Agents are shown as cards in the top bar; the full content area shows the selected agent's details.
 
 **Key bindings:**
 | Key | Action |
 |-----|--------|
+| `Alt+←/→` | Select agent (card bar) |
 | `Enter` | View agent details |
+| `a` | Add new agent |
+| `e` | Edit selected agent |
+| `d` | Disable agent |
+| `f` | Browse context files |
 | `r` | Reload agent list |
-| `↑` / `↓` | Select agent |
 
 ### Sessions
 
-Browse conversation history.
+Chat sessions grouped by agent in the card bar. The content area shows the chat interface for the selected session.
 
 **Key bindings:**
 | Key | Action |
 |-----|--------|
-| `Enter` | View session messages |
-| `d` | Delete session |
-| `a` | Archive session |
-| `↑` / `↓` | Select session |
+| `Alt+←/→` | Select session (card bar) |
+| `n` | Create new session |
+| `c` | Enter chat mode |
+| `k` | Kill session |
+| `Alt+Enter` | Session detail overlay |
 
 ### Models
 
-Configure LLM providers.
+LLM provider configuration. Providers shown in the card bar; details in the content area.
 
 **Key bindings:**
 | Key | Action |
 |-----|--------|
-| `Enter` | View provider details |
-| `e` | Edit provider config |
-| `↑` / `↓` | Select provider |
+| `Alt+←/→` | Select provider |
+| `Enter` | View model list |
+| `e` | Configure provider |
+| `Alt+Enter` | Provider detail overlay |
 
 ### Settings
 
-Application configuration.
+Application configuration with sub-sections: General, Paths, About.
 
-*Settings screen is under development.*
+**Key bindings:**
+| Key | Action |
+|-----|--------|
+| `Alt+←/→` | Select section |
+| `s` | Start gateway |
+| `S` | Stop gateway |
+| `r` | Restart gateway |
 
 ## Vault Unlock Flow
 

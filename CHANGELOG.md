@@ -10,6 +10,16 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
 
 ## [Unreleased]
 
+### Changed
+- **TUI layout unification**: Removed inner page_split card strip from all modes
+  - SlottedCardBar (Row 0) is now the single source of card navigation
+  - All modes get the full `main_area` as their content area (+5 rows gained)
+  - Sessions grouped by agent in card bar (one card per agent, badge = session count)
+  - Vault init/locked errors now shown in status strip, not as full content takeover
+  - Card detail overlay (`Alt+Enter`) now has per-mode rendering with sparklines
+  - Updated help text to reflect `Alt+←/→` as primary card navigation
+  - Updated `docs/user-guide/tui-guide.md` with unified navigation docs
+
 ### Added
 - **Butler agent** (`rockbot-butler`): Embedded queer sassy companion agent
   - Local GGUF model chat via shared `SeedModelConfig`

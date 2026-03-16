@@ -1,47 +1,26 @@
-//! Models/Providers component - horizontal card strip + detail panel
+//! Models/Providers component - detail panel (card bar is in top slot bar)
 //!
 //! Shows LLM provider configuration status dynamically loaded from the gateway.
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
     Frame,
 };
 
-use crate::effects::{self, palette, EffectState};
+use crate::effects::{palette, EffectState};
 use crate::state::AppState;
 
-/// Card width for provider cards
-const CARD_WIDTH: u16 = 16;
-
-/// Derive a 3-character provider code
-fn provider_short_code(id: &str) -> &'static str {
-    match id {
-        "bedrock" => "BDR",
-        "anthropic" => "ANT",
-        "openai" => "OAI",
-        "mock" => "MOK",
-        _ => "UNK",
-    }
-}
-
-/// Render the models page — cards in cards_area, details in detail_area
-pub fn render_models(
-    frame: &mut Frame,
-    cards_area: Rect,
-    detail_area: Rect,
-    state: &AppState,
-    effect_state: &EffectState,
-) {
+/// Render the models page — detail fills the full area (cards are in top slot bar)
+pub fn render_models(frame: &mut Frame, area: Rect, state: &AppState, _effect_state: &EffectState) {
     if state.providers.is_empty() {
-        render_no_providers(frame, detail_area);
+        render_no_providers(frame, area);
         return;
     }
 
-    render_provider_cards(frame, cards_area, state, effect_state);
-    render_provider_details(frame, detail_area, state);
+    render_provider_details(frame, area, state);
 }
 
 fn render_no_providers(frame: &mut Frame, area: Rect) {
@@ -65,121 +44,6 @@ fn render_no_providers(frame: &mut Frame, area: Rect) {
 
     let paragraph = Paragraph::new(content);
     frame.render_widget(paragraph, body);
-}
-
-fn render_provider_cards(
-    frame: &mut Frame,
-    area: Rect,
-    state: &AppState,
-    effect_state: &EffectState,
-) {
-    let total = state.providers.len();
-    let max_visible = (area.width / CARD_WIDTH) as usize;
-    let max_visible = max_visible.max(1);
-
-    let half = max_visible / 2;
-    let start = if state.selected_provider <= half {
-        0
-    } else if state.selected_provider + half >= total {
-        total.saturating_sub(max_visible)
-    } else {
-        state.selected_provider - half
-    };
-    let end = (start + max_visible).min(total);
-    let visible_count = end - start;
-
-    let mut constraints: Vec<Constraint> = (0..visible_count)
-        .map(|_| Constraint::Length(CARD_WIDTH))
-        .collect();
-    constraints.push(Constraint::Fill(1));
-
-    let card_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .flex(Flex::Start)
-        .constraints(constraints)
-        .split(area);
-
-    let elapsed = effect_state.elapsed_secs();
-
-    for (vi, idx) in (start..end).enumerate() {
-        let provider = &state.providers[idx];
-        let is_selected = idx == state.selected_provider;
-
-        let border_style = if is_selected {
-            effects::active_border_style(elapsed)
-        } else {
-            Style::default().fg(palette::INACTIVE_BORDER)
-        };
-
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(border_style);
-
-        let inner = block.inner(card_chunks[vi]);
-        frame.render_widget(block, card_chunks[vi]);
-
-        if inner.height < 3 || inner.width < 3 {
-            continue;
-        }
-
-        let max_w = inner.width as usize;
-        let code = provider_short_code(&provider.id);
-
-        // Line 1: provider code + availability indicator
-        let (indicator, ind_color) = if provider.available {
-            ("●", palette::CONFIGURED)
-        } else {
-            ("○", palette::UNCONFIGURED)
-        };
-
-        // Line 2: provider name (truncated)
-        let name: String = if provider.name.len() > max_w {
-            provider.name[..max_w].to_string()
-        } else {
-            provider.name.clone()
-        };
-
-        // Line 3: model count
-        let model_count = format!("{} models", provider.models.len());
-
-        let name_style = if is_selected {
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        let lines = vec![
-            Line::from(vec![
-                Span::styled(indicator, Style::default().fg(ind_color)),
-                Span::styled(
-                    format!(" {code}"),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(Span::styled(name, name_style)),
-            Line::from(Span::styled(
-                model_count,
-                Style::default().fg(Color::DarkGray),
-            )),
-        ];
-
-        let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
-        let render_area = Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width,
-            height: inner.height.min(3),
-        };
-        frame.render_widget(paragraph, render_area);
-    }
-
-    if visible_count < card_chunks.len() {
-        super::render_card_scroll_hint(frame, card_chunks[visible_count], start > 0, end < total);
-    }
 }
 
 fn render_provider_details(frame: &mut Frame, area: Rect, state: &AppState) {

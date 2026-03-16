@@ -6,7 +6,7 @@
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::Span,
     widgets::{Paragraph, Sparkline},
     Frame,
 };
@@ -63,15 +63,8 @@ fn render_gateway_status(frame: &mut Frame, area: Rect, state: &AppState) {
     let value = Paragraph::new(Span::styled(text, Style::default().fg(color)));
     frame.render_widget(value, rows[1]);
 
-    let version = state
-        .gateway
-        .version
-        .as_deref()
-        .unwrap_or("--");
-    let detail = Paragraph::new(Span::styled(
-        version,
-        Style::default().fg(Color::DarkGray),
-    ));
+    let version = state.gateway.version.as_deref().unwrap_or("--");
+    let detail = Paragraph::new(Span::styled(version, Style::default().fg(Color::DarkGray)));
     frame.render_widget(detail, rows[2]);
 }
 
@@ -206,10 +199,7 @@ fn render_agent_overview(frame: &mut Frame, area: Rect, state: &AppState) {
     ));
     frame.render_widget(value, rows[1]);
 
-    let detail = Paragraph::new(Span::styled(
-        "active",
-        Style::default().fg(Color::DarkGray),
-    ));
+    let detail = Paragraph::new(Span::styled("active", Style::default().fg(Color::DarkGray)));
     frame.render_widget(detail, rows[2]);
 }
 
@@ -229,10 +219,7 @@ fn render_agent_sessions(frame: &mut Frame, area: Rect, state: &AppState) {
     ));
     frame.render_widget(value, rows[1]);
 
-    let detail = Paragraph::new(Span::styled(
-        "active",
-        Style::default().fg(Color::DarkGray),
-    ));
+    let detail = Paragraph::new(Span::styled("active", Style::default().fg(Color::DarkGray)));
     frame.render_widget(detail, rows[2]);
 }
 
@@ -388,10 +375,7 @@ fn render_alerts(frame: &mut Frame, area: Rect, state: &AppState) {
     if let Some(latest) = state.alerts.last() {
         let max_w = area.width as usize;
         let preview: String = latest.message.chars().take(max_w).collect();
-        let detail = Paragraph::new(Span::styled(
-            preview,
-            Style::default().fg(Color::DarkGray),
-        ));
+        let detail = Paragraph::new(Span::styled(preview, Style::default().fg(Color::DarkGray)));
         frame.render_widget(detail, rows[2]);
     }
 }

@@ -1,230 +1,28 @@
-//! Dashboard component - horizontal card strip + detail panel
+//! Dashboard component - detail panel (card bar is now in the top slot bar)
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Alignment, Constraint, Rect},
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Paragraph, Row, Table, Wrap},
+    widgets::{Paragraph, Row, Table, Wrap},
     Frame,
 };
 
 use super::render_spinner;
-use crate::effects::{self, palette, EffectState};
+use crate::effects::EffectState;
 use crate::state::{AgentStatus, AppState};
-
-const CARD_WIDTH: u16 = 16;
-
-/// Render the dashboard page — cards in cards_area, detail in detail_area
-pub fn render_dashboard(
-    frame: &mut Frame,
-    cards_area: Rect,
-    detail_area: Rect,
-    state: &AppState,
-    effect_state: &EffectState,
-) {
-    render_status_cards(frame, cards_area, state, effect_state);
-    render_detail_panel(frame, detail_area, state);
-}
-
-fn render_status_cards(
-    frame: &mut Frame,
-    area: Rect,
-    state: &AppState,
-    effect_state: &EffectState,
-) {
-    let cards = [
-        ("Gateway", 0usize),
-        ("Agents", 1),
-        ("Sessions", 2),
-        ("Vault", 3),
-    ];
-
-    let mut constraints: Vec<Constraint> = cards
-        .iter()
-        .map(|_| Constraint::Length(CARD_WIDTH))
-        .collect();
-    constraints.push(Constraint::Fill(1));
-
-    let card_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .flex(Flex::Start)
-        .constraints(constraints)
-        .split(area);
-
-    let elapsed = effect_state.elapsed_secs();
-
-    for &(label, idx) in &cards {
-        // Map slot_bar active_slot to dashboard card index (slot 0 = mode, slot 1+ = cards)
-        let active_card = state.slot_bar.active_slot.saturating_sub(1);
-        let is_selected = idx == active_card;
-
-        let border_style = if is_selected {
-            effects::active_border_style(elapsed)
-        } else {
-            Style::default().fg(palette::INACTIVE_BORDER)
-        };
-
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(border_style);
-
-        let inner = block.inner(card_chunks[idx]);
-        frame.render_widget(block, card_chunks[idx]);
-
-        if inner.height < 3 || inner.width < 2 {
-            continue;
-        }
-
-        let lines = match idx {
-            0 => gateway_card_lines(state),
-            1 => agents_card_lines(state),
-            2 => sessions_card_lines(state),
-            3 => vault_card_lines(state),
-            _ => vec![],
-        };
-
-        // Add label as first line
-        let label_style = if is_selected {
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let mut all_lines = vec![Line::from(Span::styled(label, label_style))];
-        all_lines.extend(lines);
-
-        let paragraph = Paragraph::new(all_lines).alignment(Alignment::Center);
-        let render_area = Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width,
-            height: inner.height.min(3),
-        };
-        frame.render_widget(paragraph, render_area);
-    }
-}
 
 /// Client (TUI) version — set at compile time from Cargo.toml
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-fn gateway_card_lines(state: &AppState) -> Vec<Line<'static>> {
-    if state.gateway_loading {
-        return vec![Line::from(Span::styled(
-            "...",
-            Style::default().fg(Color::DarkGray),
-        ))];
-    }
-    let (status, color) = if state.gateway.connected {
-        ("● Online", Color::Green)
-    } else {
-        ("○ Offline", Color::Red)
-    };
-    let gw_ver = state.gateway.version.as_deref().unwrap_or("-");
-    let ver_color = if state.gateway.version.as_deref() == Some(CLIENT_VERSION) {
-        Color::DarkGray
-    } else if state.gateway.connected {
-        Color::Yellow // version mismatch
-    } else {
-        Color::DarkGray
-    };
-    vec![
-        Line::from(Span::styled(status, Style::default().fg(color))),
-        Line::from(Span::styled(
-            format!("gw {gw_ver}"),
-            Style::default().fg(ver_color),
-        )),
-    ]
-}
-
-fn agents_card_lines(state: &AppState) -> Vec<Line<'static>> {
-    if state.agents_loading {
-        return vec![Line::from(Span::styled(
-            "...",
-            Style::default().fg(Color::DarkGray),
-        ))];
-    }
-    let active = state
-        .agents
-        .iter()
-        .filter(|a| a.status == AgentStatus::Active)
-        .count();
-    let pending = state
-        .agents
-        .iter()
-        .filter(|a| a.status == AgentStatus::Pending)
-        .count();
-    let mut lines = vec![Line::from(Span::styled(
-        format!("{active} active"),
-        Style::default().fg(Color::Green),
-    ))];
-    if pending > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("+{pending} pend"),
-            Style::default().fg(Color::Yellow),
-        )));
-    } else {
-        lines.push(Line::from(Span::styled(
-            format!("{} total", state.agents.len()),
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-    lines
-}
-
-fn sessions_card_lines(state: &AppState) -> Vec<Line<'static>> {
-    if state.sessions_loading {
-        return vec![Line::from(Span::styled(
-            "...",
-            Style::default().fg(Color::DarkGray),
-        ))];
-    }
-    let total_msgs: usize = state.sessions.iter().map(|s| s.message_count).sum();
-    vec![
-        Line::from(Span::styled(
-            format!("{} active", state.sessions.len()),
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from(Span::styled(
-            format!("{total_msgs} msgs"),
-            Style::default().fg(Color::DarkGray),
-        )),
-    ]
-}
-
-fn vault_card_lines(state: &AppState) -> Vec<Line<'static>> {
-    if state.vault_loading {
-        return vec![Line::from(Span::styled(
-            "...",
-            Style::default().fg(Color::DarkGray),
-        ))];
-    }
-    if !state.vault.initialized {
-        return vec![
-            Line::from(Span::styled("Not Init", Style::default().fg(Color::Yellow))),
-            Line::from(Span::styled(
-                "'i' to init",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ];
-    }
-    let lock = if state.vault.locked {
-        "Locked"
-    } else {
-        "Unlocked"
-    };
-    let lock_color = if state.vault.locked {
-        Color::Yellow
-    } else {
-        Color::Green
-    };
-    vec![
-        Line::from(Span::styled(lock, Style::default().fg(lock_color))),
-        Line::from(Span::styled(
-            format!("{} endpts", state.vault.endpoint_count),
-            Style::default().fg(Color::DarkGray),
-        )),
-    ]
+/// Render the dashboard page — detail panel fills the full area
+pub fn render_dashboard(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    _effect_state: &EffectState,
+) {
+    render_detail_panel(frame, area, state);
 }
 
 /// Render the detail panel based on which dashboard card is selected

@@ -1,196 +1,68 @@
 //! Credentials/Vault management component
 //!
-//! Tab cards on top (Endpoints, Providers, Permissions, Audit), navigated with
-//! Left/Right. Each tab shows a vertical list navigated with Up/Down. Enter on
+//! Content fills the full area (tab cards are in the top slot bar).
+//! Each tab shows a vertical list navigated with Up/Down. Enter on
 //! a list item opens a read-only view modal.
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
+    layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, BorderType, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState,
+        List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
     },
     Frame,
 };
 
-use crate::effects::{self, palette, EffectState};
+use crate::effects::{palette, EffectState};
 use crate::state::AppState;
 
-/// Card width for tab strip
-const CARD_WIDTH: u16 = 18;
-
-/// Tab labels and sub-headings
-const TABS: &[(&str, &str, &str)] = &[
-    ("Endpoints", "Stored", "Credentials"),
-    ("Providers", "Available", "Schemas"),
-    ("Permissions", "Access", "Rules"),
-    ("Audit", "Activity", "Log"),
-];
-
-/// Render the credentials page — tab cards in cards_area, list in detail_area
+/// Render the credentials page — content fills the full area (tabs are in top slot bar)
 pub fn render_credentials(
-    frame: &mut Frame,
-    cards_area: Rect,
-    detail_area: Rect,
-    state: &AppState,
-    selected_tab: usize,
-    effect_state: &EffectState,
-) {
-    // Vault not ready — show init/unlock screens in the detail area
-    if !state.vault.initialized {
-        render_vault_init(frame, detail_area, state);
-        return;
-    }
-    if state.vault.locked {
-        render_vault_locked(frame, detail_area);
-        return;
-    }
-
-    render_tab_cards(frame, cards_area, state, selected_tab, effect_state);
-
-    match selected_tab {
-        0 => render_endpoints_list(frame, detail_area, state),
-        1 => render_providers_list(frame, detail_area, state),
-        2 => render_permissions_list(frame, detail_area, state),
-        3 => render_audit_list(frame, detail_area),
-        _ => {}
-    }
-}
-
-fn render_tab_cards(
     frame: &mut Frame,
     area: Rect,
     state: &AppState,
     selected_tab: usize,
-    effect_state: &EffectState,
+    _effect_state: &EffectState,
 ) {
-    let mut constraints: Vec<Constraint> = TABS
-        .iter()
-        .map(|_| Constraint::Length(CARD_WIDTH))
-        .collect();
-    constraints.push(Constraint::Fill(1));
+    // Vault not ready — show compact hint (errors shown in status strip)
+    if !state.vault.initialized {
+        render_vault_hint(frame, area, "Vault not initialized", "i: initialize");
+        return;
+    }
+    if state.vault.locked {
+        render_vault_hint(frame, area, "Vault locked", "u: unlock");
+        return;
+    }
 
-    let card_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .flex(Flex::Start)
-        .constraints(constraints)
-        .split(area);
-
-    let elapsed = effect_state.elapsed_secs();
-
-    for (idx, &(label, sub1, sub2)) in TABS.iter().enumerate() {
-        let is_selected = idx == selected_tab;
-
-        let border_style = if is_selected {
-            effects::active_border_style(elapsed)
-        } else {
-            Style::default().fg(palette::INACTIVE_BORDER)
-        };
-
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(border_style);
-
-        let inner = block.inner(card_chunks[idx]);
-        frame.render_widget(block, card_chunks[idx]);
-
-        if inner.height < 3 || inner.width < 2 {
-            continue;
-        }
-
-        let label_style = if is_selected {
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        // Count for each tab
-        let count_text = match idx {
-            0 => format!("{}", state.endpoints.len()),
-            1 => format!("{}", state.credential_schemas.len()),
-            _ => String::new(),
-        };
-
-        let lines = vec![
-            Line::from(Span::styled(label, label_style)),
-            Line::from(Span::styled(sub1, Style::default().fg(Color::Cyan))),
-            Line::from(Span::styled(
-                if count_text.is_empty() {
-                    sub2.to_string()
-                } else {
-                    format!("{count_text} {sub2}")
-                },
-                Style::default().fg(Color::DarkGray),
-            )),
-        ];
-
-        let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
-        let render_area = Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width,
-            height: inner.height.min(3),
-        };
-        frame.render_widget(paragraph, render_area);
+    match selected_tab {
+        0 => render_endpoints_list(frame, area, state),
+        1 => render_providers_list(frame, area, state),
+        2 => render_permissions_list(frame, area, state),
+        3 => render_audit_list(frame, area),
+        _ => {}
     }
 }
 
-fn render_vault_init(frame: &mut Frame, area: Rect, state: &AppState) {
-    let body = super::render_detail_header(frame, area, "Initialize Vault");
-
+/// Render a compact vault status hint centered in the content area
+fn render_vault_hint(frame: &mut Frame, area: Rect, message: &str, action: &str) {
     let content = vec![
         Line::from(""),
         Line::from(Span::styled(
-            "Vault not initialized",
+            message,
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Vault Path: ", Style::default().fg(Color::Cyan)),
-            Span::raw(state.vault_path.display().to_string()),
-        ]),
-        Line::from(""),
-        Line::from("The credential vault needs to be initialized before"),
-        Line::from("you can store API keys and secrets."),
-        Line::from(""),
         Line::from(Span::styled(
-            "Press 'i' to initialize with password",
+            format!("[ {action} ]"),
             Style::default().fg(Color::Green),
         )),
     ];
 
     let paragraph = Paragraph::new(content).alignment(Alignment::Center);
-
-    frame.render_widget(paragraph, body);
-}
-
-fn render_vault_locked(frame: &mut Frame, area: Rect) {
-    let body = super::render_detail_header(frame, area, "Unlock Vault");
-
-    let content = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Vault Locked",
-            Style::default().fg(Color::Yellow),
-        )),
-        Line::from(""),
-        Line::from("Enter your password to unlock the vault."),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Press 'u' to unlock",
-            Style::default().fg(Color::Green),
-        )),
-    ];
-
-    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
-
-    frame.render_widget(paragraph, body);
+    frame.render_widget(paragraph, area);
 }
 
 /// Render the Endpoints tab as a selectable vertical list

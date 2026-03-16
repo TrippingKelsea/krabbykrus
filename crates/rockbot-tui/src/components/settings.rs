@@ -1,114 +1,24 @@
-//! Settings component - horizontal card strip + detail panel
+//! Settings component - detail panel (card bar is in top slot bar)
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
+    layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
     Frame,
 };
 
-use crate::effects::{self, palette, EffectState};
+use crate::effects::EffectState;
 use crate::state::AppState;
 
-const CARD_WIDTH: u16 = 16;
-
-/// Render the settings page — cards in cards_area, detail in detail_area
+/// Render the settings page — detail fills the full area (cards are in top slot bar)
 pub fn render_settings(
-    frame: &mut Frame,
-    cards_area: Rect,
-    detail_area: Rect,
-    state: &AppState,
-    effect_state: &EffectState,
-) {
-    render_settings_cards(frame, cards_area, state, effect_state);
-    render_settings_detail(frame, detail_area, state);
-}
-
-fn render_settings_cards(
     frame: &mut Frame,
     area: Rect,
     state: &AppState,
-    effect_state: &EffectState,
+    _effect_state: &EffectState,
 ) {
-    let cards = [("General", 0usize), ("Paths", 1), ("About", 2)];
-
-    let mut constraints: Vec<Constraint> = cards
-        .iter()
-        .map(|_| Constraint::Length(CARD_WIDTH))
-        .collect();
-    constraints.push(Constraint::Fill(1));
-
-    let card_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .flex(Flex::Start)
-        .constraints(constraints)
-        .split(area);
-
-    let elapsed = effect_state.elapsed_secs();
-
-    for &(label, idx) in &cards {
-        let is_selected = idx == state.selected_settings_card;
-
-        let border_style = if is_selected {
-            effects::active_border_style(elapsed)
-        } else {
-            Style::default().fg(palette::INACTIVE_BORDER)
-        };
-
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(border_style);
-
-        let inner = block.inner(card_chunks[idx]);
-        frame.render_widget(block, card_chunks[idx]);
-
-        if inner.height < 3 || inner.width < 2 {
-            continue;
-        }
-
-        let label_style = if is_selected {
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        let lines = match idx {
-            0 => vec![
-                Line::from(Span::styled(label, label_style)),
-                Line::from(Span::styled("Gateway", Style::default().fg(Color::Cyan))),
-                Line::from(Span::styled(
-                    "Controls",
-                    Style::default().fg(Color::DarkGray),
-                )),
-            ],
-            1 => vec![
-                Line::from(Span::styled(label, label_style)),
-                Line::from(Span::styled("Config", Style::default().fg(Color::Cyan))),
-                Line::from(Span::styled(
-                    "Locations",
-                    Style::default().fg(Color::DarkGray),
-                )),
-            ],
-            2 => vec![
-                Line::from(Span::styled(label, label_style)),
-                Line::from(Span::styled("RockBot", Style::default().fg(Color::Cyan))),
-                Line::from(Span::styled("Info", Style::default().fg(Color::DarkGray))),
-            ],
-            _ => vec![],
-        };
-
-        let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
-        let render_area = Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width,
-            height: inner.height.min(3),
-        };
-        frame.render_widget(paragraph, render_area);
-    }
+    render_settings_detail(frame, area, state);
 }
 
 fn render_settings_detail(frame: &mut Frame, area: Rect, state: &AppState) {

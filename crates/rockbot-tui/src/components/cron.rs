@@ -1,105 +1,25 @@
-//! Cron jobs component - card strip + job list/detail
+//! Cron jobs component - detail panel (card bar is in top slot bar)
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Paragraph, Row, Table, Wrap},
+    widgets::{Paragraph, Row, Table, Wrap},
     Frame,
 };
 
 use super::render_spinner;
-use crate::effects::{self, palette, EffectState};
+use crate::effects::EffectState;
 use crate::state::AppState;
 
-const CARD_WIDTH: u16 = 16;
-
-/// Render cron jobs page — summary cards in cards_area, job list in detail_area
+/// Render cron jobs page — detail fills the full area (cards are in top slot bar)
 pub fn render_cron_jobs(
     frame: &mut Frame,
-    cards_area: Rect,
-    detail_area: Rect,
+    area: Rect,
     state: &AppState,
-    effect_state: &EffectState,
+    _effect_state: &EffectState,
 ) {
-    render_cron_cards(frame, cards_area, state, effect_state);
-    render_cron_detail(frame, detail_area, state);
-}
-
-fn render_cron_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
-    let cards = [("All Jobs", 0usize), ("Active", 1), ("Disabled", 2)];
-
-    let mut constraints: Vec<Constraint> = cards
-        .iter()
-        .map(|_| Constraint::Length(CARD_WIDTH))
-        .collect();
-    constraints.push(Constraint::Fill(1));
-
-    let card_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .flex(Flex::Start)
-        .constraints(constraints)
-        .split(area);
-
-    let elapsed = effect_state.elapsed_secs();
-
-    let total = state.cron_jobs.len();
-    let active = state.cron_jobs.iter().filter(|j| j.enabled).count();
-    let disabled = total - active;
-
-    for &(label, idx) in &cards {
-        let is_selected = idx == state.selected_cron_card;
-
-        let border_style = if is_selected {
-            effects::active_border_style(elapsed)
-        } else {
-            Style::default().fg(palette::INACTIVE_BORDER)
-        };
-
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(border_style);
-
-        let inner = block.inner(card_chunks[idx]);
-        frame.render_widget(block, card_chunks[idx]);
-
-        if inner.height < 3 || inner.width < 2 {
-            continue;
-        }
-
-        let label_style = if is_selected {
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        let (count, count_color) = match idx {
-            0 => (total, Color::Cyan),
-            1 => (active, Color::Green),
-            2 => (disabled, Color::DarkGray),
-            _ => (0, Color::DarkGray),
-        };
-
-        let lines = vec![
-            Line::from(Span::styled(label, label_style)),
-            Line::from(Span::styled(
-                format!("{count}"),
-                Style::default().fg(count_color),
-            )),
-            Line::from(Span::styled("jobs", Style::default().fg(Color::DarkGray))),
-        ];
-
-        let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
-        let render_area = Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width,
-            height: inner.height.min(3),
-        };
-        frame.render_widget(paragraph, render_area);
-    }
+    render_cron_detail(frame, area, state);
 }
 
 fn render_cron_detail(frame: &mut Frame, area: Rect, state: &AppState) {
