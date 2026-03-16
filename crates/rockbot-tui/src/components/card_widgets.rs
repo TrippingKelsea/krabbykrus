@@ -25,6 +25,10 @@ pub fn render_card_widget(id: &CardWidgetId, frame: &mut Frame, area: Rect, stat
         CardWidgetId::AgentOverview => render_agent_overview(frame, area, state),
         CardWidgetId::AgentSessions => render_agent_sessions(frame, area, state),
         CardWidgetId::AgentTools => render_agent_tools(frame, area),
+        CardWidgetId::VaultStatus => render_vault_status(frame, area, state),
+        CardWidgetId::CronOverview => render_cron_overview(frame, area, state),
+        CardWidgetId::ModelsOverview => render_models_overview(frame, area, state),
+        CardWidgetId::SettingsGeneral => render_settings_general(frame, area),
     }
 }
 
@@ -244,6 +248,102 @@ fn render_agent_tools(frame: &mut Frame, area: Rect) {
     let value = Paragraph::new(Span::styled(
         "0 calls",
         Style::default().fg(Color::DarkGray),
+    ));
+    frame.render_widget(value, rows[1]);
+}
+
+fn render_vault_status(frame: &mut Frame, area: Rect, state: &AppState) {
+    let rows = card_rows(area);
+    let label = Paragraph::new(Span::styled(
+        "Vault",
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    ));
+    frame.render_widget(label, rows[0]);
+
+    let (text, color) = if state.vault.initialized {
+        if state.vault.locked {
+            ("Locked", Color::Yellow)
+        } else {
+            ("Unlocked", Color::Green)
+        }
+    } else {
+        ("Not init", Color::Red)
+    };
+    let value = Paragraph::new(Span::styled(text, Style::default().fg(color)));
+    frame.render_widget(value, rows[1]);
+
+    let count = state.endpoints.len();
+    let detail = Paragraph::new(Span::styled(
+        format!("{count} endpoints"),
+        Style::default().fg(Color::DarkGray),
+    ));
+    frame.render_widget(detail, rows[2]);
+}
+
+fn render_cron_overview(frame: &mut Frame, area: Rect, state: &AppState) {
+    let rows = card_rows(area);
+    let label = Paragraph::new(Span::styled(
+        "Cron",
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    ));
+    frame.render_widget(label, rows[0]);
+
+    let total = state.cron_jobs.len();
+    let enabled = state.cron_jobs.iter().filter(|j| j.enabled).count();
+    let value = Paragraph::new(Span::styled(
+        format!("{enabled}/{total}"),
+        Style::default().fg(Color::Cyan),
+    ));
+    frame.render_widget(value, rows[1]);
+
+    let detail = Paragraph::new(Span::styled(
+        "enabled",
+        Style::default().fg(Color::DarkGray),
+    ));
+    frame.render_widget(detail, rows[2]);
+}
+
+fn render_models_overview(frame: &mut Frame, area: Rect, state: &AppState) {
+    let rows = card_rows(area);
+    let label = Paragraph::new(Span::styled(
+        "Models",
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    ));
+    frame.render_widget(label, rows[0]);
+
+    let count = state.providers.len();
+    let value = Paragraph::new(Span::styled(
+        format!("{count}"),
+        Style::default().fg(Color::Cyan),
+    ));
+    frame.render_widget(value, rows[1]);
+
+    let detail = Paragraph::new(Span::styled(
+        "providers",
+        Style::default().fg(Color::DarkGray),
+    ));
+    frame.render_widget(detail, rows[2]);
+}
+
+fn render_settings_general(frame: &mut Frame, area: Rect) {
+    let rows = card_rows(area);
+    let label = Paragraph::new(Span::styled(
+        "Settings",
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    ));
+    frame.render_widget(label, rows[0]);
+
+    let value = Paragraph::new(Span::styled(
+        env!("CARGO_PKG_VERSION"),
+        Style::default().fg(Color::Cyan),
     ));
     frame.render_widget(value, rows[1]);
 }

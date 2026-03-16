@@ -218,6 +218,10 @@ pub enum CardWidgetId {
     AgentOverview,
     AgentSessions,
     AgentTools,
+    VaultStatus,
+    CronOverview,
+    ModelsOverview,
+    SettingsGeneral,
 }
 
 /// What kind of slot this is.
@@ -414,6 +418,17 @@ fn build_dashboard_slots() -> Vec<CardSlot> {
             active_view: 0,
             kind: SlotKind::InfoCard,
         },
+        CardSlot {
+            label: "Vault".to_string(),
+            icon: 'V',
+            badge: None,
+            views: vec![SlotView {
+                label: "Status".to_string(),
+                widget: CardWidgetId::VaultStatus,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
     ]
 }
 
@@ -458,59 +473,155 @@ fn build_sessions_slots_from(sessions: &[SessionInfo]) -> Vec<CardSlot> {
 }
 
 fn build_credentials_slots() -> Vec<CardSlot> {
-    vec![CardSlot {
-        label: "Providers".to_string(),
-        icon: 'P',
-        badge: None,
-        views: vec![SlotView {
-            label: "Status".to_string(),
-            widget: CardWidgetId::GatewayStatus,
-        }],
-        active_view: 0,
-        kind: SlotKind::InfoCard,
-    }]
+    vec![
+        CardSlot {
+            label: "Endpoints".to_string(),
+            icon: 'E',
+            badge: None,
+            views: vec![SlotView {
+                label: "Status".to_string(),
+                widget: CardWidgetId::VaultStatus,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+        CardSlot {
+            label: "Providers".to_string(),
+            icon: 'P',
+            badge: None,
+            views: vec![SlotView {
+                label: "Status".to_string(),
+                widget: CardWidgetId::GatewayStatus,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+    ]
 }
 
 fn build_cron_slots() -> Vec<CardSlot> {
-    vec![CardSlot {
-        label: "Scheduler".to_string(),
-        icon: 'T',
-        badge: None,
-        views: vec![SlotView {
-            label: "Status".to_string(),
-            widget: CardWidgetId::GatewayStatus,
-        }],
-        active_view: 0,
-        kind: SlotKind::InfoCard,
-    }]
+    vec![
+        CardSlot {
+            label: "All Jobs".to_string(),
+            icon: 'A',
+            badge: None,
+            views: vec![SlotView {
+                label: "Overview".to_string(),
+                widget: CardWidgetId::CronOverview,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+        CardSlot {
+            label: "Active".to_string(),
+            icon: '+',
+            badge: None,
+            views: vec![SlotView {
+                label: "Active".to_string(),
+                widget: CardWidgetId::CronOverview,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+        CardSlot {
+            label: "Disabled".to_string(),
+            icon: 'o',
+            badge: None,
+            views: vec![SlotView {
+                label: "Disabled".to_string(),
+                widget: CardWidgetId::CronOverview,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+    ]
 }
 
 fn build_models_slots() -> Vec<CardSlot> {
-    vec![CardSlot {
-        label: "Providers".to_string(),
-        icon: 'M',
-        badge: None,
-        views: vec![SlotView {
-            label: "Status".to_string(),
-            widget: CardWidgetId::GatewayStatus,
-        }],
-        active_view: 0,
-        kind: SlotKind::InfoCard,
-    }]
+    vec![
+        CardSlot {
+            label: "Bedrock".to_string(),
+            icon: 'B',
+            badge: None,
+            views: vec![SlotView {
+                label: "Status".to_string(),
+                widget: CardWidgetId::ModelsOverview,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+        CardSlot {
+            label: "Anthropic".to_string(),
+            icon: 'A',
+            badge: None,
+            views: vec![SlotView {
+                label: "Status".to_string(),
+                widget: CardWidgetId::ModelsOverview,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+        CardSlot {
+            label: "OpenAI".to_string(),
+            icon: 'O',
+            badge: None,
+            views: vec![SlotView {
+                label: "Status".to_string(),
+                widget: CardWidgetId::ModelsOverview,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+        CardSlot {
+            label: "Ollama".to_string(),
+            icon: 'L',
+            badge: None,
+            views: vec![SlotView {
+                label: "Status".to_string(),
+                widget: CardWidgetId::ModelsOverview,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+    ]
 }
 
 fn build_settings_slots() -> Vec<CardSlot> {
-    vec![CardSlot {
-        label: "Config".to_string(),
-        icon: 'X',
-        badge: None,
-        views: vec![SlotView {
-            label: "Status".to_string(),
-            widget: CardWidgetId::GatewayStatus,
-        }],
-        active_view: 0,
-        kind: SlotKind::InfoCard,
-    }]
+    vec![
+        CardSlot {
+            label: "General".to_string(),
+            icon: 'G',
+            badge: None,
+            views: vec![SlotView {
+                label: "General".to_string(),
+                widget: CardWidgetId::SettingsGeneral,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+        CardSlot {
+            label: "Paths".to_string(),
+            icon: 'P',
+            badge: None,
+            views: vec![SlotView {
+                label: "Paths".to_string(),
+                widget: CardWidgetId::SettingsGeneral,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+        CardSlot {
+            label: "About".to_string(),
+            icon: 'i',
+            badge: None,
+            views: vec![SlotView {
+                label: "About".to_string(),
+                widget: CardWidgetId::SettingsGeneral,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+    ]
 }
 
 /// Gateway connection status
