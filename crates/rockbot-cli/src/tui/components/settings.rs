@@ -14,19 +14,27 @@ use crate::tui::state::AppState;
 const CARD_WIDTH: u16 = 16;
 
 /// Render the settings page — cards in cards_area, detail in detail_area
-pub fn render_settings(frame: &mut Frame, cards_area: Rect, detail_area: Rect, state: &AppState, effect_state: &EffectState) {
+pub fn render_settings(
+    frame: &mut Frame,
+    cards_area: Rect,
+    detail_area: Rect,
+    state: &AppState,
+    effect_state: &EffectState,
+) {
     render_settings_cards(frame, cards_area, state, effect_state);
     render_settings_detail(frame, detail_area, state);
 }
 
-fn render_settings_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
-    let cards = [
-        ("General", 0usize),
-        ("Paths", 1),
-        ("About", 2),
-    ];
+fn render_settings_cards(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    effect_state: &EffectState,
+) {
+    let cards = [("General", 0usize), ("Paths", 1), ("About", 2)];
 
-    let mut constraints: Vec<Constraint> = cards.iter()
+    let mut constraints: Vec<Constraint> = cards
+        .iter()
         .map(|_| Constraint::Length(CARD_WIDTH))
         .collect();
     constraints.push(Constraint::Min(0));
@@ -59,7 +67,9 @@ fn render_settings_cards(frame: &mut Frame, area: Rect, state: &AppState, effect
         }
 
         let label_style = if is_selected {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
@@ -68,12 +78,18 @@ fn render_settings_cards(frame: &mut Frame, area: Rect, state: &AppState, effect
             0 => vec![
                 Line::from(Span::styled(label, label_style)),
                 Line::from(Span::styled("Gateway", Style::default().fg(Color::Cyan))),
-                Line::from(Span::styled("Controls", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled(
+                    "Controls",
+                    Style::default().fg(Color::DarkGray),
+                )),
             ],
             1 => vec![
                 Line::from(Span::styled(label, label_style)),
                 Line::from(Span::styled("Config", Style::default().fg(Color::Cyan))),
-                Line::from(Span::styled("Locations", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled(
+                    "Locations",
+                    Style::default().fg(Color::DarkGray),
+                )),
             ],
             2 => vec![
                 Line::from(Span::styled(label, label_style)),
@@ -144,8 +160,7 @@ fn render_general(frame: &mut Frame, area: Rect, state: &AppState) {
         )),
     ];
 
-    let paragraph = Paragraph::new(content)
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(content).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, body);
 }
 
@@ -176,8 +191,7 @@ fn render_paths(frame: &mut Frame, area: Rect, state: &AppState) {
         )),
     ];
 
-    let paragraph = Paragraph::new(content)
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(content).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, body);
 }
 
@@ -188,7 +202,9 @@ fn render_about(frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "RockBot",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from("A Rust-native AI agent framework"),
         Line::from(""),
@@ -196,10 +212,12 @@ fn render_about(frame: &mut Frame, area: Rect) {
         Line::from("pluggable LLM providers, credential management,"),
         Line::from("and a TUI + Web interface."),
         Line::from(""),
-        Line::from(Span::styled("https://github.com/TrippingKelsea/rockbot", Style::default().fg(Color::Blue))),
+        Line::from(Span::styled(
+            "https://github.com/TrippingKelsea/rockbot",
+            Style::default().fg(Color::Blue),
+        )),
     ];
 
-    let paragraph = Paragraph::new(content)
-        .alignment(Alignment::Center);
+    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
     frame.render_widget(paragraph, body);
 }

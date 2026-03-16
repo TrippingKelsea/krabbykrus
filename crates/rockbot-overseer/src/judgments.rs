@@ -64,22 +64,16 @@ pub enum JudgmentType {
         params_summary: String,
     },
     /// Evaluate whether agent output is complete/coherent.
-    Completeness {
-        response_preview: String,
-    },
+    Completeness { response_preview: String },
     /// Evaluate whether the agent is stuck in a loop.
     LoopDetection {
         iteration: u32,
         pattern_summary: String,
     },
     /// Evaluate input message for safety.
-    InputSafety {
-        message_preview: String,
-    },
+    InputSafety { message_preview: String },
     /// Evaluate output message for safety.
-    OutputSafety {
-        response_preview: String,
-    },
+    OutputSafety { response_preview: String },
 }
 
 impl JudgmentType {
@@ -160,10 +154,7 @@ impl DecisionLog {
 
     /// Total number of decisions recorded.
     pub fn total_count(&self) -> usize {
-        self.entries
-            .lock()
-            .map(|e| e.len())
-            .unwrap_or(0)
+        self.entries.lock().map(|e| e.len()).unwrap_or(0)
     }
 
     /// Count decisions by verdict type.
@@ -358,9 +349,18 @@ mod tests {
 
     #[test]
     fn test_verdict_severity_ordering() {
-        assert!(OverseerVerdict::Allow.severity() < OverseerVerdict::AllowWithNote("x".into()).severity());
-        assert!(OverseerVerdict::AllowWithNote("x".into()).severity() < OverseerVerdict::Caution("x".into()).severity());
-        assert!(OverseerVerdict::Caution("x".into()).severity() < OverseerVerdict::Block("x".into()).severity());
+        assert!(
+            OverseerVerdict::Allow.severity()
+                < OverseerVerdict::AllowWithNote("x".into()).severity()
+        );
+        assert!(
+            OverseerVerdict::AllowWithNote("x".into()).severity()
+                < OverseerVerdict::Caution("x".into()).severity()
+        );
+        assert!(
+            OverseerVerdict::Caution("x".into()).severity()
+                < OverseerVerdict::Block("x".into()).severity()
+        );
     }
 
     #[test]

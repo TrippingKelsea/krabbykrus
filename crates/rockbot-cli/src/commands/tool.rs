@@ -1,13 +1,13 @@
 //! Tool management commands
 
+use crate::{load_config, ToolCommands};
 use anyhow::Result;
 use std::path::PathBuf;
-use crate::{ToolCommands, load_config};
 
 /// Run tool commands
 pub async fn run(command: &ToolCommands, config_path: &PathBuf) -> Result<()> {
     let config = load_config(config_path).await?;
-    
+
     match command {
         ToolCommands::List => {
             println!("🔧 Available Tools (profile: {})", config.tools.profile);
@@ -25,6 +25,6 @@ pub async fn run(command: &ToolCommands, config_path: &PathBuf) -> Result<()> {
             println!("   Tool testing coming soon...");
         }
     }
-    
+
     Ok(())
 }

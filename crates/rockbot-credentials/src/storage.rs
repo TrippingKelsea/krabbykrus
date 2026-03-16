@@ -19,40 +19,44 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::crypto::{decrypt, encrypt, generate_nonce, generate_salt, MasterKey, NONCE_SIZE, KEY_SIZE};
+use crate::crypto::{
+    decrypt, encrypt, generate_nonce, generate_salt, MasterKey, KEY_SIZE, NONCE_SIZE,
+};
 use crate::error::{CredentialError, Result};
-use crate::types::{hex_encode, hex_decode, Credential, CredentialType, Endpoint, EndpointType};
+use crate::types::{hex_decode, hex_encode, Credential, CredentialType, Endpoint, EndpointType};
 
 /// Wraps a master key with an Age public key.
 /// Returns base64-encoded ciphertext.
 fn wrap_key_with_age(key_bytes: &[u8], public_key: &str) -> Result<String> {
     use age::Encryptor;
     use std::io::Write;
-    
+
     // Parse the recipient (public key)
     let recipient: Box<dyn age::Recipient + Send> = public_key
         .parse::<age::x25519::Recipient>()
         .map(|r| Box::new(r) as Box<dyn age::Recipient + Send>)
-        .map_err(|e| CredentialError::ValidationFailed(
-            format!("Invalid Age public key: {e}")
-        ))?;
-    
+        .map_err(|e| CredentialError::ValidationFailed(format!("Invalid Age public key: {e}")))?;
+
     // Encrypt the key
-    let encryptor = Encryptor::with_recipients(vec![recipient])
-        .ok_or_else(|| CredentialError::Internal("No recipients provided for Age encryption".to_string()))?;
-    
+    let encryptor = Encryptor::with_recipients(vec![recipient]).ok_or_else(|| {
+        CredentialError::Internal("No recipients provided for Age encryption".to_string())
+    })?;
+
     let mut encrypted = vec![];
-    let mut writer = encryptor.wrap_output(&mut encrypted)
+    let mut writer = encryptor
+        .wrap_output(&mut encrypted)
         .map_err(|e| CredentialError::Internal(format!("Age wrap error: {e}")))?;
-    
-    writer.write_all(key_bytes)
+
+    writer
+        .write_all(key_bytes)
         .map_err(|e| CredentialError::Internal(format!("Age write error: {e}")))?;
-    
-    writer.finish()
+
+    writer
+        .finish()
         .map_err(|e| CredentialError::Internal(format!("Age finish error: {e}")))?;
-    
+
     // Return as base64
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     Ok(STANDARD.encode(&encrypted))
 }
 
@@ -61,140 +65,160 @@ fn wrap_key_with_age(key_bytes: &[u8], public_key: &str) -> Result<String> {
 fn unwrap_key_with_age(wrapped_key: &str, identity_str: &str) -> Result<Vec<u8>> {
     use age::Decryptor;
     use std::io::Read;
-    
+
     // Decode base64
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    let encrypted = STANDARD.decode(wrapped_key)
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let encrypted = STANDARD
+        .decode(wrapped_key)
         .map_err(|e| CredentialError::DeserializationError(format!("Invalid base64: {e}")))?;
-    
+
     // Parse the identity (private key)
     let identity: Box<dyn age::Identity> = identity_str
         .parse::<age::x25519::Identity>()
         .map(|i| Box::new(i) as Box<dyn age::Identity>)
-        .map_err(|e| CredentialError::ValidationFailed(
-            format!("Invalid Age identity: {e}")
-        ))?;
-    
+        .map_err(|e| CredentialError::ValidationFailed(format!("Invalid Age identity: {e}")))?;
+
     // Decrypt
     let decryptor = Decryptor::new(&encrypted[..])
         .map_err(|e| CredentialError::Internal(format!("Age decryptor error: {e}")))?;
-    
+
     let mut decrypted = vec![];
     match decryptor {
         Decryptor::Recipients(d) => {
-            let mut reader = d.decrypt(std::iter::once(&*identity as &dyn age::Identity))
+            let mut reader = d
+                .decrypt(std::iter::once(&*identity as &dyn age::Identity))
                 .map_err(|_e| CredentialError::InvalidPassword)?;
-            reader.read_to_end(&mut decrypted)
+            reader
+                .read_to_end(&mut decrypted)
                 .map_err(|e| CredentialError::Internal(format!("Age read error: {e}")))?;
         }
-        _ => return Err(CredentialError::Internal("Unexpected decryptor type".to_string())),
+        _ => {
+            return Err(CredentialError::Internal(
+                "Unexpected decryptor type".to_string(),
+            ))
+        }
     }
-    
+
     if decrypted.len() != KEY_SIZE {
-        return Err(CredentialError::Internal(
-            format!("Decrypted key has wrong size: expected {}, got {}", KEY_SIZE, decrypted.len())
-        ));
+        return Err(CredentialError::Internal(format!(
+            "Decrypted key has wrong size: expected {}, got {}",
+            KEY_SIZE,
+            decrypted.len()
+        )));
     }
-    
+
     Ok(decrypted)
 }
 
 /// Wraps a master key with an SSH public key.
 /// Uses the public key to encrypt via hybrid encryption.
 fn wrap_key_with_ssh(key_bytes: &[u8], public_key_path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
     use ssh_key::PublicKey;
-    use sha2::{Sha256, Digest};
-    
+
     // Read and parse the public key
     let pubkey_content = fs::read_to_string(public_key_path)?;
     let pubkey = PublicKey::from_openssh(&pubkey_content)
         .map_err(|e| CredentialError::ValidationFailed(format!("Invalid SSH public key: {e}")))?;
-    
+
     // For SSH keys, we use a hybrid approach:
     // 1. Hash the public key to get a unique identifier
     // 2. Use AES-GCM with a key derived from (public key hash + nonce)
     // 3. The "wrapped" key can only be unwrapped by proving possession of the private key
     //
-    // Note: This is a simplified approach. True SSH encryption would use 
+    // Note: This is a simplified approach. True SSH encryption would use
     // RSA-OAEP or ECDH depending on key type.
-    
-    let pubkey_bytes = pubkey.to_bytes()
+
+    let pubkey_bytes = pubkey
+        .to_bytes()
         .map_err(|e| CredentialError::Internal(format!("Failed to serialize public key: {e}")))?;
-    
+
     // Create a deterministic wrapping key from the public key
     let mut hasher = Sha256::new();
     hasher.update(&pubkey_bytes);
     hasher.update(b"rockbot-ssh-wrap-v1");
     let wrap_key_bytes: [u8; 32] = hasher.finalize().into();
-    
+
     let wrap_key = MasterKey::from_bytes(&wrap_key_bytes)?;
-    
+
     // Encrypt the master key
     let nonce = generate_nonce();
     let encrypted = encrypt(&wrap_key, &nonce, key_bytes)?;
-    
+
     // Combine nonce + ciphertext and encode
     let mut combined = nonce.to_vec();
     combined.extend(encrypted);
-    
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     Ok(STANDARD.encode(&combined))
 }
 
 /// Unwraps a master key using an SSH private key.
-fn unwrap_key_with_ssh(wrapped_key: &str, private_key_path: &Path, passphrase: Option<&str>) -> Result<Vec<u8>> {
+fn unwrap_key_with_ssh(
+    wrapped_key: &str,
+    private_key_path: &Path,
+    passphrase: Option<&str>,
+) -> Result<Vec<u8>> {
+    use sha2::{Digest, Sha256};
     use ssh_key::PrivateKey;
-    use sha2::{Sha256, Digest};
-    
+
     // Read the private key
     let privkey_content = fs::read_to_string(private_key_path)?;
-    
+
     // Parse private key (with optional passphrase)
     let privkey = if let Some(pass) = passphrase {
         PrivateKey::from_openssh(&privkey_content)
             .and_then(|k| k.decrypt(pass.as_bytes()))
             .map_err(|_e| CredentialError::InvalidPassword)?
     } else {
-        PrivateKey::from_openssh(&privkey_content)
-            .map_err(|e| CredentialError::ValidationFailed(format!("Invalid SSH private key: {e}")))?
+        PrivateKey::from_openssh(&privkey_content).map_err(|e| {
+            CredentialError::ValidationFailed(format!("Invalid SSH private key: {e}"))
+        })?
     };
-    
+
     // Get the public key from the private key
     let pubkey = privkey.public_key();
-    let pubkey_bytes = pubkey.to_bytes()
+    let pubkey_bytes = pubkey
+        .to_bytes()
         .map_err(|e| CredentialError::Internal(format!("Failed to serialize public key: {e}")))?;
-    
+
     // Recreate the wrapping key
     let mut hasher = Sha256::new();
     hasher.update(&pubkey_bytes);
     hasher.update(b"rockbot-ssh-wrap-v1");
     let wrap_key_bytes: [u8; 32] = hasher.finalize().into();
-    
+
     let wrap_key = MasterKey::from_bytes(&wrap_key_bytes)?;
-    
+
     // Decode and split nonce + ciphertext
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    let combined = STANDARD.decode(wrapped_key)
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let combined = STANDARD
+        .decode(wrapped_key)
         .map_err(|e| CredentialError::DeserializationError(format!("Invalid base64: {e}")))?;
-    
+
     if combined.len() < NONCE_SIZE {
-        return Err(CredentialError::DeserializationError("Wrapped key too short".to_string()));
-    }
-    
-    let (nonce_bytes, ciphertext) = combined.split_at(NONCE_SIZE);
-    let nonce: [u8; NONCE_SIZE] = nonce_bytes.try_into()
-        .map_err(|_| CredentialError::DeserializationError("Invalid nonce".to_string()))?;
-    
-    // Decrypt
-    let decrypted = decrypt(&wrap_key, &nonce, ciphertext)
-        .map_err(|_| CredentialError::InvalidPassword)?;
-    
-    if decrypted.len() != KEY_SIZE {
-        return Err(CredentialError::Internal(
-            format!("Decrypted key has wrong size: expected {}, got {}", KEY_SIZE, decrypted.len())
+        return Err(CredentialError::DeserializationError(
+            "Wrapped key too short".to_string(),
         ));
     }
-    
+
+    let (nonce_bytes, ciphertext) = combined.split_at(NONCE_SIZE);
+    let nonce: [u8; NONCE_SIZE] = nonce_bytes
+        .try_into()
+        .map_err(|_| CredentialError::DeserializationError("Invalid nonce".to_string()))?;
+
+    // Decrypt
+    let decrypted =
+        decrypt(&wrap_key, &nonce, ciphertext).map_err(|_| CredentialError::InvalidPassword)?;
+
+    if decrypted.len() != KEY_SIZE {
+        return Err(CredentialError::Internal(format!(
+            "Decrypted key has wrong size: expected {}, got {}",
+            KEY_SIZE,
+            decrypted.len()
+        )));
+    }
+
     Ok(decrypted)
 }
 
@@ -281,7 +305,7 @@ impl CredentialVault {
 
         // Load metadata (required)
         vault.load_meta()?;
-        
+
         // Load existing data
         vault.load_endpoints()?;
         vault.load_credentials()?;
@@ -330,9 +354,10 @@ impl CredentialVault {
         // Read key file
         let key_bytes = fs::read(keyfile_path)?;
         if key_bytes.len() != 32 {
-            return Err(CredentialError::ValidationFailed(
-                format!("keyfile must be exactly 32 bytes, got {}", key_bytes.len())
-            ));
+            return Err(CredentialError::ValidationFailed(format!(
+                "keyfile must be exactly 32 bytes, got {}",
+                key_bytes.len()
+            )));
         }
 
         // Ensure directory exists
@@ -400,10 +425,15 @@ impl CredentialVault {
     }
 
     /// Common finalization for all init methods
-    fn finalize_init(data_dir: PathBuf, master_key: MasterKey, unlock: UnlockMethod) -> Result<Self> {
+    fn finalize_init(
+        data_dir: PathBuf,
+        master_key: MasterKey,
+        unlock: UnlockMethod,
+    ) -> Result<Self> {
         // Create verification data (encrypt known plaintext)
         let verification_nonce = generate_nonce();
-        let verification_ciphertext = encrypt(&master_key, &verification_nonce, VERIFICATION_PLAINTEXT)?;
+        let verification_ciphertext =
+            encrypt(&master_key, &verification_nonce, VERIFICATION_PLAINTEXT)?;
 
         // Create metadata
         let meta = VaultMeta {
@@ -439,7 +469,9 @@ impl CredentialVault {
     /// Unlocks the vault with a password.
     /// Only works if the vault was initialized with password-based encryption.
     pub fn unlock_with_password(&mut self, password: &str) -> Result<()> {
-        let meta = self.meta.as_ref()
+        let meta = self
+            .meta
+            .as_ref()
             .ok_or(CredentialError::VaultNotInitialized)?;
 
         // Extract salt from unlock method
@@ -447,11 +479,13 @@ impl CredentialVault {
             UnlockMethod::Password { salt } => {
                 hex_decode(salt).map_err(CredentialError::DeserializationError)?
             }
-            _ => return Err(CredentialError::ValidationFailed(
-                "vault was not initialized with password-based encryption".to_string()
-            )),
+            _ => {
+                return Err(CredentialError::ValidationFailed(
+                    "vault was not initialized with password-based encryption".to_string(),
+                ))
+            }
         };
-        
+
         // Derive master key
         let master_key = MasterKey::derive_from_password(password, &salt)?;
 
@@ -462,23 +496,28 @@ impl CredentialVault {
     /// Unlocks the vault with a key file.
     /// Only works if the vault was initialized with keyfile-based encryption.
     pub fn unlock_with_keyfile(&mut self, keyfile_path: &Path) -> Result<()> {
-        let meta = self.meta.as_ref()
+        let meta = self
+            .meta
+            .as_ref()
             .ok_or(CredentialError::VaultNotInitialized)?;
 
         // Verify unlock method matches
         match &meta.unlock {
             UnlockMethod::Keyfile { .. } => {}
-            _ => return Err(CredentialError::ValidationFailed(
-                "vault was not initialized with keyfile-based encryption".to_string()
-            )),
+            _ => {
+                return Err(CredentialError::ValidationFailed(
+                    "vault was not initialized with keyfile-based encryption".to_string(),
+                ))
+            }
         };
 
         // Read key file
         let key_bytes = fs::read(keyfile_path)?;
         if key_bytes.len() != 32 {
-            return Err(CredentialError::ValidationFailed(
-                format!("keyfile must be exactly 32 bytes, got {}", key_bytes.len())
-            ));
+            return Err(CredentialError::ValidationFailed(format!(
+                "keyfile must be exactly 32 bytes, got {}",
+                key_bytes.len()
+            )));
         }
 
         let master_key = MasterKey::from_bytes(&key_bytes)?;
@@ -488,42 +527,54 @@ impl CredentialVault {
     /// Unlocks the vault with an Age identity (private key).
     /// Only works if the vault was initialized with Age encryption.
     pub fn unlock_with_age(&mut self, age_identity: &str) -> Result<()> {
-        let meta = self.meta.as_ref()
+        let meta = self
+            .meta
+            .as_ref()
             .ok_or(CredentialError::VaultNotInitialized)?;
 
         // Extract wrapped key from unlock method
         let wrapped_key = match &meta.unlock {
             UnlockMethod::Age { wrapped_key, .. } => wrapped_key.clone(),
-            _ => return Err(CredentialError::ValidationFailed(
-                "vault was not initialized with Age encryption".to_string()
-            )),
+            _ => {
+                return Err(CredentialError::ValidationFailed(
+                    "vault was not initialized with Age encryption".to_string(),
+                ))
+            }
         };
 
         // Unwrap master key with Age identity
         let key_bytes = unwrap_key_with_age(&wrapped_key, age_identity)?;
         let master_key = MasterKey::from_bytes(&key_bytes)?;
-        
+
         self.verify_and_set_master_key(master_key)
     }
 
     /// Unlocks the vault with an SSH private key.
     /// Only works if the vault was initialized with SSH key encryption.
-    pub fn unlock_with_ssh(&mut self, private_key_path: &Path, passphrase: Option<&str>) -> Result<()> {
-        let meta = self.meta.as_ref()
+    pub fn unlock_with_ssh(
+        &mut self,
+        private_key_path: &Path,
+        passphrase: Option<&str>,
+    ) -> Result<()> {
+        let meta = self
+            .meta
+            .as_ref()
             .ok_or(CredentialError::VaultNotInitialized)?;
 
         // Extract wrapped key from unlock method
         let wrapped_key = match &meta.unlock {
             UnlockMethod::SshKey { wrapped_key, .. } => wrapped_key.clone(),
-            _ => return Err(CredentialError::ValidationFailed(
-                "vault was not initialized with SSH key encryption".to_string()
-            )),
+            _ => {
+                return Err(CredentialError::ValidationFailed(
+                    "vault was not initialized with SSH key encryption".to_string(),
+                ))
+            }
         };
 
         // Unwrap master key with SSH private key
         let key_bytes = unwrap_key_with_ssh(&wrapped_key, private_key_path, passphrase)?;
         let master_key = MasterKey::from_bytes(&key_bytes)?;
-        
+
         self.verify_and_set_master_key(master_key)
     }
 
@@ -534,19 +585,22 @@ impl CredentialVault {
 
     /// Verifies a master key against the stored verification data and sets it if valid
     fn verify_and_set_master_key(&mut self, master_key: MasterKey) -> Result<()> {
-        let meta = self.meta.as_ref()
+        let meta = self
+            .meta
+            .as_ref()
             .ok_or(CredentialError::VaultNotInitialized)?;
 
         // Verify by decrypting verification data
-        let verification_ciphertext = hex_decode(&meta.verification)
-            .map_err(CredentialError::DeserializationError)?;
-        let verification_nonce_vec = hex_decode(&meta.verification_nonce)
-            .map_err(CredentialError::DeserializationError)?;
-        
+        let verification_ciphertext =
+            hex_decode(&meta.verification).map_err(CredentialError::DeserializationError)?;
+        let verification_nonce_vec =
+            hex_decode(&meta.verification_nonce).map_err(CredentialError::DeserializationError)?;
+
         // Convert Vec<u8> to [u8; NONCE_SIZE]
-        let verification_nonce: [u8; NONCE_SIZE] = verification_nonce_vec
-            .try_into()
-            .map_err(|_| CredentialError::DeserializationError("invalid nonce length".to_string()))?;
+        let verification_nonce: [u8; NONCE_SIZE] =
+            verification_nonce_vec.try_into().map_err(|_| {
+                CredentialError::DeserializationError("invalid nonce length".to_string())
+            })?;
 
         let decrypted = decrypt(&master_key, &verification_nonce, &verification_ciphertext)
             .map_err(|_| CredentialError::InvalidPassword)?;
@@ -619,7 +673,9 @@ impl CredentialVault {
 
     /// Saves vault metadata to disk.
     fn save_meta(&self) -> Result<()> {
-        let meta = self.meta.as_ref()
+        let meta = self
+            .meta
+            .as_ref()
             .ok_or(CredentialError::VaultNotInitialized)?;
 
         let path = self.meta_path();
@@ -788,7 +844,10 @@ impl CredentialVault {
         credential_type: CredentialType,
         secret_data: &[u8],
     ) -> Result<Credential> {
-        let master_key = self.master_key.as_ref().ok_or(CredentialError::VaultLocked)?;
+        let master_key = self
+            .master_key
+            .as_ref()
+            .ok_or(CredentialError::VaultLocked)?;
 
         // Encrypt the secret data
         let nonce = generate_nonce();
@@ -833,7 +892,10 @@ impl CredentialVault {
 
     /// Decrypts and returns the secret data for a credential.
     pub fn decrypt_credential(&self, credential_id: Uuid) -> Result<Vec<u8>> {
-        let master_key = self.master_key.as_ref().ok_or(CredentialError::VaultLocked)?;
+        let master_key = self
+            .master_key
+            .as_ref()
+            .ok_or(CredentialError::VaultLocked)?;
         let credential = self.get_credential(credential_id)?;
 
         let encrypted_data = credential.encrypted_data_bytes()?;
@@ -861,7 +923,10 @@ impl CredentialVault {
 
     /// Rotates a credential with new secret data.
     pub fn rotate_credential(&mut self, credential_id: Uuid, new_secret: &[u8]) -> Result<()> {
-        let master_key = self.master_key.as_ref().ok_or(CredentialError::VaultLocked)?;
+        let master_key = self
+            .master_key
+            .as_ref()
+            .ok_or(CredentialError::VaultLocked)?;
 
         let credential = self
             .credentials

@@ -3,33 +3,31 @@
 //! Each component handles rendering a specific section of the UI.
 //! Components are stateless renderers that read from AppState.
 
-pub mod dashboard;
-pub mod credentials;
 pub mod agents;
-pub mod sessions;
+pub mod credentials;
 pub mod cron;
+pub mod dashboard;
+pub mod modals;
 pub mod models;
+pub mod sessions;
 pub mod settings;
 pub mod sidebar;
-pub mod modals;
 
-pub use dashboard::render_dashboard;
-pub use credentials::render_credentials;
 pub use agents::render_agents;
-pub use sessions::render_sessions;
+pub use credentials::render_credentials;
 pub use cron::render_cron_jobs;
+pub use dashboard::render_dashboard;
+pub use modals::{
+    render_add_credential_modal, render_confirm_modal, render_create_session_modal,
+    render_edit_agent_modal, render_edit_context_file_modal, render_edit_credential_modal,
+    render_edit_permission_modal, render_edit_provider_modal, render_password_modal,
+    render_view_context_files_modal, render_view_endpoint_modal, render_view_model_list_modal,
+    render_view_permission_modal, render_view_provider_modal, render_view_session_modal,
+};
 pub use models::render_models;
+pub use sessions::render_sessions;
 pub use settings::render_settings;
 pub use sidebar::render_sidebar;
-pub use modals::{
-    render_password_modal, render_confirm_modal, render_add_credential_modal,
-    render_edit_credential_modal, render_edit_provider_modal, render_view_session_modal,
-    render_edit_agent_modal, render_create_session_modal,
-    render_view_endpoint_modal, render_view_provider_modal,
-    render_view_model_list_modal, render_edit_permission_modal,
-    render_view_permission_modal,
-    render_view_context_files_modal, render_edit_context_file_modal,
-};
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -43,12 +41,12 @@ use ratatui::{
 pub fn render_spinner(frame: &mut Frame, area: Rect, message: &str, tick: usize) {
     let spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
     let spinner = spinner_chars[tick % spinner_chars.len()];
-    
+
     let text = format!("{spinner} {message}");
     let paragraph = Paragraph::new(text)
         .style(Style::default().fg(Color::Cyan))
         .alignment(Alignment::Center);
-    
+
     frame.render_widget(paragraph, area);
 }
 
@@ -58,17 +56,22 @@ pub fn render_error(frame: &mut Frame, area: Rect, error: &str) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Red))
         .title(Span::styled("Error", Style::default().fg(Color::Red)));
-    
+
     let paragraph = Paragraph::new(error)
         .style(Style::default().fg(Color::Red))
         .wrap(Wrap { trim: true })
         .block(block);
-    
+
     frame.render_widget(paragraph, area);
 }
 
 /// Render status bar at bottom of screen
-pub fn render_status_bar(frame: &mut Frame, area: Rect, message: Option<&(String, bool)>, help_text: &str) {
+pub fn render_status_bar(
+    frame: &mut Frame,
+    area: Rect,
+    message: Option<&(String, bool)>,
+    help_text: &str,
+) {
     let (text, style) = match message {
         Some((msg, is_error)) => {
             let style = if *is_error {
@@ -80,10 +83,9 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, message: Option<&(String
         }
         None => (help_text.to_string(), Style::default().fg(Color::DarkGray)),
     };
-    
-    let status = Paragraph::new(format!(" {text}"))
-        .style(style);
-    
+
+    let status = Paragraph::new(format!(" {text}")).style(style);
+
     frame.render_widget(status, area);
 }
 
@@ -121,12 +123,12 @@ pub fn render_detail_header(frame: &mut Frame, area: Rect, title: &str) -> Rect 
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(area);
 
-    let header = Paragraph::new(Line::from(vec![
-        Span::styled(
-            format!(" {title}"),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ),
-    ]));
+    let header = Paragraph::new(Line::from(vec![Span::styled(
+        format!(" {title}"),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )]));
     frame.render_widget(header, chunks[0]);
 
     // Body area with 1-char left padding
@@ -142,14 +144,18 @@ pub fn render_detail_header(frame: &mut Frame, area: Rect, title: &str) -> Rect 
 /// `area` is the filler rect after the last visible card.
 /// `can_left`/`can_right` indicate whether more items exist off-screen.
 pub fn render_card_scroll_hint(frame: &mut Frame, area: Rect, can_left: bool, can_right: bool) {
-    if !can_left && !can_right { return; }
+    if !can_left && !can_right {
+        return;
+    }
     let hint = match (can_left, can_right) {
         (true, true) => "◀ ▶",
         (true, false) => "◀",
         (false, true) => "▶",
         _ => "",
     };
-    if area.width < hint.len() as u16 || area.height == 0 { return; }
+    if area.width < hint.len() as u16 || area.height == 0 {
+        return;
+    }
     let row = Rect {
         x: area.x,
         y: area.y + area.height.saturating_sub(1),

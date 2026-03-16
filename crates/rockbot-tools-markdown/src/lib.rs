@@ -3,7 +3,7 @@
 //! Provides markdown parsing and rendering capabilities to agents.
 
 use rockbot_security::Capabilities;
-use rockbot_tools::{Tool, ToolError, message::ToolResult, ToolExecutionContext};
+use rockbot_tools::{message::ToolResult, Tool, ToolError, ToolExecutionContext};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -59,13 +59,15 @@ impl Tool for MarkdownTool {
         _context: ToolExecutionContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + '_>> {
         Box::pin(async move {
-            let content = params.get("content")
+            let content = params
+                .get("content")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| ToolError::InvalidParameters {
                     message: "Missing 'content' parameter".to_string(),
                 })?;
 
-            let operation = params.get("operation")
+            let operation = params
+                .get("operation")
                 .and_then(|v| v.as_str())
                 .unwrap_or("parse");
 
@@ -79,9 +81,7 @@ impl Tool for MarkdownTool {
                         "headings": headings,
                     })))
                 }
-                _ => {
-                    Ok(ToolResult::text(content))
-                }
+                _ => Ok(ToolResult::text(content)),
             }
         })
     }

@@ -3,8 +3,8 @@
 //! This module provides session tracking, message history management, and
 //! persistent storage for agent conversations.
 
-use rockbot_config::{Message, SessionError};
 use chrono::{DateTime, Utc};
+use rockbot_config::{Message, SessionError};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -261,7 +261,10 @@ impl SessionManager {
             sessions.insert(session.id.clone(), session.clone());
         }
 
-        info!("Created session {} for agent {}", session.id, session.agent_id);
+        info!(
+            "Created session {} for agent {}",
+            session.id, session.agent_id
+        );
         Ok(session)
     }
 
@@ -282,10 +285,10 @@ impl SessionManager {
                  FROM sessions WHERE id = ?1",
                 params![session_id],
                 |row| {
-                    let created_at = DateTime::from_timestamp(row.get::<_, i64>(3)?, 0)
-                        .unwrap_or_else(Utc::now);
-                    let updated_at = DateTime::from_timestamp(row.get::<_, i64>(4)?, 0)
-                        .unwrap_or_else(Utc::now);
+                    let created_at =
+                        DateTime::from_timestamp(row.get::<_, i64>(3)?, 0).unwrap_or_else(Utc::now);
+                    let updated_at =
+                        DateTime::from_timestamp(row.get::<_, i64>(4)?, 0).unwrap_or_else(Utc::now);
                     let state: String = row.get(8)?;
                     let metadata_str: String = row.get(9)?;
 
@@ -403,18 +406,19 @@ impl SessionManager {
         )?;
 
         let message_iter = stmt.query_map(params![session_id, limit, offset], |row| {
-            let created_at = DateTime::from_timestamp(row.get::<_, i64>(6)?, 0)
-                .unwrap_or_else(Utc::now);
+            let created_at =
+                DateTime::from_timestamp(row.get::<_, i64>(6)?, 0).unwrap_or_else(Utc::now);
             let _role_str: String = row.get(3)?;
             let content_str: String = row.get(4)?;
             let metadata_str: String = row.get(5)?;
 
-            let content = serde_json::from_str(&content_str)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+            let content = serde_json::from_str(&content_str).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
                     4,
                     rusqlite::types::Type::Text,
-                    Box::new(e)
-                ))?;
+                    Box::new(e),
+                )
+            })?;
             let metadata = serde_json::from_str(&metadata_str).unwrap_or_default();
 
             Ok(StoredMessage {
@@ -447,7 +451,7 @@ impl SessionManager {
         let mut sql = String::from(
             "SELECT id, agent_id, session_key, created_at, updated_at,
                     input_tokens, output_tokens, total_tokens, state, metadata
-             FROM sessions WHERE 1=1"
+             FROM sessions WHERE 1=1",
         );
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
@@ -462,13 +466,15 @@ impl SessionManager {
         }
 
         if let Some(ref state) = query.state {
-            let state_json = serde_json::to_string(state).unwrap_or_else(|_| "\"active\"".to_string());
+            let state_json =
+                serde_json::to_string(state).unwrap_or_else(|_| "\"active\"".to_string());
             sql.push_str(" AND state = ?");
             params.push(Box::new(state_json));
         }
 
         if query.exclude_archived {
-            let archived_json = serde_json::to_string(&SessionState::Archived).unwrap_or_else(|_| "\"archived\"".to_string());
+            let archived_json = serde_json::to_string(&SessionState::Archived)
+                .unwrap_or_else(|_| "\"archived\"".to_string());
             sql.push_str(" AND state != ?");
             params.push(Box::new(archived_json));
         }
@@ -494,12 +500,13 @@ impl SessionManager {
         }
 
         let mut stmt = db.prepare(&sql)?;
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(std::convert::AsRef::as_ref).collect();
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            params.iter().map(std::convert::AsRef::as_ref).collect();
         let session_iter = stmt.query_map(params_refs.as_slice(), |row| {
-            let created_at = DateTime::from_timestamp(row.get::<_, i64>(3)?, 0)
-                .unwrap_or_else(Utc::now);
-            let updated_at = DateTime::from_timestamp(row.get::<_, i64>(4)?, 0)
-                .unwrap_or_else(Utc::now);
+            let created_at =
+                DateTime::from_timestamp(row.get::<_, i64>(3)?, 0).unwrap_or_else(Utc::now);
+            let updated_at =
+                DateTime::from_timestamp(row.get::<_, i64>(4)?, 0).unwrap_or_else(Utc::now);
             let state_str: String = row.get(8)?;
             let metadata_str: String = row.get(9)?;
 
@@ -578,9 +585,8 @@ impl SessionManager {
     pub async fn get_statistics(&self) -> Result<SessionStatistics> {
         let db = self.db.lock().await;
 
-        let total_sessions: i64 = db.query_row("SELECT COUNT(*) FROM sessions", [], |row| {
-            row.get(0)
-        })?;
+        let total_sessions: i64 =
+            db.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))?;
 
         let active_sessions: i64 = db.query_row(
             "SELECT COUNT(*) FROM sessions WHERE state = 'active'",
@@ -589,13 +595,14 @@ impl SessionManager {
         )?;
 
         let total_messages: i64 =
-            db.query_row("SELECT COUNT(*) FROM session_messages", [], |row| row.get(0))?;
+            db.query_row("SELECT COUNT(*) FROM session_messages", [], |row| {
+                row.get(0)
+            })?;
 
-        let total_tokens: Option<i64> = db.query_row(
-            "SELECT SUM(total_tokens) FROM sessions",
-            [],
-            |row| row.get(0),
-        )?;
+        let total_tokens: Option<i64> =
+            db.query_row("SELECT SUM(total_tokens) FROM sessions", [], |row| {
+                row.get(0)
+            })?;
 
         Ok(SessionStatistics {
             total_sessions: total_sessions as u64,

@@ -8,26 +8,29 @@ use ratatui::{
     Frame,
 };
 
+use super::render_spinner;
 use crate::tui::effects::{self, palette, EffectState};
 use crate::tui::state::AppState;
-use super::render_spinner;
 
 const CARD_WIDTH: u16 = 16;
 
 /// Render cron jobs page — summary cards in cards_area, job list in detail_area
-pub fn render_cron_jobs(frame: &mut Frame, cards_area: Rect, detail_area: Rect, state: &AppState, effect_state: &EffectState) {
+pub fn render_cron_jobs(
+    frame: &mut Frame,
+    cards_area: Rect,
+    detail_area: Rect,
+    state: &AppState,
+    effect_state: &EffectState,
+) {
     render_cron_cards(frame, cards_area, state, effect_state);
     render_cron_detail(frame, detail_area, state);
 }
 
 fn render_cron_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
-    let cards = [
-        ("All Jobs", 0usize),
-        ("Active", 1),
-        ("Disabled", 2),
-    ];
+    let cards = [("All Jobs", 0usize), ("Active", 1), ("Disabled", 2)];
 
-    let mut constraints: Vec<Constraint> = cards.iter()
+    let mut constraints: Vec<Constraint> = cards
+        .iter()
         .map(|_| Constraint::Length(CARD_WIDTH))
         .collect();
     constraints.push(Constraint::Min(0));
@@ -64,7 +67,9 @@ fn render_cron_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_sta
         }
 
         let label_style = if is_selected {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
@@ -78,7 +83,10 @@ fn render_cron_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_sta
 
         let lines = vec![
             Line::from(Span::styled(label, label_style)),
-            Line::from(Span::styled(format!("{count}"), Style::default().fg(count_color))),
+            Line::from(Span::styled(
+                format!("{count}"),
+                Style::default().fg(count_color),
+            )),
             Line::from(Span::styled("jobs", Style::default().fg(Color::DarkGray))),
         ];
 
@@ -104,7 +112,10 @@ fn render_cron_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     if state.cron_jobs.is_empty() {
         let content = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled("No cron jobs configured", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "No cron jobs configured",
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from(""),
             Line::from(Span::styled(
                 "Use the API to create cron jobs:",
@@ -128,7 +139,11 @@ fn render_cron_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     };
 
     if jobs.is_empty() {
-        let label = if state.selected_cron_card == 1 { "active" } else { "disabled" };
+        let label = if state.selected_cron_card == 1 {
+            "active"
+        } else {
+            "disabled"
+        };
         let content = Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -145,33 +160,37 @@ fn render_cron_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         .style(Style::default().fg(Color::Cyan))
         .bottom_margin(1);
 
-    let rows: Vec<Row> = jobs.iter().enumerate().map(|(i, job)| {
-        let status_style = if job.enabled {
-            Style::default().fg(Color::Green)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
+    let rows: Vec<Row> = jobs
+        .iter()
+        .enumerate()
+        .map(|(i, job)| {
+            let status_style = if job.enabled {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
 
-        let status_label = if job.enabled { "Active" } else { "Disabled" };
-        let last_status = job.last_status.as_deref().unwrap_or("-");
-        let last_run = job.last_run.as_deref().unwrap_or("Never");
+            let status_label = if job.enabled { "Active" } else { "Disabled" };
+            let last_status = job.last_status.as_deref().unwrap_or("-");
+            let last_run = job.last_run.as_deref().unwrap_or("Never");
 
-        let row_style = if i == state.selected_cron_job {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
+            let row_style = if i == state.selected_cron_job {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
 
-        Row::new(vec![
-            job.name.clone(),
-            job.agent_id.clone().unwrap_or_else(|| "-".to_string()),
-            job.schedule.clone(),
-            format!("{status_label} ({last_status})"),
-            last_run.to_string(),
-        ])
-        .style(status_style)
-        .style(row_style)
-    }).collect();
+            Row::new(vec![
+                job.name.clone(),
+                job.agent_id.clone().unwrap_or_else(|| "-".to_string()),
+                job.schedule.clone(),
+                format!("{status_label} ({last_status})"),
+                last_run.to_string(),
+            ])
+            .style(status_style)
+            .style(row_style)
+        })
+        .collect();
 
     let widths = [
         Constraint::Percentage(22),
@@ -200,7 +219,10 @@ fn render_cron_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     // Split body area into table + footer
     let detail_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(footer_lines.len() as u16 + 1)])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(footer_lines.len() as u16 + 1),
+        ])
         .split(body);
 
     let table = Table::new(rows, widths).header(header);

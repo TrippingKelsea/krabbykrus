@@ -61,7 +61,11 @@ impl Overseer {
         let (allow, note, caution, block) = self.decision_log.verdict_counts();
         let total_decisions = allow + note + caution + block;
 
-        let mode_str = if self.config.enforce { "enforcing" } else { "advisory" };
+        let mode_str = if self.config.enforce {
+            "enforcing"
+        } else {
+            "advisory"
+        };
 
         format!(
             "## Overseer Status\n\n\
@@ -262,10 +266,8 @@ impl Overseer {
         }
 
         let trust_score = if total > 0 {
-            let weighted = allow as f64 * 1.0
-                + note as f64 * 0.9
-                + caution as f64 * 0.4
-                + block as f64 * 0.0;
+            let weighted =
+                allow as f64 * 1.0 + note as f64 * 0.9 + caution as f64 * 0.4 + block as f64 * 0.0;
             (weighted / total as f64 * 100.0).round() as u32
         } else {
             100

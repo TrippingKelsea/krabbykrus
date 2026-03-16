@@ -8,7 +8,7 @@ use rockbot_credentials_schema::{
     AuthMethod, CredentialCategory, CredentialField, CredentialSchema,
 };
 use rockbot_security::Capabilities;
-use rockbot_tools::{Tool, ToolError, message::ToolResult, ToolExecutionContext};
+use rockbot_tools::{message::ToolResult, Tool, ToolError, ToolExecutionContext};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
@@ -102,19 +102,22 @@ impl McpConnection {
         tokio::time::timeout(
             std::time::Duration::from_secs(10),
             self.stdin.write_all(line.as_bytes()),
-        ).await.map_err(|_| ToolError::ExecutionFailed {
+        )
+        .await
+        .map_err(|_| ToolError::ExecutionFailed {
             message: "Timed out writing to MCP server stdin".to_string(),
-        })?.map_err(|e| ToolError::ExecutionFailed {
+        })?
+        .map_err(|e| ToolError::ExecutionFailed {
             message: format!("Failed to write to MCP server stdin: {e}"),
         })?;
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            self.stdin.flush(),
-        ).await.map_err(|_| ToolError::ExecutionFailed {
-            message: "Timed out flushing MCP server stdin".to_string(),
-        })?.map_err(|e| ToolError::ExecutionFailed {
-            message: format!("Failed to flush MCP server stdin: {e}"),
-        })?;
+        tokio::time::timeout(std::time::Duration::from_secs(5), self.stdin.flush())
+            .await
+            .map_err(|_| ToolError::ExecutionFailed {
+                message: "Timed out flushing MCP server stdin".to_string(),
+            })?
+            .map_err(|e| ToolError::ExecutionFailed {
+                message: format!("Failed to flush MCP server stdin: {e}"),
+            })?;
 
         // Read response line
         let mut response_line = String::new();
@@ -180,7 +183,10 @@ impl McpServerManager {
         name: &str,
         config: &McpServerConfig,
     ) -> Result<Vec<McpToolDef>, ToolError> {
-        debug!("Starting MCP server '{name}': {} {:?}", config.command, config.args);
+        debug!(
+            "Starting MCP server '{name}': {} {:?}",
+            config.command, config.args
+        );
 
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args)
@@ -193,12 +199,18 @@ impl McpServerManager {
             message: format!("Failed to spawn MCP server '{name}': {e}"),
         })?;
 
-        let stdin = child.stdin.take().ok_or_else(|| ToolError::ExecutionFailed {
-            message: "Failed to capture MCP server stdin".to_string(),
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| ToolError::ExecutionFailed {
-            message: "Failed to capture MCP server stdout".to_string(),
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| ToolError::ExecutionFailed {
+                message: "Failed to capture MCP server stdin".to_string(),
+            })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ToolError::ExecutionFailed {
+                message: "Failed to capture MCP server stdout".to_string(),
+            })?;
 
         let mut conn = McpConnection {
             child,
@@ -208,14 +220,19 @@ impl McpServerManager {
         };
 
         // Initialize MCP protocol
-        let init_result = conn.call("initialize", Some(serde_json::json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {
-                "name": "rockbot",
-                "version": env!("CARGO_PKG_VERSION")
-            }
-        }))).await?;
+        let init_result = conn
+            .call(
+                "initialize",
+                Some(serde_json::json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "rockbot",
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
+                })),
+            )
+            .await?;
 
         debug!("MCP server '{name}' initialized: {init_result}");
 
@@ -224,15 +241,23 @@ impl McpServerManager {
         let notify_line = serde_json::to_string(&serde_json::json!({
             "jsonrpc": "2.0",
             "method": "notifications/initialized"
-        })).unwrap_or_default();
-        let _ = conn.stdin.write_all(format!("{notify_line}\n").as_bytes()).await;
+        }))
+        .unwrap_or_default();
+        let _ = conn
+            .stdin
+            .write_all(format!("{notify_line}\n").as_bytes())
+            .await;
         let _ = conn.stdin.flush().await;
 
         // Discover tools
         let tools_result = conn.call("tools/list", None).await?;
         let tools: Vec<McpToolDef> = serde_json::from_value(
-            tools_result.get("tools").cloned().unwrap_or(serde_json::Value::Array(vec![]))
-        ).unwrap_or_default();
+            tools_result
+                .get("tools")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![])),
+        )
+        .unwrap_or_default();
 
         debug!("MCP server '{name}' has {} tools", tools.len());
 
@@ -262,16 +287,23 @@ impl McpServerManager {
         arguments: serde_json::Value,
     ) -> Result<serde_json::Value, ToolError> {
         let servers = self.servers.read().await;
-        let conn = servers.get(server_name).ok_or_else(|| ToolError::ExecutionFailed {
-            message: format!("MCP server '{server_name}' not found or not running"),
-        })?.clone();
+        let conn = servers
+            .get(server_name)
+            .ok_or_else(|| ToolError::ExecutionFailed {
+                message: format!("MCP server '{server_name}' not found or not running"),
+            })?
+            .clone();
         drop(servers);
 
         let mut conn = conn.lock().await;
-        conn.call("tools/call", Some(serde_json::json!({
-            "name": tool_name,
-            "arguments": arguments,
-        }))).await
+        conn.call(
+            "tools/call",
+            Some(serde_json::json!({
+                "name": tool_name,
+                "arguments": arguments,
+            })),
+        )
+        .await
     }
 
     /// Stop all MCP server processes
@@ -314,7 +346,12 @@ pub struct McpProxyTool {
 impl McpProxyTool {
     pub fn new(server_name: String, tool_def: McpToolDef, manager: Arc<McpServerManager>) -> Self {
         let qualified_name = format!("mcp_{}_{}", server_name, tool_def.name);
-        Self { qualified_name, server_name, tool_def, manager }
+        Self {
+            qualified_name,
+            server_name,
+            tool_def,
+            manager,
+        }
     }
 }
 
@@ -328,7 +365,10 @@ impl Tool for McpProxyTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
-        self.tool_def.input_schema.clone().unwrap_or(serde_json::json!({"type": "object"}))
+        self.tool_def
+            .input_schema
+            .clone()
+            .unwrap_or(serde_json::json!({"type": "object"}))
     }
 
     fn required_capabilities(&self) -> Capabilities {
@@ -341,11 +381,15 @@ impl Tool for McpProxyTool {
         _context: ToolExecutionContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + '_>> {
         Box::pin(async move {
-            let result = self.manager.call_tool(&self.server_name, &self.tool_def.name, params).await?;
+            let result = self
+                .manager
+                .call_tool(&self.server_name, &self.tool_def.name, params)
+                .await?;
 
             // MCP tools/call returns { content: [{ type, text }] }
             if let Some(content) = result.get("content").and_then(|c| c.as_array()) {
-                let text_parts: Vec<&str> = content.iter()
+                let text_parts: Vec<&str> = content
+                    .iter()
                     .filter_map(|part| {
                         if part.get("type").and_then(|t| t.as_str()) == Some("text") {
                             part.get("text").and_then(|t| t.as_str())
@@ -420,7 +464,8 @@ impl Tool for McpTool {
         _context: ToolExecutionContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + '_>> {
         Box::pin(async move {
-            let server_url = params.get("server_url")
+            let server_url = params
+                .get("server_url")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| ToolError::InvalidParameters {
                     message: "Missing 'server_url' parameter".to_string(),
@@ -511,7 +556,8 @@ mod tests {
 
     #[test]
     fn test_json_rpc_error_parsing() {
-        let json = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
+        let json =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
         let resp: JsonRpcResponse = serde_json::from_str(json).unwrap();
         assert!(resp.result.is_none());
         let err = resp.error.unwrap();
@@ -521,7 +567,8 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_def_parsing() {
-        let json = r#"{"name":"read_file","description":"Read a file","inputSchema":{"type":"object"}}"#;
+        let json =
+            r#"{"name":"read_file","description":"Read a file","inputSchema":{"type":"object"}}"#;
         let tool: McpToolDef = serde_json::from_str(json).unwrap();
         assert_eq!(tool.name, "read_file");
         assert_eq!(tool.description.as_deref(), Some("Read a file"));

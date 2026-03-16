@@ -4,7 +4,7 @@
 //! types from heavy runtime crates that the gateway depends on.
 
 pub use rockbot_config::error::{
-    ConfigError, GatewayError, SessionError, AgentError, ToolError, MemoryError, SecurityError,
+    AgentError, ConfigError, GatewayError, MemoryError, SecurityError, SessionError, ToolError,
 };
 
 use thiserror::Error;

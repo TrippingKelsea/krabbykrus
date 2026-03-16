@@ -6,16 +6,16 @@
 //!
 //! Set `TELEGRAM_BOT_TOKEN` environment variable with your bot token.
 
+use async_trait::async_trait;
+use chrono::Utc;
+use futures::Stream;
 use rockbot_channels::{
-    Channel, ChannelCapabilities, ChannelError, ChannelEvent, ChannelEventType,
-    ChannelHealth, ChannelInfo, ChannelMessage, MessageContent, Result, UserInfo,
+    Channel, ChannelCapabilities, ChannelError, ChannelEvent, ChannelEventType, ChannelHealth,
+    ChannelInfo, ChannelMessage, MessageContent, Result, UserInfo,
 };
 use rockbot_credentials_schema::{
     AuthMethod, CredentialCategory, CredentialField, CredentialSchema,
 };
-use async_trait::async_trait;
-use chrono::Utc;
-use futures::Stream;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -105,8 +105,8 @@ impl TelegramChannel {
 
     /// Create a Telegram channel from environment variables
     pub async fn from_env() -> Result<Self> {
-        let token = std::env::var("TELEGRAM_BOT_TOKEN")
-            .map_err(|_| ChannelError::ConfigurationError {
+        let token =
+            std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| ChannelError::ConfigurationError {
                 message: "TELEGRAM_BOT_TOKEN environment variable not set".to_string(),
             })?;
 
@@ -118,8 +118,19 @@ impl TelegramChannel {
     fn user_to_user_info(user: &User) -> UserInfo {
         UserInfo {
             id: user.id.0.to_string(),
-            username: user.username.clone().unwrap_or_else(|| user.first_name.clone()),
-            display_name: Some(format!("{} {}", user.first_name, user.last_name.as_deref().unwrap_or("")).trim().to_string()),
+            username: user
+                .username
+                .clone()
+                .unwrap_or_else(|| user.first_name.clone()),
+            display_name: Some(
+                format!(
+                    "{} {}",
+                    user.first_name,
+                    user.last_name.as_deref().unwrap_or("")
+                )
+                .trim()
+                .to_string(),
+            ),
             avatar_url: None,
             is_bot: user.is_bot,
             is_verified: user.is_premium,
@@ -128,7 +139,8 @@ impl TelegramChannel {
 
     /// Parse target to chat ID
     fn parse_chat_id(target: &str) -> Result<ChatId> {
-        target.parse::<i64>()
+        target
+            .parse::<i64>()
             .map(ChatId)
             .map_err(|_| ChannelError::InvalidMessageFormat {
                 message: format!("Invalid chat ID: {target}"),
@@ -182,24 +194,43 @@ impl TelegramChannel {
                             {
                                 let mut chats = known_chats.write().await;
                                 let chat = &msg.chat;
-                                chats.insert(chat.id.0, TelegramChatInfo {
-                                    id: chat.id.0,
-                                    title: chat.title().map(std::string::ToString::to_string),
-                                    username: chat.username().map(std::string::ToString::to_string),
-                                    chat_type: "telegram".to_string(),
-                                    member_count: None,
-                                });
+                                chats.insert(
+                                    chat.id.0,
+                                    TelegramChatInfo {
+                                        id: chat.id.0,
+                                        title: chat.title().map(std::string::ToString::to_string),
+                                        username: chat
+                                            .username()
+                                            .map(std::string::ToString::to_string),
+                                        chat_type: "telegram".to_string(),
+                                        member_count: None,
+                                    },
+                                );
                             }
 
                             let mut event_data = serde_json::Map::new();
-                            event_data.insert("text".to_string(), serde_json::Value::String(msg.text().unwrap_or("").to_string()));
-                            event_data.insert("chat_id".to_string(), serde_json::Value::Number(msg.chat.id.0.into()));
+                            event_data.insert(
+                                "text".to_string(),
+                                serde_json::Value::String(msg.text().unwrap_or("").to_string()),
+                            );
+                            event_data.insert(
+                                "chat_id".to_string(),
+                                serde_json::Value::Number(msg.chat.id.0.into()),
+                            );
 
                             if let Some(from) = &msg.from() {
-                                event_data.insert("user_id".to_string(), serde_json::Value::String(from.id.0.to_string()));
-                                event_data.insert("username".to_string(), serde_json::Value::String(
-                                    from.username.clone().unwrap_or_else(|| from.first_name.clone())
-                                ));
+                                event_data.insert(
+                                    "user_id".to_string(),
+                                    serde_json::Value::String(from.id.0.to_string()),
+                                );
+                                event_data.insert(
+                                    "username".to_string(),
+                                    serde_json::Value::String(
+                                        from.username
+                                            .clone()
+                                            .unwrap_or_else(|| from.first_name.clone()),
+                                    ),
+                                );
                             }
 
                             let event = ChannelEvent {
@@ -304,7 +335,8 @@ impl Channel for TelegramChannel {
 
         debug!("Sending Telegram message to {}: {}", target, text);
 
-        let sent_message = self.bot
+        let sent_message = self
+            .bot
             .send_message(chat_id, &text)
             .parse_mode(ParseMode::MarkdownV2)
             .await
@@ -316,7 +348,8 @@ impl Channel for TelegramChannel {
     }
 
     async fn edit_message(&self, message_id: &str, _new_content: &str) -> Result<()> {
-        let _msg_id: i32 = message_id.parse()
+        let _msg_id: i32 = message_id
+            .parse()
             .map_err(|_| ChannelError::InvalidMessageFormat {
                 message: format!("Invalid message ID: {message_id}"),
             })?;
@@ -329,7 +362,8 @@ impl Channel for TelegramChannel {
     }
 
     async fn delete_message(&self, message_id: &str) -> Result<()> {
-        let _msg_id: i32 = message_id.parse()
+        let _msg_id: i32 = message_id
+            .parse()
             .map_err(|_| ChannelError::InvalidMessageFormat {
                 message: format!("Invalid message ID: {message_id}"),
             })?;
@@ -354,7 +388,8 @@ impl Channel for TelegramChannel {
     }
 
     async fn get_user_info(&self, user_id: &str) -> Result<UserInfo> {
-        let user_id_num: u64 = user_id.parse()
+        let user_id_num: u64 = user_id
+            .parse()
             .map_err(|_| ChannelError::InvalidMessageFormat {
                 message: format!("Invalid user ID: {user_id}"),
             })?;
@@ -373,21 +408,17 @@ impl Channel for TelegramChannel {
         let chat_id = Self::parse_chat_id(channel_id)?;
 
         match self.bot.get_chat(chat_id).await {
-            Ok(chat) => {
-                Ok(ChannelInfo {
-                    id: chat.id.0.to_string(),
-                    name: chat.title().unwrap_or("Private Chat").to_string(),
-                    channel_type: "telegram".to_string(),
-                    description: chat.description().map(std::string::ToString::to_string),
-                    member_count: None,
-                    created_at: None,
-                })
-            }
-            Err(e) => {
-                Err(ChannelError::NotFound {
-                    name: format!("Telegram chat {channel_id}: {e}"),
-                })
-            }
+            Ok(chat) => Ok(ChannelInfo {
+                id: chat.id.0.to_string(),
+                name: chat.title().unwrap_or("Private Chat").to_string(),
+                channel_type: "telegram".to_string(),
+                description: chat.description().map(std::string::ToString::to_string),
+                member_count: None,
+                created_at: None,
+            }),
+            Err(e) => Err(ChannelError::NotFound {
+                name: format!("Telegram chat {channel_id}: {e}"),
+            }),
         }
     }
 

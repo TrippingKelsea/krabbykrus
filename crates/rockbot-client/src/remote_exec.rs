@@ -350,7 +350,10 @@ impl RemoteExecutorRegistry {
 
         // Set up response channel
         let (resp_tx, resp_rx) = oneshot::channel();
-        self.pending.write().await.insert(request_id.clone(), resp_tx);
+        self.pending
+            .write()
+            .await
+            .insert(request_id.clone(), resp_tx);
 
         // Send the request to the client
         {
@@ -423,18 +426,14 @@ impl Default for RemoteExecutorRegistry {
 pub const NOISE_PATTERN: &str = "Noise_XX_25519_ChaChaPoly_SHA256";
 
 /// Create a Noise responder (gateway side) for a new connection.
-pub fn create_responder(
-    static_key: &snow::Keypair,
-) -> Result<snow::HandshakeState, snow::Error> {
+pub fn create_responder(static_key: &snow::Keypair) -> Result<snow::HandshakeState, snow::Error> {
     snow::Builder::new(NOISE_PATTERN.parse()?)
         .local_private_key(&static_key.private)
         .build_responder()
 }
 
 /// Create a Noise initiator (client side) for connecting to a gateway.
-pub fn create_initiator(
-    static_key: &snow::Keypair,
-) -> Result<snow::HandshakeState, snow::Error> {
+pub fn create_initiator(static_key: &snow::Keypair) -> Result<snow::HandshakeState, snow::Error> {
     snow::Builder::new(NOISE_PATTERN.parse()?)
         .local_private_key(&static_key.private)
         .build_initiator()
@@ -452,10 +451,22 @@ mod tests {
 
     #[test]
     fn test_tool_capability_mapping() {
-        assert_eq!(ToolCapability::for_tool("read"), Some(ToolCapability::Filesystem));
-        assert_eq!(ToolCapability::for_tool("exec"), Some(ToolCapability::Shell));
-        assert_eq!(ToolCapability::for_tool("browser"), Some(ToolCapability::Browser));
-        assert_eq!(ToolCapability::for_tool("web_fetch"), Some(ToolCapability::Network));
+        assert_eq!(
+            ToolCapability::for_tool("read"),
+            Some(ToolCapability::Filesystem)
+        );
+        assert_eq!(
+            ToolCapability::for_tool("exec"),
+            Some(ToolCapability::Shell)
+        );
+        assert_eq!(
+            ToolCapability::for_tool("browser"),
+            Some(ToolCapability::Browser)
+        );
+        assert_eq!(
+            ToolCapability::for_tool("web_fetch"),
+            Some(ToolCapability::Network)
+        );
         assert_eq!(ToolCapability::for_tool("clarify"), None);
         assert_eq!(ToolCapability::for_tool("unknown_tool"), None);
     }

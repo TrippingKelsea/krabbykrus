@@ -6,26 +6,24 @@
 //!
 //! Set `DISCORD_BOT_TOKEN` environment variable with your bot token.
 
+use chrono::{DateTime, Utc};
 use rockbot_channels::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelEvent, ChannelEventType,
-    ChannelHealth, ChannelInfo, ChannelMessage, Embed, MessageContent, Result,
-    UserInfo,
+    ChannelHealth, ChannelInfo, ChannelMessage, Embed, MessageContent, Result, UserInfo,
 };
 use rockbot_credentials_schema::{
     AuthMethod, CredentialCategory, CredentialField, CredentialSchema,
 };
-use chrono::{DateTime, Utc};
 
 /// Convert time::OffsetDateTime (used by serenity) to chrono::DateTime<Utc>
 fn serenity_time_to_chrono(ts: time::OffsetDateTime) -> DateTime<Utc> {
-    DateTime::from_timestamp(ts.unix_timestamp(), ts.nanosecond())
-        .unwrap_or_else(Utc::now)
+    DateTime::from_timestamp(ts.unix_timestamp(), ts.nanosecond()).unwrap_or_else(Utc::now)
 }
 use async_trait::async_trait;
 use futures::Stream;
 use serenity::all::{
-    ChannelId, Context, CreateEmbed, CreateMessage, EditMessage, EventHandler,
-    GatewayIntents, Http, Message as SerenityMessage, MessageId, Ready, UserId,
+    ChannelId, Context, CreateEmbed, CreateMessage, EditMessage, EventHandler, GatewayIntents,
+    Http, Message as SerenityMessage, MessageId, Ready, UserId,
 };
 use serenity::Client;
 use std::env;
@@ -162,9 +160,10 @@ impl DiscordChannel {
 
     /// Create from environment variable
     pub fn from_env() -> Result<Self> {
-        let token = env::var("DISCORD_BOT_TOKEN").map_err(|_| ChannelError::ConfigurationError {
-            message: "DISCORD_BOT_TOKEN environment variable not set".to_string(),
-        })?;
+        let token =
+            env::var("DISCORD_BOT_TOKEN").map_err(|_| ChannelError::ConfigurationError {
+                message: "DISCORD_BOT_TOKEN environment variable not set".to_string(),
+            })?;
         Ok(Self::new(token))
     }
 
@@ -182,11 +181,7 @@ impl DiscordChannel {
     }
 
     /// Send a message to a specific channel
-    pub async fn send_to_channel(
-        &self,
-        channel_id: u64,
-        content: &str,
-    ) -> Result<SerenityMessage> {
+    pub async fn send_to_channel(&self, channel_id: u64, content: &str) -> Result<SerenityMessage> {
         let http = self.http.as_ref().ok_or(ChannelError::ConnectionFailed {
             message: "Not connected".to_string(),
         })?;
@@ -203,11 +198,7 @@ impl DiscordChannel {
     }
 
     /// Send a rich embed to a channel
-    pub async fn send_embed(
-        &self,
-        channel_id: u64,
-        embed: &Embed,
-    ) -> Result<SerenityMessage> {
+    pub async fn send_embed(&self, channel_id: u64, embed: &Embed) -> Result<SerenityMessage> {
         let http = self.http.as_ref().ok_or(ChannelError::ConnectionFailed {
             message: "Not connected".to_string(),
         })?;
@@ -356,9 +347,11 @@ impl Channel for DiscordChannel {
     }
 
     async fn send_message(&self, target: &str, message: ChannelMessage) -> Result<String> {
-        let channel_id: u64 = target.parse().map_err(|_| ChannelError::InvalidMessageFormat {
-            message: format!("Invalid channel ID: {target}"),
-        })?;
+        let channel_id: u64 = target
+            .parse()
+            .map_err(|_| ChannelError::InvalidMessageFormat {
+                message: format!("Invalid channel ID: {target}"),
+            })?;
 
         let http = self.http.as_ref().ok_or(ChannelError::ConnectionFailed {
             message: "Not connected".to_string(),
@@ -367,14 +360,12 @@ impl Channel for DiscordChannel {
         let channel = ChannelId::new(channel_id);
 
         let sent_message = match message.content {
-            MessageContent::Text { text } => {
-                channel
-                    .send_message(&http, CreateMessage::new().content(&text))
-                    .await
-                    .map_err(|e| ChannelError::MessageSendFailed {
-                        message: e.to_string(),
-                    })?
-            }
+            MessageContent::Text { text } => channel
+                .send_message(&http, CreateMessage::new().content(&text))
+                .await
+                .map_err(|e| ChannelError::MessageSendFailed {
+                    message: e.to_string(),
+                })?,
             MessageContent::Rich { text, embeds, .. } => {
                 let mut create_message = CreateMessage::new().content(&text);
 
@@ -390,7 +381,8 @@ impl Channel for DiscordChannel {
                         serenity_embed = serenity_embed.color(color);
                     }
                     for field in &embed.fields {
-                        serenity_embed = serenity_embed.field(&field.name, &field.value, field.inline);
+                        serenity_embed =
+                            serenity_embed.field(&field.name, &field.value, field.inline);
                     }
                     create_message = create_message.embed(serenity_embed);
                 }
@@ -428,12 +420,16 @@ impl Channel for DiscordChannel {
             });
         }
 
-        let channel_id: u64 = parts[0].parse().map_err(|_| ChannelError::InvalidMessageFormat {
-            message: "Invalid channel ID".to_string(),
-        })?;
-        let msg_id: u64 = parts[1].parse().map_err(|_| ChannelError::InvalidMessageFormat {
-            message: "Invalid message ID".to_string(),
-        })?;
+        let channel_id: u64 = parts[0]
+            .parse()
+            .map_err(|_| ChannelError::InvalidMessageFormat {
+                message: "Invalid channel ID".to_string(),
+            })?;
+        let msg_id: u64 = parts[1]
+            .parse()
+            .map_err(|_| ChannelError::InvalidMessageFormat {
+                message: "Invalid message ID".to_string(),
+            })?;
 
         let http = self.http.as_ref().ok_or(ChannelError::ConnectionFailed {
             message: "Not connected".to_string(),
@@ -460,12 +456,16 @@ impl Channel for DiscordChannel {
             });
         }
 
-        let channel_id: u64 = parts[0].parse().map_err(|_| ChannelError::InvalidMessageFormat {
-            message: "Invalid channel ID".to_string(),
-        })?;
-        let msg_id: u64 = parts[1].parse().map_err(|_| ChannelError::InvalidMessageFormat {
-            message: "Invalid message ID".to_string(),
-        })?;
+        let channel_id: u64 = parts[0]
+            .parse()
+            .map_err(|_| ChannelError::InvalidMessageFormat {
+                message: "Invalid channel ID".to_string(),
+            })?;
+        let msg_id: u64 = parts[1]
+            .parse()
+            .map_err(|_| ChannelError::InvalidMessageFormat {
+                message: "Invalid message ID".to_string(),
+            })?;
 
         let http = self.http.as_ref().ok_or(ChannelError::ConnectionFailed {
             message: "Not connected".to_string(),
@@ -474,39 +474,46 @@ impl Channel for DiscordChannel {
         let channel = ChannelId::new(channel_id);
         let message = MessageId::new(msg_id);
 
-        channel
-            .delete_message(&http, message)
-            .await
-            .map_err(|e| ChannelError::MessageSendFailed {
+        channel.delete_message(&http, message).await.map_err(|e| {
+            ChannelError::MessageSendFailed {
                 message: e.to_string(),
-            })?;
+            }
+        })?;
 
         Ok(())
     }
 
     async fn event_stream(&self) -> Result<Pin<Box<dyn Stream<Item = ChannelEvent> + Send>>> {
-        let rx = self.event_rx.write().await.take().ok_or(ChannelError::ConfigurationError {
-            message: "Event stream already consumed".to_string(),
-        })?;
+        let rx = self
+            .event_rx
+            .write()
+            .await
+            .take()
+            .ok_or(ChannelError::ConfigurationError {
+                message: "Event stream already consumed".to_string(),
+            })?;
 
-        Ok(Box::pin(tokio_stream::wrappers::UnboundedReceiverStream::new(rx)))
+        Ok(Box::pin(
+            tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
+        ))
     }
 
     async fn get_user_info(&self, user_id: &str) -> Result<UserInfo> {
-        let user_id: u64 = user_id.parse().map_err(|_| ChannelError::InvalidMessageFormat {
-            message: "Invalid user ID".to_string(),
-        })?;
+        let user_id: u64 = user_id
+            .parse()
+            .map_err(|_| ChannelError::InvalidMessageFormat {
+                message: "Invalid user ID".to_string(),
+            })?;
 
         let http = self.http.as_ref().ok_or(ChannelError::ConnectionFailed {
             message: "Not connected".to_string(),
         })?;
 
-        let user = UserId::new(user_id)
-            .to_user(&http)
-            .await
-            .map_err(|e| ChannelError::MessageSendFailed {
+        let user = UserId::new(user_id).to_user(&http).await.map_err(|e| {
+            ChannelError::MessageSendFailed {
                 message: e.to_string(),
-            })?;
+            }
+        })?;
 
         Ok(UserInfo {
             id: user.id.to_string(),
@@ -519,9 +526,12 @@ impl Channel for DiscordChannel {
     }
 
     async fn get_channel_info(&self, channel_id: &str) -> Result<ChannelInfo> {
-        let channel_id: u64 = channel_id.parse().map_err(|_| ChannelError::InvalidMessageFormat {
-            message: "Invalid channel ID".to_string(),
-        })?;
+        let channel_id: u64 =
+            channel_id
+                .parse()
+                .map_err(|_| ChannelError::InvalidMessageFormat {
+                    message: "Invalid channel ID".to_string(),
+                })?;
 
         let http = self.http.as_ref().ok_or(ChannelError::ConnectionFailed {
             message: "Not connected".to_string(),
@@ -535,12 +545,12 @@ impl Channel for DiscordChannel {
             })?;
 
         let (name, channel_type, description) = match channel {
-            serenity::all::Channel::Guild(gc) => {
-                (gc.name.clone(), gc.kind.name().to_string(), gc.topic.clone())
-            }
-            serenity::all::Channel::Private(_pc) => {
-                ("DM".to_string(), "dm".to_string(), None)
-            }
+            serenity::all::Channel::Guild(gc) => (
+                gc.name.clone(),
+                gc.kind.name().to_string(),
+                gc.topic.clone(),
+            ),
+            serenity::all::Channel::Private(_pc) => ("DM".to_string(), "dm".to_string(), None),
             _ => ("Unknown".to_string(), "unknown".to_string(), None),
         };
 

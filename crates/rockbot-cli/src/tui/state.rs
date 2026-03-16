@@ -39,54 +39,56 @@ pub enum Message {
     // Navigation
     Navigate(MenuItem),
     ToggleSidebar,
-    
+
     // Gateway status
     GatewayStatus(GatewayStatus),
     GatewayStatusError(String),
-    
+
     // Agents
     AgentsLoaded(Vec<AgentInfo>),
     AgentsError(String),
     ReloadAgents,
-    AgentSaved(String),     // agent id
+    AgentSaved(String), // agent id
     AgentSaveError(String),
-    
+
     // Sessions
     SessionsLoaded(Vec<SessionInfo>),
     SessionsError(String),
     ReloadSessions,
-    SessionCreated(String),     // session id
+    SessionCreated(String), // session id
     SessionCreateError(String),
-    
+
     // Vault/Credentials
     VaultStatus(VaultStatus),
     VaultUnlocked,
     VaultLocked,
     VaultError(String),
     EndpointsLoaded(Vec<EndpointInfo>),
-    CredentialAdded(String),  // endpoint name
+    CredentialAdded(String), // endpoint name
     CredentialAddError(String),
-    
+
     // Models
     ModelsLoaded(Vec<ModelProvider>),
     ReloadProviders,
 
     // Credential schemas (from gateway)
     CredentialSchemasLoaded(Vec<CredentialSchemaInfo>),
-    
+
     // Chat
-    ChatResponse(String, String),       // (session_key, AI response text)
+    ChatResponse(String, String), // (session_key, AI response text)
     ChatAgentResponse(String, String, Vec<ToolCallInfo>), // (session_key, content, tool_calls)
-    ChatError(String, String),          // (session_key, error text)
-    ChatStreamChunk(String),            // Streaming chunk: "session_key:text"
-    ChatTokenUsage {                    // Structured token usage from gateway
+    ChatError(String, String),    // (session_key, error text)
+    ChatStreamChunk(String),      // Streaming chunk: "session_key:text"
+    ChatTokenUsage {
+        // Structured token usage from gateway
         session_key: String,
         prompt_tokens: u64,
         completion_tokens: u64,
         total_tokens: u64,
         cumulative_total: u64,
     },
-    ChatThinkingStatus {                // Thinking/processing phase update
+    ChatThinkingStatus {
+        // Thinking/processing phase update
         session_key: String,
         phase: String,
         tool_name: Option<String>,
@@ -96,23 +98,23 @@ pub enum Message {
 
     // Cron jobs
     CronJobsLoaded(Vec<CronJobInfo>),
-    CronJobToggled(String, bool),  // (job_id, new_enabled_state)
-    CronJobDeleted(String),        // job_id
-    CronJobError(String),          // error message
+    CronJobToggled(String, bool), // (job_id, new_enabled_state)
+    CronJobDeleted(String),       // job_id
+    CronJobError(String),         // error message
 
     // Context files
-    ContextFilesLoaded(String, Vec<ContextFileInfo>),   // (agent_id, files)
-    ContextFileLoaded(String, String, String),           // (agent_id, filename, content)
-    ContextFileSaved(String, String),                    // (agent_id, filename)
-    ContextFileError(String),                            // error message
+    ContextFilesLoaded(String, Vec<ContextFileInfo>), // (agent_id, files)
+    ContextFileLoaded(String, String, String),        // (agent_id, filename, content)
+    ContextFileSaved(String, String),                 // (agent_id, filename)
+    ContextFileError(String),                         // error message
 
     // UI feedback
     SetStatus(String, bool), // (message, is_error)
     ClearStatus,
-    
+
     // Tick for animations/refresh
     Tick,
-    
+
     // Exit
     Quit,
 }
@@ -166,7 +168,7 @@ impl MenuItem {
             Self::Settings => "⚙️",
         }
     }
-    
+
     pub fn index(&self) -> usize {
         match self {
             Self::Dashboard => 0,
@@ -178,7 +180,7 @@ impl MenuItem {
             Self::Settings => 6,
         }
     }
-    
+
     pub fn from_index(idx: usize) -> Self {
         match idx % 7 {
             0 => Self::Dashboard,
@@ -283,7 +285,8 @@ pub struct ThinkingState {
 impl ThinkingState {
     /// Average completion tokens per second since processing started
     pub fn tokens_per_second(&self) -> f64 {
-        let elapsed = self.started_at
+        let elapsed = self
+            .started_at
             .map(|s| s.elapsed().as_secs_f64())
             .unwrap_or(0.0);
         if elapsed > 0.5 {
@@ -300,7 +303,7 @@ pub struct SessionChatState {
     pub messages: Vec<ChatMessage>,
     pub scroll: usize,
     pub loading: bool,
-    pub loaded: bool, // Whether history has been fetched from gateway
+    pub loaded: bool,      // Whether history has been fetched from gateway
     pub auto_scroll: bool, // When true, scroll follows latest content
     pub max_scroll: std::cell::Cell<usize>, // Last computed max scroll value (updated during render)
     /// Live thinking/processing state for the spinner
@@ -393,9 +396,15 @@ pub enum UnlockMethod {
     #[default]
     Unknown,
     Password,
-    Keyfile { path: Option<String> },
-    Age { public_key: Option<String> },
-    SshKey { path: Option<String> },
+    Keyfile {
+        path: Option<String>,
+    },
+    Age {
+        public_key: Option<String>,
+    },
+    SshKey {
+        path: Option<String>,
+    },
 }
 
 impl UnlockMethod {
@@ -408,7 +417,7 @@ impl UnlockMethod {
             Self::SshKey { .. } => "SSH Key",
         }
     }
-    
+
     pub fn requires_input(&self) -> bool {
         matches!(self, Self::Password | Self::Age { .. })
     }
@@ -550,7 +559,7 @@ pub struct AppState {
     pub menu_item: MenuItem,
     pub menu_index: usize,
     pub sidebar_focus: bool,
-    
+
     // Paths
     pub config_path: PathBuf,
     pub vault_path: PathBuf,
@@ -559,41 +568,41 @@ pub struct AppState {
     // Gateway connection (WS URL for WebSocket, HTTP URL for REST API)
     pub gateway_url: String,
     pub gateway_http_url: String,
-    
+
     // Gateway
     pub gateway: GatewayStatus,
     pub gateway_loading: bool,
     pub gateway_error: Option<String>,
-    
+
     // Agents
     pub agents: Vec<AgentInfo>,
     pub agents_loading: bool,
     pub agents_error: Option<String>,
     pub selected_agent: usize,
-    
-    // Sessions  
+
+    // Sessions
     pub sessions: Vec<SessionInfo>,
     pub sessions_loading: bool,
     pub sessions_error: Option<String>,
     pub selected_session: usize,
-    
+
     // Chat state — per-session
     pub session_chats: std::collections::HashMap<String, SessionChatState>,
     pub chat_model: Option<String>,    // Model ID for current chat
     pub chat_agent_id: Option<String>, // Agent ID if agent-bound session
-    
+
     // Vault/Credentials
     pub vault: VaultStatus,
     pub vault_loading: bool,
     pub endpoints: Vec<EndpointInfo>,
     pub selected_endpoint: usize,
-    pub selected_category: usize,      // For Providers tab - which category
+    pub selected_category: usize, // For Providers tab - which category
     pub selected_provider_index: usize, // For Providers tab - which provider within category
-    pub provider_list_focus: bool,     // true = right panel (provider list), false = left panel (categories)
-    pub credentials_tab: usize,        // Which tab is active (0=Endpoints, 1=Providers, etc.)
+    pub provider_list_focus: bool, // true = right panel (provider list), false = left panel (categories)
+    pub credentials_tab: usize,    // Which tab is active (0=Endpoints, 1=Providers, etc.)
     pub permissions: Vec<PermissionRule>,
     pub selected_permission: usize,
-    
+
     // Models (dynamically loaded from gateway)
     pub providers: Vec<ModelProvider>,
     pub selected_provider: usize,
@@ -611,12 +620,12 @@ pub struct AppState {
 
     // Credential schemas (from gateway — drives Credentials->Providers forms)
     pub credential_schemas: Vec<CredentialSchemaInfo>,
-    
+
     // UI state
     pub status_message: Option<(String, bool)>, // (message, is_error)
     pub should_exit: bool,
     pub tick_count: usize,
-    
+
     // Input modes (for modals, text input, etc.)
     pub input_mode: InputMode,
     pub input_buffer: String,
@@ -633,7 +642,11 @@ pub enum InputMode {
     #[default]
     Normal,
     /// Password input for vault
-    PasswordInput { prompt: String, masked: bool, action: PasswordAction },
+    PasswordInput {
+        prompt: String,
+        masked: bool,
+        action: PasswordAction,
+    },
     /// Add credential modal
     AddCredential(AddCredentialState),
     /// Edit credential modal (similar to add but pre-populated)
@@ -647,7 +660,10 @@ pub enum InputMode {
     /// Create session modal
     CreateSession(CreateSessionState),
     /// Confirmation dialog
-    Confirm { message: String, action: ConfirmAction },
+    Confirm {
+        message: String,
+        action: ConfirmAction,
+    },
     /// Chat input
     ChatInput,
     /// View session details
@@ -657,7 +673,10 @@ pub enum InputMode {
     /// View provider details (read-only modal, 'e' to edit)
     ViewProvider { provider_index: usize },
     /// View full model list for a provider
-    ViewModelList { provider_index: usize, scroll: usize },
+    ViewModelList {
+        provider_index: usize,
+        scroll: usize,
+    },
     /// View permission rule details (read-only, 'e' to edit, +/- to reorder)
     ViewPermission { permission_index: usize },
     /// Edit permission for a credential endpoint
@@ -676,11 +695,11 @@ pub enum PasswordAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmAction {
-    DeleteEndpoint(String), // endpoint id
-    DeleteAgent(String),    // agent id
-    KillSession(String),    // session key
-    DisableAgent(String),   // agent id (different from delete - actually disables in config)
-    DeleteCronJob(String),  // cron job id
+    DeleteEndpoint(String),                    // endpoint id
+    DeleteAgent(String),                       // agent id
+    KillSession(String),                       // session key
+    DisableAgent(String), // agent id (different from delete - actually disables in config)
+    DeleteCronJob(String), // cron job id
     DiscardContextFile(ViewContextFilesState), // return to file browser state
 }
 
@@ -717,12 +736,12 @@ impl EditCredentialState {
     ) -> Self {
         let fields = get_fields_for_endpoint_type(endpoint_type);
         let mut field_values = vec![String::new(); fields.len()];
-        
+
         // Pre-fill URL field
         if !field_values.is_empty() {
             field_values[0] = base_url.to_string();
         }
-        
+
         Self {
             endpoint_id: endpoint_id.to_string(),
             field_index: 0,
@@ -734,7 +753,7 @@ impl EditCredentialState {
             credential_id: credential_id.map(String::from),
         }
     }
-    
+
     /// Pre-fill secret fields with decrypted values
     pub fn set_secret(&mut self, field_id: &str, value: &str) {
         let fields = get_fields_for_endpoint_type(self.endpoint_type);
@@ -747,17 +766,17 @@ impl EditCredentialState {
             }
         }
     }
-    
+
     /// Get total number of fields (name + dynamic fields, no type selector)
     pub fn total_fields(&self) -> usize {
         1 + get_fields_for_endpoint_type(self.endpoint_type).len()
     }
-    
+
     /// Move to next field
     pub fn next_field(&mut self) {
         self.field_index = (self.field_index + 1) % self.total_fields();
     }
-    
+
     /// Move to previous field
     pub fn prev_field(&mut self) {
         if self.field_index == 0 {
@@ -766,12 +785,12 @@ impl EditCredentialState {
             self.field_index -= 1;
         }
     }
-    
+
     /// Check if current field is the name field
     pub fn is_name_field(&self) -> bool {
         self.field_index == 0
     }
-    
+
     /// Get the current dynamic field index (if on a dynamic field)
     pub fn dynamic_field_index(&self) -> Option<usize> {
         if self.field_index >= 1 {
@@ -780,12 +799,12 @@ impl EditCredentialState {
             None
         }
     }
-    
+
     /// Check if on last field (for submit)
     pub fn is_last_field(&self) -> bool {
         self.field_index == self.total_fields() - 1
     }
-    
+
     /// Get current field value reference for editing
     pub fn current_value_mut(&mut self) -> Option<&mut String> {
         if self.field_index == 0 {
@@ -804,23 +823,23 @@ impl EditCredentialState {
             None
         }
     }
-    
+
     /// Validate required fields, returns error message if invalid
     pub fn validate(&self) -> Option<String> {
         if self.name.trim().is_empty() {
             return Some("Name is required".to_string());
         }
-        
+
         let fields = get_fields_for_endpoint_type(self.endpoint_type);
         for (i, field) in fields.iter().enumerate() {
             if field.required && self.field_values.get(i).is_none_or(|v| v.trim().is_empty()) {
                 return Some(format!("{} is required", field.label));
             }
         }
-        
+
         None
     }
-    
+
     /// Get field value by id
     pub fn get_field_value(&self, id: &str) -> Option<&str> {
         let fields = get_fields_for_endpoint_type(self.endpoint_type);
@@ -857,9 +876,15 @@ impl ProviderAuthType {
     pub fn from_auth_method_id(id: &str) -> Self {
         match id {
             "oauth" => Self::SessionKey,
-            "aws_credentials" | "aws_bearer_token" | "agentcore_oauth2" | "agentcore_api_key" => Self::AwsCredentials,
-            "api_key" | "personal_access_token" | "bot_token"
-            | "long_lived_token" | "api_token" | "integration_token" => Self::ApiKey,
+            "aws_credentials" | "aws_bearer_token" | "agentcore_oauth2" | "agentcore_api_key" => {
+                Self::AwsCredentials
+            }
+            "api_key"
+            | "personal_access_token"
+            | "bot_token"
+            | "long_lived_token"
+            | "api_token"
+            | "integration_token" => Self::ApiKey,
             _ if id.contains("none") => Self::None,
             _ => Self::ApiKey,
         }
@@ -946,7 +971,9 @@ impl EditProviderState {
         let auth_type = schema
             .auth_methods
             .first()
-            .map_or(ProviderAuthType::ApiKey, |m| ProviderAuthType::from_auth_method_id(&m.id));
+            .map_or(ProviderAuthType::ApiKey, |m| {
+                ProviderAuthType::from_auth_method_id(&m.id)
+            });
 
         let field_values = schema
             .auth_methods
@@ -997,9 +1024,7 @@ impl EditProviderState {
 
     /// Get total number of fields: 1 (auth type selector) + field count from current auth method
     pub fn total_fields(&self) -> usize {
-        let field_count = self
-            .current_auth_method()
-            .map_or(0, |m| m.fields.len());
+        let field_count = self.current_auth_method().map_or(0, |m| m.fields.len());
         1 + field_count // auth_type selector + fields
     }
 
@@ -1021,10 +1046,7 @@ impl EditProviderState {
 
     /// Cycle through available auth methods
     pub fn cycle_auth_type(&mut self, forward: bool) {
-        let count = self
-            .schema
-            .as_ref()
-            .map_or(1, |s| s.auth_methods.len());
+        let count = self.schema.as_ref().map_or(1, |s| s.auth_methods.len());
         if count <= 1 {
             return;
         }
@@ -1089,10 +1111,7 @@ impl EditProviderState {
         if let Some(method) = self.current_auth_method() {
             for (i, field) in method.fields.iter().enumerate() {
                 if field.required {
-                    let value = self
-                        .field_values
-                        .get(i)
-                        .map_or("", |(_, v)| v.as_str());
+                    let value = self.field_values.get(i).map_or("", |(_, v)| v.as_str());
                     if value.trim().is_empty() {
                         return Some(format!("{} is required", field.label));
                     }
@@ -1236,9 +1255,15 @@ impl EditAgentState {
             model: agent.model.clone().unwrap_or_default(),
             parent_id: agent.parent_id.clone().unwrap_or_default(),
             workspace: agent.workspace.clone().unwrap_or_default(),
-            max_tool_calls: agent.max_tool_calls.map_or_else(String::new, |n| n.to_string()),
-            temperature: agent.temperature.map_or_else(|| "0.3".to_string(), |n| format!("{n}")),
-            max_tokens: agent.max_tokens.map_or_else(|| "16000".to_string(), |n| n.to_string()),
+            max_tool_calls: agent
+                .max_tool_calls
+                .map_or_else(String::new, |n| n.to_string()),
+            temperature: agent
+                .temperature
+                .map_or_else(|| "0.3".to_string(), |n| format!("{n}")),
+            max_tokens: agent
+                .max_tokens
+                .map_or_else(|| "16000".to_string(), |n| n.to_string()),
             system_prompt: agent.system_prompt.clone().unwrap_or_default(),
             enabled: agent.enabled,
             available_models: Vec::new(),
@@ -1332,7 +1357,13 @@ impl EditAgentState {
     /// Get mutable reference to current field value
     pub fn current_value_mut(&mut self) -> Option<&mut String> {
         match self.field_index {
-            0 => if !self.is_edit { Some(&mut self.id) } else { None },
+            0 => {
+                if !self.is_edit {
+                    Some(&mut self.id)
+                } else {
+                    None
+                }
+            }
             // Model field: only allow text input if no models are available (fallback)
             1 if self.available_models.is_empty() => Some(&mut self.model),
             1 => None, // picker mode — use next_model/prev_model instead
@@ -1361,10 +1392,9 @@ impl EditAgentState {
         if self.id.contains(' ') || self.id.contains('/') {
             return Some("Agent ID cannot contain spaces or slashes".to_string());
         }
-        if !self.max_tool_calls.is_empty()
-            && self.max_tool_calls.parse::<u32>().is_err() {
-                return Some("Max tool calls must be a number".to_string());
-            }
+        if !self.max_tool_calls.is_empty() && self.max_tool_calls.parse::<u32>().is_err() {
+            return Some("Max tool calls must be a number".to_string());
+        }
         None
     }
 }
@@ -1571,7 +1601,8 @@ impl CreateSessionState {
             }
         }
 
-        let available_agents: Vec<(String, String)> = agents.iter()
+        let available_agents: Vec<(String, String)> = agents
+            .iter()
             .filter(|a| a.enabled)
             .map(|a| {
                 let display = if let Some(ref model) = a.model {
@@ -1604,10 +1635,12 @@ impl CreateSessionState {
     pub fn next_option(&mut self) {
         match (self.mode, self.field_index) {
             (SessionMode::AdHoc, 1) if !self.available_models.is_empty() => {
-                self.selected_model_index = (self.selected_model_index + 1) % self.available_models.len();
+                self.selected_model_index =
+                    (self.selected_model_index + 1) % self.available_models.len();
             }
             (SessionMode::AgentBound, 1) if !self.available_agents.is_empty() => {
-                self.selected_agent_index = (self.selected_agent_index + 1) % self.available_agents.len();
+                self.selected_agent_index =
+                    (self.selected_agent_index + 1) % self.available_agents.len();
             }
             _ => {}
         }
@@ -1634,11 +1667,15 @@ impl CreateSessionState {
     }
 
     pub fn selected_model(&self) -> Option<&str> {
-        self.available_models.get(self.selected_model_index).map(|m| m.value.as_str())
+        self.available_models
+            .get(self.selected_model_index)
+            .map(|m| m.value.as_str())
     }
 
     pub fn selected_agent_id(&self) -> Option<&str> {
-        self.available_agents.get(self.selected_agent_index).map(|(id, _)| id.as_str())
+        self.available_agents
+            .get(self.selected_agent_index)
+            .map(|(id, _)| id.as_str())
     }
 
     pub fn total_fields(&self) -> usize {
@@ -1666,14 +1703,16 @@ pub struct EditPermissionState {
 }
 
 impl EditPermissionState {
-    pub fn new(endpoints: &[EndpointInfo], agents: &[AgentInfo], preselect_endpoint: Option<usize>) -> Self {
-        let ep_list: Vec<(String, String)> = endpoints.iter()
+    pub fn new(
+        endpoints: &[EndpointInfo],
+        agents: &[AgentInfo],
+        preselect_endpoint: Option<usize>,
+    ) -> Self {
+        let ep_list: Vec<(String, String)> = endpoints
+            .iter()
             .map(|ep| (ep.id.clone(), ep.name.clone()))
             .collect();
-        let mut sources = vec![
-            PermissionSource::Any,
-            PermissionSource::System,
-        ];
+        let mut sources = vec![PermissionSource::Any, PermissionSource::System];
         for agent in agents {
             sources.push(PermissionSource::Agent(agent.id.clone()));
         }
@@ -1688,8 +1727,15 @@ impl EditPermissionState {
         }
     }
 
-    pub fn from_rule(rule: &PermissionRule, endpoints: &[EndpointInfo], agents: &[AgentInfo]) -> Self {
-        let ep_index = endpoints.iter().position(|ep| ep.id == rule.endpoint_id).unwrap_or(0);
+    pub fn from_rule(
+        rule: &PermissionRule,
+        endpoints: &[EndpointInfo],
+        agents: &[AgentInfo],
+    ) -> Self {
+        let ep_index = endpoints
+            .iter()
+            .position(|ep| ep.id == rule.endpoint_id)
+            .unwrap_or(0);
         let mut state = Self::new(endpoints, agents, Some(ep_index));
         state.access = rule.access;
         state.is_edit = true;
@@ -1747,13 +1793,15 @@ impl EditPermissionState {
     }
 
     pub fn selected_endpoint_id(&self) -> &str {
-        self.endpoints.get(self.selected_endpoint)
+        self.endpoints
+            .get(self.selected_endpoint)
             .map(|(id, _)| id.as_str())
             .unwrap_or("")
     }
 
     pub fn selected_endpoint_name(&self) -> &str {
-        self.endpoints.get(self.selected_endpoint)
+        self.endpoints
+            .get(self.selected_endpoint)
             .map(|(_, name)| name.as_str())
             .unwrap_or("")
     }
@@ -1823,40 +1871,164 @@ pub struct FieldDef {
 /// Vector of [`FieldDef`] describing the required form fields.
 pub fn get_fields_for_endpoint_type(endpoint_type: usize) -> Vec<FieldDef> {
     match endpoint_type {
-        0 => vec![ // Home Assistant
-            FieldDef { id: "url", label: "Home Assistant URL", placeholder: "http://homeassistant.local:8123", required: true, masked: false },
-            FieldDef { id: "token", label: "Long-Lived Access Token", placeholder: "eyJ0eXAi...", required: true, masked: true },
+        0 => vec![
+            // Home Assistant
+            FieldDef {
+                id: "url",
+                label: "Home Assistant URL",
+                placeholder: "http://homeassistant.local:8123",
+                required: true,
+                masked: false,
+            },
+            FieldDef {
+                id: "token",
+                label: "Long-Lived Access Token",
+                placeholder: "eyJ0eXAi...",
+                required: true,
+                masked: true,
+            },
         ],
-        1 => vec![ // Generic REST API
-            FieldDef { id: "url", label: "Base URL", placeholder: "https://api.example.com", required: true, masked: false },
-            FieldDef { id: "token", label: "Bearer Token", placeholder: "Your token", required: false, masked: true },
+        1 => vec![
+            // Generic REST API
+            FieldDef {
+                id: "url",
+                label: "Base URL",
+                placeholder: "https://api.example.com",
+                required: true,
+                masked: false,
+            },
+            FieldDef {
+                id: "token",
+                label: "Bearer Token",
+                placeholder: "Your token",
+                required: false,
+                masked: true,
+            },
         ],
-        2 => vec![ // OAuth2 Service
-            FieldDef { id: "url", label: "API Base URL", placeholder: "https://api.example.com", required: true, masked: false },
-            FieldDef { id: "auth_url", label: "Authorization URL", placeholder: "https://auth.example.com/authorize", required: true, masked: false },
-            FieldDef { id: "token_url", label: "Token URL", placeholder: "https://auth.example.com/token", required: true, masked: false },
-            FieldDef { id: "client_id", label: "Client ID", placeholder: "", required: true, masked: false },
-            FieldDef { id: "client_secret", label: "Client Secret", placeholder: "", required: true, masked: true },
-            FieldDef { id: "scopes", label: "Scopes", placeholder: "read write offline_access", required: false, masked: false },
-            FieldDef { id: "redirect_uri", label: "Redirect URI", placeholder: "http://localhost:18080/oauth/callback", required: false, masked: false },
+        2 => vec![
+            // OAuth2 Service
+            FieldDef {
+                id: "url",
+                label: "API Base URL",
+                placeholder: "https://api.example.com",
+                required: true,
+                masked: false,
+            },
+            FieldDef {
+                id: "auth_url",
+                label: "Authorization URL",
+                placeholder: "https://auth.example.com/authorize",
+                required: true,
+                masked: false,
+            },
+            FieldDef {
+                id: "token_url",
+                label: "Token URL",
+                placeholder: "https://auth.example.com/token",
+                required: true,
+                masked: false,
+            },
+            FieldDef {
+                id: "client_id",
+                label: "Client ID",
+                placeholder: "",
+                required: true,
+                masked: false,
+            },
+            FieldDef {
+                id: "client_secret",
+                label: "Client Secret",
+                placeholder: "",
+                required: true,
+                masked: true,
+            },
+            FieldDef {
+                id: "scopes",
+                label: "Scopes",
+                placeholder: "read write offline_access",
+                required: false,
+                masked: false,
+            },
+            FieldDef {
+                id: "redirect_uri",
+                label: "Redirect URI",
+                placeholder: "http://localhost:18080/oauth/callback",
+                required: false,
+                masked: false,
+            },
         ],
-        3 => vec![ // API Key Service
-            FieldDef { id: "url", label: "Base URL", placeholder: "https://api.example.com", required: true, masked: false },
-            FieldDef { id: "api_key", label: "API Key", placeholder: "", required: true, masked: true },
-            FieldDef { id: "header_name", label: "Header Name", placeholder: "X-API-Key", required: false, masked: false },
+        3 => vec![
+            // API Key Service
+            FieldDef {
+                id: "url",
+                label: "Base URL",
+                placeholder: "https://api.example.com",
+                required: true,
+                masked: false,
+            },
+            FieldDef {
+                id: "api_key",
+                label: "API Key",
+                placeholder: "",
+                required: true,
+                masked: true,
+            },
+            FieldDef {
+                id: "header_name",
+                label: "Header Name",
+                placeholder: "X-API-Key",
+                required: false,
+                masked: false,
+            },
         ],
-        4 => vec![ // Basic Auth Service
-            FieldDef { id: "url", label: "Base URL", placeholder: "https://api.example.com", required: true, masked: false },
-            FieldDef { id: "username", label: "Username", placeholder: "", required: true, masked: false },
-            FieldDef { id: "password", label: "Password", placeholder: "", required: true, masked: true },
+        4 => vec![
+            // Basic Auth Service
+            FieldDef {
+                id: "url",
+                label: "Base URL",
+                placeholder: "https://api.example.com",
+                required: true,
+                masked: false,
+            },
+            FieldDef {
+                id: "username",
+                label: "Username",
+                placeholder: "",
+                required: true,
+                masked: false,
+            },
+            FieldDef {
+                id: "password",
+                label: "Password",
+                placeholder: "",
+                required: true,
+                masked: true,
+            },
         ],
-        5 => vec![ // Bearer Token
-            FieldDef { id: "url", label: "Base URL", placeholder: "https://api.example.com", required: true, masked: false },
-            FieldDef { id: "token", label: "Token", placeholder: "", required: true, masked: true },
+        5 => vec![
+            // Bearer Token
+            FieldDef {
+                id: "url",
+                label: "Base URL",
+                placeholder: "https://api.example.com",
+                required: true,
+                masked: false,
+            },
+            FieldDef {
+                id: "token",
+                label: "Token",
+                placeholder: "",
+                required: true,
+                masked: true,
+            },
         ],
-        _ => vec![
-            FieldDef { id: "url", label: "URL", placeholder: "", required: true, masked: false },
-        ],
+        _ => vec![FieldDef {
+            id: "url",
+            label: "URL",
+            placeholder: "",
+            required: true,
+            masked: false,
+        }],
     }
 }
 
@@ -1913,7 +2085,7 @@ impl AddCredentialState {
             field_values: vec![String::new(); fields.len()],
         }
     }
-    
+
     /// Create new state pre-filled from a credential schema (preferred)
     pub fn new_from_schema(schema: &CredentialSchemaInfo) -> Self {
         // Use the first auth method's fields to determine the form
@@ -1921,12 +2093,14 @@ impl AddCredentialState {
 
         // Map schema auth method to vault endpoint type
         let endpoint_type = match auth_method.map(|m| m.id.as_str()) {
-            Some("aws_credentials") => 3,       // API Key Service (closest match)
-            Some("oauth") => 2,                  // OAuth2 Service
-            Some("api_key") | Some("api_token") | Some("personal_access_token")
-            | Some("integration_token") => 3,    // API Key Service
+            Some("aws_credentials") => 3, // API Key Service (closest match)
+            Some("oauth") => 2,           // OAuth2 Service
+            Some("api_key")
+            | Some("api_token")
+            | Some("personal_access_token")
+            | Some("integration_token") => 3, // API Key Service
             Some("bot_token") | Some("long_lived_token") => 5, // Bearer Token
-            _ => 3,                              // Default to API Key Service
+            _ => 3,                       // Default to API Key Service
         };
 
         let fields = get_fields_for_endpoint_type(endpoint_type);
@@ -1973,7 +2147,7 @@ impl AddCredentialState {
             field_values,
         }
     }
-    
+
     /// Reset field values when endpoint type changes
     pub fn reset_fields_for_type(&mut self) {
         let fields = get_fields_for_endpoint_type(self.endpoint_type);
@@ -1981,17 +2155,17 @@ impl AddCredentialState {
         // Reset to endpoint_type selector when type changes
         self.field_index = 1;
     }
-    
+
     /// Get total number of fields (name + endpoint_type + dynamic fields)
     pub fn total_fields(&self) -> usize {
         2 + get_fields_for_endpoint_type(self.endpoint_type).len()
     }
-    
+
     /// Move to next field
     pub fn next_field(&mut self) {
         self.field_index = (self.field_index + 1) % self.total_fields();
     }
-    
+
     /// Move to previous field
     pub fn prev_field(&mut self) {
         if self.field_index == 0 {
@@ -2000,17 +2174,17 @@ impl AddCredentialState {
             self.field_index -= 1;
         }
     }
-    
+
     /// Check if current field is the name field
     pub fn is_name_field(&self) -> bool {
         self.field_index == 0
     }
-    
+
     /// Check if current field is the endpoint type selector
     pub fn is_type_field(&self) -> bool {
         self.field_index == 1
     }
-    
+
     /// Get the current dynamic field index (if on a dynamic field)
     pub fn dynamic_field_index(&self) -> Option<usize> {
         if self.field_index >= 2 {
@@ -2019,12 +2193,12 @@ impl AddCredentialState {
             None
         }
     }
-    
+
     /// Check if on last field (for submit)
     pub fn is_last_field(&self) -> bool {
         self.field_index == self.total_fields() - 1
     }
-    
+
     /// Get current field value reference for editing
     pub fn current_value_mut(&mut self) -> Option<&mut String> {
         if self.field_index == 0 {
@@ -2036,23 +2210,23 @@ impl AddCredentialState {
             None // Type selector doesn't have text input
         }
     }
-    
+
     /// Validate required fields, returns error message if invalid
     pub fn validate(&self) -> Option<String> {
         if self.name.trim().is_empty() {
             return Some("Name is required".to_string());
         }
-        
+
         let fields = get_fields_for_endpoint_type(self.endpoint_type);
         for (i, field) in fields.iter().enumerate() {
             if field.required && self.field_values.get(i).is_none_or(|v| v.trim().is_empty()) {
                 return Some(format!("{} is required", field.label));
             }
         }
-        
+
         None
     }
-    
+
     /// Get field value by id
     pub fn get_field_value(&self, id: &str) -> Option<&str> {
         let fields = get_fields_for_endpoint_type(self.endpoint_type);
@@ -2095,25 +2269,25 @@ impl AppState {
             launch_dir: std::env::current_dir().unwrap_or_default(),
             gateway_http_url: rockbot_client::ws_url_to_http(&gateway_url),
             gateway_url,
-            
+
             gateway: GatewayStatus::default(),
             gateway_loading: true,
             gateway_error: None,
-            
+
             agents: Vec::new(),
             agents_loading: true,
             agents_error: None,
             selected_agent: 0,
-            
+
             sessions: Vec::new(),
             sessions_loading: false,
             sessions_error: None,
             selected_session: 0,
-            
+
             session_chats: std::collections::HashMap::new(),
             chat_model: None,
             chat_agent_id: None,
-            
+
             vault: VaultStatus::default(),
             vault_loading: true,
             endpoints: Vec::new(),
@@ -2124,7 +2298,7 @@ impl AppState {
             credentials_tab: 0,
             permissions: Vec::new(),
             selected_permission: 0,
-            
+
             providers: Vec::new(),
             selected_provider: 0,
             cron_jobs: Vec::new(),
@@ -2134,11 +2308,11 @@ impl AppState {
             selected_dashboard_card: 0,
             selected_settings_card: 0,
             credential_schemas: Vec::new(),
-            
+
             status_message: None,
             should_exit: false,
             tick_count: 0,
-            
+
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
             input_cursor: 0,
@@ -2146,7 +2320,7 @@ impl AppState {
             tx,
         }
     }
-    
+
     /// Process a message and update state
     pub fn update(&mut self, msg: Message) {
         match msg {
@@ -2158,7 +2332,7 @@ impl AppState {
             Message::ToggleSidebar => {
                 self.sidebar_focus = !self.sidebar_focus;
             }
-            
+
             Message::GatewayStatus(status) => {
                 self.gateway = status;
                 self.gateway_loading = false;
@@ -2168,7 +2342,7 @@ impl AppState {
                 self.gateway_loading = false;
                 self.gateway_error = Some(err);
             }
-            
+
             Message::AgentsLoaded(agents) => {
                 self.agents = agents;
                 self.agents_loading = false;
@@ -2187,7 +2361,7 @@ impl AppState {
             Message::AgentSaveError(err) => {
                 self.status_message = Some((format!("Failed to save agent: {err}"), true));
             }
-            
+
             Message::SessionsLoaded(sessions) => {
                 self.sessions = sessions;
                 self.sessions_loading = false;
@@ -2209,13 +2383,20 @@ impl AppState {
             Message::SessionCreateError(err) => {
                 self.status_message = Some((format!("Failed to create session: {err}"), true));
             }
-            
+
             Message::VaultStatus(status) => {
                 // Debug: log vault status
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/rockbot_debug.log") {
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/rockbot_debug.log")
+                {
                     use std::io::Write;
-                    let _ = writeln!(f, "VaultStatus received: initialized={}, locked={}, method={:?}", 
-                        status.initialized, status.locked, status.unlock_method);
+                    let _ = writeln!(
+                        f,
+                        "VaultStatus received: initialized={}, locked={}, method={:?}",
+                        status.initialized, status.locked, status.unlock_method
+                    );
                 }
                 self.vault = status;
                 self.vault_loading = false;
@@ -2239,7 +2420,7 @@ impl AppState {
             Message::CredentialAddError(err) => {
                 self.status_message = Some((format!("❌ Failed: {err}"), true));
             }
-            
+
             Message::ModelsLoaded(providers) => {
                 self.providers = providers;
             }
@@ -2252,7 +2433,9 @@ impl AppState {
                 let chat = self.session_chats.entry(session_key).or_default();
                 // If streaming already created an assistant message, finalize it
                 // instead of creating a duplicate
-                let has_streamed = chat.messages.last()
+                let has_streamed = chat
+                    .messages
+                    .last()
                     .is_some_and(|m| m.role == ChatRole::Assistant && chat.loading);
                 if has_streamed {
                     if let Some(last) = chat.messages.last_mut() {
@@ -2268,7 +2451,9 @@ impl AppState {
             }
             Message::ChatAgentResponse(session_key, content, tool_calls) => {
                 let chat = self.session_chats.entry(session_key).or_default();
-                let has_streamed = chat.messages.last()
+                let has_streamed = chat
+                    .messages
+                    .last()
                     .is_some_and(|m| m.role == ChatRole::Assistant && chat.loading);
                 if has_streamed {
                     if let Some(last) = chat.messages.last_mut() {
@@ -2278,21 +2463,26 @@ impl AppState {
                         last.tool_calls = tool_calls;
                     }
                 } else {
-                    chat.messages.push(ChatMessage::assistant_with_tools(content, tool_calls));
+                    chat.messages
+                        .push(ChatMessage::assistant_with_tools(content, tool_calls));
                 }
                 chat.loading = false;
                 chat.thinking = ThinkingState::default();
             }
             Message::ChatError(session_key, err) => {
                 let chat = self.session_chats.entry(session_key).or_default();
-                chat.messages.push(ChatMessage::system(format!("Error: {err}")));
+                chat.messages
+                    .push(ChatMessage::system(format!("Error: {err}")));
                 chat.loading = false;
                 chat.thinking = ThinkingState::default();
             }
             Message::ChatStreamChunk(chunk) => {
                 // Handle streaming chunks for incremental display
                 if let Some((session_key, text)) = chunk.split_once(':') {
-                    let chat = self.session_chats.entry(session_key.to_string()).or_default();
+                    let chat = self
+                        .session_chats
+                        .entry(session_key.to_string())
+                        .or_default();
                     // Append to last assistant message, or create a new one
                     if let Some(last) = chat.messages.last_mut() {
                         if last.role == ChatRole::Assistant && chat.loading {
@@ -2305,7 +2495,13 @@ impl AppState {
                     }
                 }
             }
-            Message::ChatTokenUsage { session_key, prompt_tokens, completion_tokens, total_tokens: _, cumulative_total } => {
+            Message::ChatTokenUsage {
+                session_key,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens: _,
+                cumulative_total,
+            } => {
                 let chat = self.session_chats.entry(session_key).or_default();
                 chat.thinking.prompt_tokens = prompt_tokens;
                 chat.thinking.completion_tokens = completion_tokens;
@@ -2314,7 +2510,12 @@ impl AppState {
                     chat.thinking.started_at = Some(std::time::Instant::now());
                 }
             }
-            Message::ChatThinkingStatus { session_key, phase, tool_name, iteration } => {
+            Message::ChatThinkingStatus {
+                session_key,
+                phase,
+                tool_name,
+                iteration,
+            } => {
                 let chat = self.session_chats.entry(session_key).or_default();
                 chat.thinking.phase = phase;
                 chat.thinking.tool_name = tool_name;
@@ -2328,7 +2529,7 @@ impl AppState {
                 chat.messages = messages;
                 chat.loaded = true;
             }
-            
+
             Message::ContextFilesLoaded(agent_id, files) => {
                 if let InputMode::ViewContextFiles(ref mut state) = self.input_mode {
                     if state.agent_id == agent_id {
@@ -2339,9 +2540,9 @@ impl AppState {
             }
             Message::ContextFileLoaded(agent_id, filename, content) => {
                 // Transition to edit mode for this file
-                self.input_mode = InputMode::EditContextFile(
-                    EditContextFileState::new(agent_id, filename, content)
-                );
+                self.input_mode = InputMode::EditContextFile(EditContextFileState::new(
+                    agent_id, filename, content,
+                ));
             }
             Message::ContextFileSaved(agent_id, filename) => {
                 self.status_message = Some((format!("Saved {filename}"), false));
@@ -2382,22 +2583,22 @@ impl AppState {
             Message::ClearStatus => {
                 self.status_message = None;
             }
-            
+
             Message::Tick => {
                 self.tick_count = self.tick_count.wrapping_add(1);
             }
-            
+
             Message::Quit => {
                 self.should_exit = true;
             }
         }
     }
-    
+
     /// Check if we're in an input mode that should capture all keys
     pub fn is_capturing_input(&self) -> bool {
         !matches!(self.input_mode, InputMode::Normal)
     }
-    
+
     /// Number of registered LLM providers (dynamic, loaded from gateway)
     pub fn model_provider_count(&self) -> usize {
         self.providers.len().max(1) // At least 1 to avoid div-by-zero
@@ -2405,7 +2606,9 @@ impl AppState {
 
     /// Get the currently selected session's key (ID)
     pub fn active_session_key(&self) -> Option<&str> {
-        self.sessions.get(self.selected_session).map(|s| s.key.as_str())
+        self.sessions
+            .get(self.selected_session)
+            .map(|s| s.key.as_str())
     }
 
     /// Get the chat state for the currently selected session
@@ -2444,7 +2647,9 @@ impl AppState {
     pub fn toggle_tool_expansion(&mut self) {
         if let Some(chat) = self.active_chat_mut() {
             // Find current state: if any are expanded, collapse all; otherwise expand all
-            let any_expanded = chat.messages.iter()
+            let any_expanded = chat
+                .messages
+                .iter()
                 .flat_map(|m| &m.tool_calls)
                 .any(|tc| tc.expanded);
             let new_state = !any_expanded;
@@ -2455,22 +2660,25 @@ impl AppState {
             }
         }
     }
-    
+
     /// Number of credential categories (All, Model, Communication, Tool)
     pub const CREDENTIAL_CATEGORY_COUNT: usize = 4;
-    
+
     /// Get provider count for current category
     pub fn provider_count_for_category(&self) -> usize {
         let schemas = &self.credential_schemas;
         match self.selected_category {
             0 => schemas.len(), // All
             1 => schemas.iter().filter(|s| s.category == "model").count(),
-            2 => schemas.iter().filter(|s| s.category == "communication").count(),
+            2 => schemas
+                .iter()
+                .filter(|s| s.category == "communication")
+                .count(),
             3 => schemas.iter().filter(|s| s.category == "tool").count(),
             _ => 0,
         }
     }
-    
+
     /// Toggle focus between category list and provider list (for Credentials Providers tab)
     pub fn toggle_provider_focus(&mut self) {
         if self.credentials_tab == 1 {
@@ -2481,7 +2689,7 @@ impl AppState {
             }
         }
     }
-    
+
     /// Get the currently selected provider info (id, name, description) for the Providers tab.
     /// Driven by credential schemas loaded from the gateway.
     pub fn get_selected_provider_info(&self) -> Option<ProviderInfo> {
@@ -2495,7 +2703,10 @@ impl AppState {
         let filtered: Vec<&CredentialSchemaInfo> = match self.selected_category {
             0 => schemas.iter().collect(), // All
             1 => schemas.iter().filter(|s| s.category == "model").collect(),
-            2 => schemas.iter().filter(|s| s.category == "communication").collect(),
+            2 => schemas
+                .iter()
+                .filter(|s| s.category == "communication")
+                .collect(),
             3 => schemas.iter().filter(|s| s.category == "tool").collect(),
             _ => return None,
         };
@@ -2538,7 +2749,10 @@ impl AppState {
         let filtered: Vec<&CredentialSchemaInfo> = match self.selected_category {
             0 => schemas.iter().collect(),
             1 => schemas.iter().filter(|s| s.category == "model").collect(),
-            2 => schemas.iter().filter(|s| s.category == "communication").collect(),
+            2 => schemas
+                .iter()
+                .filter(|s| s.category == "communication")
+                .collect(),
             3 => schemas.iter().filter(|s| s.category == "tool").collect(),
             _ => return None,
         };
@@ -2585,11 +2799,19 @@ impl AppState {
     pub fn select_prev(&mut self) {
         match self.menu_item {
             MenuItem::Dashboard => {
-                self.selected_dashboard_card = if self.selected_dashboard_card == 0 { 3 } else { self.selected_dashboard_card - 1 };
+                self.selected_dashboard_card = if self.selected_dashboard_card == 0 {
+                    3
+                } else {
+                    self.selected_dashboard_card - 1
+                };
             }
             MenuItem::Credentials => {
                 // Left/Right navigates the tab cards
-                self.credentials_tab = if self.credentials_tab == 0 { 3 } else { self.credentials_tab - 1 };
+                self.credentials_tab = if self.credentials_tab == 0 {
+                    3
+                } else {
+                    self.credentials_tab - 1
+                };
             }
             MenuItem::Agents => {
                 if !self.agents.is_empty() {
@@ -2610,7 +2832,11 @@ impl AppState {
                 }
             }
             MenuItem::CronJobs => {
-                self.selected_cron_card = if self.selected_cron_card == 0 { 2 } else { self.selected_cron_card - 1 };
+                self.selected_cron_card = if self.selected_cron_card == 0 {
+                    2
+                } else {
+                    self.selected_cron_card - 1
+                };
             }
             MenuItem::Models => {
                 let count = self.model_provider_count();
@@ -2621,7 +2847,11 @@ impl AppState {
                 };
             }
             MenuItem::Settings => {
-                self.selected_settings_card = if self.selected_settings_card == 0 { 2 } else { self.selected_settings_card - 1 };
+                self.selected_settings_card = if self.selected_settings_card == 0 {
+                    2
+                } else {
+                    self.selected_settings_card - 1
+                };
             }
         }
     }
@@ -2710,7 +2940,8 @@ impl AppState {
             }
             2 => {
                 if !self.permissions.is_empty() {
-                    self.selected_permission = (self.selected_permission + 1) % self.permissions.len();
+                    self.selected_permission =
+                        (self.selected_permission + 1) % self.permissions.len();
                 }
             }
             _ => {}
@@ -2719,10 +2950,14 @@ impl AppState {
 
     /// Navigate to previous menu item
     pub fn menu_prev(&mut self) {
-        self.menu_index = if self.menu_index == 0 { 5 } else { self.menu_index - 1 };
+        self.menu_index = if self.menu_index == 0 {
+            5
+        } else {
+            self.menu_index - 1
+        };
         self.menu_item = MenuItem::from_index(self.menu_index);
     }
-    
+
     /// Navigate to next menu item
     pub fn menu_next(&mut self) {
         self.menu_index = (self.menu_index + 1) % 6;

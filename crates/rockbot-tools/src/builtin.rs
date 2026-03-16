@@ -1,15 +1,15 @@
 //! Built-in tool implementations
 
 use crate::message::ToolResult;
-use crate::{Tool, ToolExecutionContext, Result};
+use crate::{Result, Tool, ToolExecutionContext};
+use regex::Regex;
 use rockbot_security::Capabilities;
 use serde_json::json;
+use std::future::Future;
+use std::io::BufRead;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::future::Future;
 use tokio::process::Command;
-use regex::Regex;
-use std::io::BufRead;
 
 /// File reading tool
 pub struct ReadTool;
@@ -30,11 +30,11 @@ impl Tool for ReadTool {
     fn name(&self) -> &str {
         "read"
     }
-    
+
     fn description(&self) -> &str {
         "Read the contents of a file"
     }
-    
+
     fn parameters(&self) -> serde_json::Value {
         json!({
             "type": "object",
@@ -57,36 +57,48 @@ impl Tool for ReadTool {
             "required": ["file_path"]
         })
     }
-    
+
     fn required_capabilities(&self) -> Capabilities {
         Capabilities::filesystem_read()
     }
-    
-    fn execute(&self, params: serde_json::Value, context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let file_path: String = params.get("file_path")
+            let file_path: String = params
+                .get("file_path")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| crate::ToolError::InvalidParameters { 
-                    message: "file_path is required".to_string() 
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "file_path is required".to_string(),
                 })?
                 .to_string();
-            
-            let limit = params.get("limit").and_then(serde_json::Value::as_u64).map(|v| v as usize);
-            let offset = params.get("offset").and_then(serde_json::Value::as_u64).map_or(1, |v| v as usize);
-            
+
+            let limit = params
+                .get("limit")
+                .and_then(serde_json::Value::as_u64)
+                .map(|v| v as usize);
+            let offset = params
+                .get("offset")
+                .and_then(serde_json::Value::as_u64)
+                .map_or(1, |v| v as usize);
+
             // Resolve path relative to workspace
             let path = if PathBuf::from(&file_path).is_absolute() {
                 PathBuf::from(file_path)
             } else {
                 context.workspace_path.join(file_path)
             };
-            
+
             // Read file content
-            let content = tokio::fs::read_to_string(&path).await
-                .map_err(|e| crate::ToolError::ExecutionFailed { 
-                    message: format!("Failed to read file: {e}")
-                })?;
-            
+            let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
+                crate::ToolError::ExecutionFailed {
+                    message: format!("Failed to read file: {e}"),
+                }
+            })?;
+
             // Apply offset and limit
             let lines: Vec<&str> = content.lines().collect();
             let start = offset.saturating_sub(1);
@@ -95,10 +107,10 @@ impl Tool for ReadTool {
             } else {
                 lines.len()
             };
-            
+
             let result_lines = &lines[start..end];
             let result_content = result_lines.join("\n");
-            
+
             Ok(ToolResult::text(result_content))
         })
     }
@@ -123,11 +135,11 @@ impl Tool for WriteTool {
     fn name(&self) -> &str {
         "write"
     }
-    
+
     fn description(&self) -> &str {
         "Write content to a file"
     }
-    
+
     fn parameters(&self) -> serde_json::Value {
         json!({
             "type": "object",
@@ -144,7 +156,7 @@ impl Tool for WriteTool {
             "required": ["file_path", "content"]
         })
     }
-    
+
     fn required_capabilities(&self) -> Capabilities {
         Capabilities::filesystem_write()
     }
@@ -153,45 +165,57 @@ impl Tool for WriteTool {
         true
     }
 
-    fn execute(&self, params: serde_json::Value, context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let file_path: String = params.get("file_path")
+            let file_path: String = params
+                .get("file_path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "file_path is required".to_string()
+                    message: "file_path is required".to_string(),
                 })?
                 .to_string();
-            
-            let content: String = params.get("content")
+
+            let content: String = params
+                .get("content")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| crate::ToolError::InvalidParameters { 
-                    message: "content is required".to_string() 
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "content is required".to_string(),
                 })?
                 .to_string();
-            
+
             // Resolve path relative to workspace
             let path = if PathBuf::from(&file_path).is_absolute() {
                 PathBuf::from(file_path)
             } else {
                 context.workspace_path.join(file_path)
             };
-            
+
             // Create parent directories if they don't exist
             if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await
-                    .map_err(|e| crate::ToolError::ExecutionFailed { 
-                        message: format!("Failed to create directories: {e}")
-                    })?;
-            }
-            
-            // Write content to file
-            tokio::fs::write(&path, content.as_bytes()).await
-                .map_err(|e| crate::ToolError::ExecutionFailed { 
-                    message: format!("Failed to write file: {e}")
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    crate::ToolError::ExecutionFailed {
+                        message: format!("Failed to create directories: {e}"),
+                    }
                 })?;
-            
+            }
+
+            // Write content to file
+            tokio::fs::write(&path, content.as_bytes())
+                .await
+                .map_err(|e| crate::ToolError::ExecutionFailed {
+                    message: format!("Failed to write file: {e}"),
+                })?;
+
             let bytes_written = content.len();
-            Ok(ToolResult::text(format!("Successfully wrote {} bytes to {}", bytes_written, path.display())))
+            Ok(ToolResult::text(format!(
+                "Successfully wrote {} bytes to {}",
+                bytes_written,
+                path.display()
+            )))
         })
     }
 }
@@ -215,7 +239,7 @@ impl Tool for EditTool {
     fn name(&self) -> &str {
         "edit"
     }
-    
+
     fn description(&self) -> &str {
         "Edit a file by replacing text. Requires the old_text to be unique in the file unless replace_all is set to true."
     }
@@ -244,7 +268,7 @@ impl Tool for EditTool {
             "required": ["file_path", "old_text", "new_text"]
         })
     }
-    
+
     fn required_capabilities(&self) -> Capabilities {
         let mut caps = Capabilities::filesystem_read();
         caps.extend(Capabilities::filesystem_write());
@@ -255,42 +279,50 @@ impl Tool for EditTool {
         true
     }
 
-    fn execute(&self, params: serde_json::Value, context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let file_path: String = params.get("file_path")
+            let file_path: String = params
+                .get("file_path")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| crate::ToolError::InvalidParameters { 
-                    message: "file_path is required".to_string() 
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "file_path is required".to_string(),
                 })?
                 .to_string();
-            
-            let old_text: String = params.get("old_text")
+
+            let old_text: String = params
+                .get("old_text")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| crate::ToolError::InvalidParameters { 
-                    message: "old_text is required".to_string() 
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "old_text is required".to_string(),
                 })?
                 .to_string();
-            
-            let new_text: String = params.get("new_text")
+
+            let new_text: String = params
+                .get("new_text")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| crate::ToolError::InvalidParameters { 
-                    message: "new_text is required".to_string() 
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "new_text is required".to_string(),
                 })?
                 .to_string();
-            
+
             // Resolve path relative to workspace
             let path = if PathBuf::from(&file_path).is_absolute() {
                 PathBuf::from(file_path)
             } else {
                 context.workspace_path.join(file_path)
             };
-            
+
             // Read current content
-            let content = tokio::fs::read_to_string(&path).await
-                .map_err(|e| crate::ToolError::ExecutionFailed { 
-                    message: format!("Failed to read file: {e}")
-                })?;
-            
+            let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
+                crate::ToolError::ExecutionFailed {
+                    message: format!("Failed to read file: {e}"),
+                }
+            })?;
+
             // Count occurrences and enforce uniqueness
             let count = content.matches(old_text.as_str()).count();
 
@@ -299,9 +331,10 @@ impl Tool for EditTool {
                 match find_fuzzy_match(&content, &old_text) {
                     Some((matched_text, similarity)) => {
                         let new_content = content.replacen(&matched_text, &new_text, 1);
-                        tokio::fs::write(&path, new_content.as_bytes()).await
+                        tokio::fs::write(&path, new_content.as_bytes())
+                            .await
                             .map_err(|e| crate::ToolError::ExecutionFailed {
-                                message: format!("Failed to write file: {e}")
+                                message: format!("Failed to write file: {e}"),
                             })?;
                         return Ok(ToolResult::text(format!(
                             "Edited {} (fuzzy match, {:.0}% similar)",
@@ -318,7 +351,10 @@ impl Tool for EditTool {
                 }
             }
 
-            let replace_all = params.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+            let replace_all = params
+                .get("replace_all")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             if count > 1 && !replace_all {
                 return Ok(ToolResult::error(format!(
@@ -333,12 +369,16 @@ impl Tool for EditTool {
             };
 
             // Write updated content
-            tokio::fs::write(&path, new_content.as_bytes()).await
+            tokio::fs::write(&path, new_content.as_bytes())
+                .await
                 .map_err(|e| crate::ToolError::ExecutionFailed {
-                    message: format!("Failed to write file: {e}")
+                    message: format!("Failed to write file: {e}"),
                 })?;
 
-            Ok(ToolResult::text(format!("Successfully replaced text in {}", path.display())))
+            Ok(ToolResult::text(format!(
+                "Successfully replaced text in {}",
+                path.display()
+            )))
         })
     }
 }
@@ -395,49 +435,56 @@ impl Tool for ExecTool {
     fn requires_approval(&self) -> bool {
         true
     }
-    
-    fn execute(&self, params: serde_json::Value, context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let command: String = params.get("command")
+            let command: String = params
+                .get("command")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| crate::ToolError::InvalidParameters { 
-                    message: "command is required".to_string() 
+                .ok_or_else(|| crate::ToolError::InvalidParameters {
+                    message: "command is required".to_string(),
                 })?
                 .to_string();
-            
-            let workdir = params.get("workdir")
-                .and_then(|v| v.as_str()).map_or_else(|| context.workspace_path.clone(), PathBuf::from);
-            
-            let timeout = params.get("timeout")
+
+            let workdir = params
+                .get("workdir")
+                .and_then(|v| v.as_str())
+                .map_or_else(|| context.workspace_path.clone(), PathBuf::from);
+
+            let timeout = params
+                .get("timeout")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(30); // Default 30 second timeout
-            
+
             // Execute command with timeout
             let mut cmd = Command::new("sh");
             cmd.arg("-c").arg(&command).current_dir(&workdir);
-            
-            let output = tokio::time::timeout(
-                std::time::Duration::from_secs(timeout),
-                cmd.output()
-            ).await
-            .map_err(|_| crate::ToolError::ExecutionFailed { 
-                message: "Command timed out".to_string()
-            })?
-            .map_err(|e| crate::ToolError::ExecutionFailed { 
-                message: format!("Failed to execute command: {e}")
-            })?;
-            
+
+            let output =
+                tokio::time::timeout(std::time::Duration::from_secs(timeout), cmd.output())
+                    .await
+                    .map_err(|_| crate::ToolError::ExecutionFailed {
+                        message: "Command timed out".to_string(),
+                    })?
+                    .map_err(|e| crate::ToolError::ExecutionFailed {
+                        message: format!("Failed to execute command: {e}"),
+                    })?;
+
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             let exit_code = output.status.code().unwrap_or(-1);
-            
+
             let result = json!({
                 "exit_code": exit_code,
                 "stdout": stdout,
                 "stderr": stderr,
                 "success": output.status.success()
             });
-            
+
             Ok(ToolResult::json(result))
         })
     }
@@ -488,17 +535,24 @@ impl Tool for GlobTool {
         Capabilities::filesystem_read()
     }
 
-    fn execute(&self, params: serde_json::Value, context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let pattern: String = params.get("pattern")
+            let pattern: String = params
+                .get("pattern")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "pattern is required".to_string()
+                    message: "pattern is required".to_string(),
                 })?
                 .to_string();
 
-            let base_dir = params.get("path")
-                .and_then(|v| v.as_str()).map_or_else(|| context.workspace_path.clone(), PathBuf::from);
+            let base_dir = params
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map_or_else(|| context.workspace_path.clone(), PathBuf::from);
 
             // Build full glob pattern
             let full_pattern = if PathBuf::from(&pattern).is_absolute() {
@@ -507,9 +561,9 @@ impl Tool for GlobTool {
                 format!("{}/{}", base_dir.display(), pattern)
             };
 
-            let entries = glob::glob(&full_pattern)
-                .map_err(|e| crate::ToolError::InvalidParameters {
-                    message: format!("Invalid glob pattern: {e}")
+            let entries =
+                glob::glob(&full_pattern).map_err(|e| crate::ToolError::InvalidParameters {
+                    message: format!("Invalid glob pattern: {e}"),
                 })?;
 
             let mut matches: Vec<String> = Vec::new();
@@ -517,7 +571,10 @@ impl Tool for GlobTool {
                 match entry {
                     Ok(path) => {
                         // Return paths relative to base_dir when possible
-                        let display_path = path.strip_prefix(&base_dir).map_or_else(|_| path.display().to_string(), |p| p.display().to_string());
+                        let display_path = path.strip_prefix(&base_dir).map_or_else(
+                            |_| path.display().to_string(),
+                            |p| p.display().to_string(),
+                        );
                         matches.push(display_path);
                     }
                     Err(e) => {
@@ -589,32 +646,45 @@ impl Tool for GrepTool {
         Capabilities::filesystem_read()
     }
 
-    fn execute(&self, params: serde_json::Value, context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let pattern_str: String = params.get("pattern")
+            let pattern_str: String = params
+                .get("pattern")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "pattern is required".to_string()
+                    message: "pattern is required".to_string(),
                 })?
                 .to_string();
 
-            let search_path = params.get("path")
-                .and_then(|v| v.as_str()).map_or_else(|| context.workspace_path.clone(), |p| {
+            let search_path = params.get("path").and_then(|v| v.as_str()).map_or_else(
+                || context.workspace_path.clone(),
+                |p| {
                     let pb = PathBuf::from(p);
-                    if pb.is_absolute() { pb } else { context.workspace_path.join(p) }
-                });
+                    if pb.is_absolute() {
+                        pb
+                    } else {
+                        context.workspace_path.join(p)
+                    }
+                },
+            );
 
-            let include_pattern = params.get("include")
+            let include_pattern = params
+                .get("include")
                 .and_then(|v| v.as_str())
                 .map(std::string::ToString::to_string);
 
-            let max_results = params.get("max_results")
+            let max_results = params
+                .get("max_results")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(100) as usize;
 
-            let regex = Regex::new(&pattern_str)
-                .map_err(|e| crate::ToolError::InvalidParameters {
-                    message: format!("Invalid regex: {e}")
+            let regex =
+                Regex::new(&pattern_str).map_err(|e| crate::ToolError::InvalidParameters {
+                    message: format!("Invalid regex: {e}"),
                 })?;
 
             let mut results: Vec<serde_json::Value> = Vec::new();
@@ -631,7 +701,7 @@ impl Tool for GrepTool {
 
                 glob::glob(&glob_pattern)
                     .map_err(|e| crate::ToolError::ExecutionFailed {
-                        message: format!("Glob error: {e}")
+                        message: format!("Glob error: {e}"),
                     })?
                     .filter_map(std::result::Result::ok)
                     .filter(|p| p.is_file())
@@ -651,7 +721,11 @@ impl Tool for GrepTool {
                     };
 
                     if regex.is_match(&line) {
-                        let display_path = file_path.strip_prefix(&context.workspace_path).map_or_else(|_| file_path.display().to_string(), |p| p.display().to_string());
+                        let display_path =
+                            file_path.strip_prefix(&context.workspace_path).map_or_else(
+                                |_| file_path.display().to_string(),
+                                |p| p.display().to_string(),
+                            );
 
                         results.push(json!({
                             "file": display_path,
@@ -726,19 +800,25 @@ impl Tool for PatchTool {
         true
     }
 
-    fn execute(&self, params: serde_json::Value, context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let file_path: String = params.get("file_path")
+            let file_path: String = params
+                .get("file_path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "file_path is required".to_string()
+                    message: "file_path is required".to_string(),
                 })?
                 .to_string();
 
-            let patch: String = params.get("patch")
+            let patch: String = params
+                .get("patch")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "patch is required".to_string()
+                    message: "patch is required".to_string(),
                 })?
                 .to_string();
 
@@ -749,26 +829,30 @@ impl Tool for PatchTool {
             };
 
             // Read existing file content
-            let content = tokio::fs::read_to_string(&path).await
-                .map_err(|e| crate::ToolError::ExecutionFailed {
-                    message: format!("Failed to read file: {e}")
-                })?;
+            let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
+                crate::ToolError::ExecutionFailed {
+                    message: format!("Failed to read file: {e}"),
+                }
+            })?;
 
-            let mut lines: Vec<String> = content.lines().map(std::string::ToString::to_string).collect();
+            let mut lines: Vec<String> = content
+                .lines()
+                .map(std::string::ToString::to_string)
+                .collect();
             let mut hunks_applied = 0;
             let mut offset: i64 = 0;
 
             // Parse unified diff hunks
             #[allow(clippy::unwrap_used)] // static pattern, can never fail to compile
-            let hunk_re = Regex::new(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
-                .unwrap();
+            let hunk_re = Regex::new(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").unwrap();
 
             let patch_lines: Vec<&str> = patch.lines().collect();
             let mut i = 0;
 
             while i < patch_lines.len() {
                 if let Some(caps) = hunk_re.captures(patch_lines[i]) {
-                    #[allow(clippy::unwrap_used)] // group 1 is non-optional in the regex, always present when caps exists
+                    #[allow(clippy::unwrap_used)]
+                    // group 1 is non-optional in the regex, always present when caps exists
                     let orig_start: i64 = caps.get(1).unwrap().as_str().parse().unwrap_or(1);
 
                     i += 1;
@@ -799,7 +883,10 @@ impl Tool for PatchTool {
                     }
 
                     // Apply additions
-                    let add_offset = removals.iter().filter(|&&r| r <= additions.first().map_or(usize::MAX, |a| a.0)).count();
+                    let add_offset = removals
+                        .iter()
+                        .filter(|&&r| r <= additions.first().map_or(usize::MAX, |a| a.0))
+                        .count();
                     for (j, (idx, content)) in additions.iter().enumerate() {
                         let insert_pos = (*idx - add_offset + j).min(lines.len());
                         lines.insert(insert_pos, content.clone());
@@ -818,12 +905,17 @@ impl Tool for PatchTool {
 
             // Write patched content
             let new_content = lines.join("\n");
-            tokio::fs::write(&path, new_content.as_bytes()).await
+            tokio::fs::write(&path, new_content.as_bytes())
+                .await
                 .map_err(|e| crate::ToolError::ExecutionFailed {
-                    message: format!("Failed to write patched file: {e}")
+                    message: format!("Failed to write patched file: {e}"),
                 })?;
 
-            Ok(ToolResult::text(format!("Successfully applied {} hunk(s) to {}", hunks_applied, path.display())))
+            Ok(ToolResult::text(format!(
+                "Successfully applied {} hunk(s) to {}",
+                hunks_applied,
+                path.display()
+            )))
         })
     }
 }
@@ -869,12 +961,17 @@ impl Tool for MemoryGetTool {
         Capabilities::filesystem_read()
     }
 
-    fn execute(&self, params: serde_json::Value, context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let key: String = params.get("key")
+            let key: String = params
+                .get("key")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "key is required".to_string()
+                    message: "key is required".to_string(),
                 })?
                 .to_string();
 
@@ -889,14 +986,15 @@ impl Tool for MemoryGetTool {
                 })));
             }
 
-            let content = tokio::fs::read_to_string(&memory_path).await
-                .map_err(|e| crate::ToolError::ExecutionFailed {
-                    message: format!("Failed to read memory: {e}")
-                })?;
+            let content = tokio::fs::read_to_string(&memory_path).await.map_err(|e| {
+                crate::ToolError::ExecutionFailed {
+                    message: format!("Failed to read memory: {e}"),
+                }
+            })?;
 
-            let memory: serde_json::Value = serde_json::from_str(&content)
-                .map_err(|e| crate::ToolError::ExecutionFailed {
-                    message: format!("Failed to parse memory: {e}")
+            let memory: serde_json::Value =
+                serde_json::from_str(&content).map_err(|e| crate::ToolError::ExecutionFailed {
+                    message: format!("Failed to parse memory: {e}"),
                 })?;
 
             let value = memory.get(&key);
@@ -955,16 +1053,22 @@ impl Tool for MemorySearchTool {
         Capabilities::filesystem_read()
     }
 
-    fn execute(&self, params: serde_json::Value, context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let query: String = params.get("query")
+            let query: String = params
+                .get("query")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "query is required".to_string()
+                    message: "query is required".to_string(),
                 })?
                 .to_string();
 
-            let limit = params.get("limit")
+            let limit = params
+                .get("limit")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(10) as usize;
 
@@ -983,12 +1087,15 @@ impl Tool for MemorySearchTool {
 
             // Search through all memory files
             let glob_pattern = format!("{}/**/*", memory_dir.display());
-            let entries = glob::glob(&glob_pattern)
-                .map_err(|e| crate::ToolError::ExecutionFailed {
-                    message: format!("Glob error: {e}")
+            let entries =
+                glob::glob(&glob_pattern).map_err(|e| crate::ToolError::ExecutionFailed {
+                    message: format!("Glob error: {e}"),
                 })?;
 
-            for entry in entries.filter_map(std::result::Result::ok).filter(|p| p.is_file()) {
+            for entry in entries
+                .filter_map(std::result::Result::ok)
+                .filter(|p| p.is_file())
+            {
                 let Ok(content) = std::fs::read_to_string(&entry) else {
                     continue;
                 };
@@ -996,15 +1103,19 @@ impl Tool for MemorySearchTool {
                 let content_lower = content.to_lowercase();
 
                 // Score by number of matching terms
-                let score: usize = query_terms.iter()
+                let score: usize = query_terms
+                    .iter()
                     .filter(|term| content_lower.contains(*term))
                     .count();
 
                 if score > 0 {
-                    let display_path = entry.strip_prefix(&memory_dir).map_or_else(|_| entry.display().to_string(), |p| p.display().to_string());
+                    let display_path = entry
+                        .strip_prefix(&memory_dir)
+                        .map_or_else(|_| entry.display().to_string(), |p| p.display().to_string());
 
                     // Extract relevant snippet
-                    let snippet = content.lines()
+                    let snippet = content
+                        .lines()
                         .filter(|line| {
                             let line_lower = line.to_lowercase();
                             query_terms.iter().any(|term| line_lower.contains(term))
@@ -1023,8 +1134,14 @@ impl Tool for MemorySearchTool {
 
             // Sort by score descending
             results.sort_by(|a, b| {
-                b.get("score").and_then(serde_json::Value::as_u64).unwrap_or(0)
-                    .cmp(&a.get("score").and_then(serde_json::Value::as_u64).unwrap_or(0))
+                b.get("score")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+                    .cmp(
+                        &a.get("score")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0),
+                    )
             });
             results.truncate(limit);
 
@@ -1089,26 +1206,30 @@ impl Tool for InvokeAgentTool {
         Capabilities::new()
     }
 
-    fn execute(&self, params: serde_json::Value, context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let agent_id: String = params.get("agent_id")
+            let agent_id: String = params
+                .get("agent_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "agent_id is required".to_string()
+                    message: "agent_id is required".to_string(),
                 })?
                 .to_string();
 
-            let raw_message: String = params.get("message")
+            let raw_message: String = params
+                .get("message")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "message is required".to_string()
+                    message: "message is required".to_string(),
                 })?
                 .to_string();
 
             // Build the scoped message for the sub-agent
-            let sub_context = params.get("context")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let sub_context = params.get("context").and_then(|v| v.as_str()).unwrap_or("");
 
             let message = if sub_context.is_empty() {
                 raw_message
@@ -1121,7 +1242,9 @@ impl Tool for InvokeAgentTool {
 
             // Prevent self-delegation
             if agent_id == context.agent_id {
-                return Ok(ToolResult::error("Cannot invoke self — would cause infinite recursion"));
+                return Ok(ToolResult::error(
+                    "Cannot invoke self — would cause infinite recursion",
+                ));
             }
 
             // Check delegation depth
@@ -1136,7 +1259,7 @@ impl Tool for InvokeAgentTool {
                 Some(inv) => inv.clone(),
                 None => {
                     return Ok(ToolResult::error(
-                        "Agent delegation is not available in this context"
+                        "Agent delegation is not available in this context",
                     ));
                 }
             };
@@ -1151,11 +1274,14 @@ impl Tool for InvokeAgentTool {
                     &context.session_id,
                     context.delegation_depth + 1,
                 ),
-            ).await {
+            )
+            .await
+            {
                 Ok(Ok(response)) => Ok(ToolResult::text(response)),
                 Ok(Err(e)) => Ok(ToolResult::error(format!("Agent invocation failed: {e}"))),
                 Err(_) => Ok(ToolResult::error(format!(
-                    "Agent invocation timed out after {}s", invoke_timeout.as_secs()
+                    "Agent invocation timed out after {}s",
+                    invoke_timeout.as_secs()
                 ))),
             }
         })
@@ -1228,27 +1354,32 @@ impl Tool for HandoffTool {
         context: ToolExecutionContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let target_agent_id = params.get("target_agent_id")
+            let target_agent_id = params
+                .get("target_agent_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
                     message: "target_agent_id is required".to_string(),
                 })?
                 .to_string();
 
-            let handoff_context = params.get("context")
+            let handoff_context = params
+                .get("context")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
                     message: "context is required".to_string(),
                 })?
                 .to_string();
 
-            let message_override = params.get("message")
+            let message_override = params
+                .get("message")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
             // Prevent self-handoff
             if target_agent_id == context.agent_id {
-                return Ok(ToolResult::error("Cannot hand off to self — would cause infinite loop"));
+                return Ok(ToolResult::error(
+                    "Cannot hand off to self — would cause infinite loop",
+                ));
             }
 
             // Check delegation depth
@@ -1326,9 +1457,7 @@ impl Tool for BlackboardReadTool {
 
             let blackboard = match &context.blackboard {
                 Some(bb) => bb.clone(),
-                None => return Ok(ToolResult::error(
-                    "No blackboard available in this context"
-                )),
+                None => return Ok(ToolResult::error("No blackboard available in this context")),
             };
 
             let key = params.get("key").and_then(|v| v.as_str());
@@ -1412,23 +1541,22 @@ impl Tool for BlackboardWriteTool {
 
             let blackboard = match &context.blackboard {
                 Some(bb) => bb.clone(),
-                None => return Ok(ToolResult::error(
-                    "No blackboard available in this context"
-                )),
+                None => return Ok(ToolResult::error("No blackboard available in this context")),
             };
 
-            let key = params.get("key")
+            let key = params
+                .get("key")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
                     message: "key is required".to_string(),
                 })?
                 .to_string();
 
-            let value = params.get("value")
-                .cloned()
-                .ok_or_else(|| crate::ToolError::InvalidParameters {
+            let value = params.get("value").cloned().ok_or_else(|| {
+                crate::ToolError::InvalidParameters {
                     message: "value is required".to_string(),
-                })?;
+                }
+            })?;
 
             blackboard.write(&swarm_id, &key, value.clone()).await;
 
@@ -1497,20 +1625,27 @@ impl Tool for WebFetchTool {
         caps
     }
 
-    fn execute(&self, params: serde_json::Value, _context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        _context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let url = params.get("url")
+            let url = params
+                .get("url")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "url is required".to_string()
+                    message: "url is required".to_string(),
                 })?
                 .to_string();
 
-            let timeout_secs = params.get("timeout_secs")
+            let timeout_secs = params
+                .get("timeout_secs")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(15);
 
-            let raw = params.get("raw")
+            let raw = params
+                .get("raw")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
 
@@ -1521,11 +1656,14 @@ impl Tool for WebFetchTool {
                     message: format!("Failed to create HTTP client: {e}"),
                 })?;
 
-            let response = client.get(&url).send().await.map_err(|e| {
-                crate::ToolError::ExecutionFailed {
-                    message: format!("HTTP request failed: {e}"),
-                }
-            })?;
+            let response =
+                client
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|e| crate::ToolError::ExecutionFailed {
+                        message: format!("HTTP request failed: {e}"),
+                    })?;
 
             let status = response.status();
             let content_type = response
@@ -1535,15 +1673,20 @@ impl Tool for WebFetchTool {
                 .unwrap_or("unknown")
                 .to_string();
 
-            let body = response.text().await.map_err(|e| {
-                crate::ToolError::ExecutionFailed {
+            let body = response
+                .text()
+                .await
+                .map_err(|e| crate::ToolError::ExecutionFailed {
                     message: format!("Failed to read response body: {e}"),
-                }
-            })?;
+                })?;
 
             // Truncate if too large
             let body = if body.len() > WEB_FETCH_MAX_BODY {
-                format!("{}...\n[truncated at {} bytes]", &body[..WEB_FETCH_MAX_BODY], WEB_FETCH_MAX_BODY)
+                format!(
+                    "{}...\n[truncated at {} bytes]",
+                    &body[..WEB_FETCH_MAX_BODY],
+                    WEB_FETCH_MAX_BODY
+                )
             } else {
                 body
             };
@@ -1648,22 +1791,31 @@ impl Tool for WebSearchTool {
         caps
     }
 
-    fn execute(&self, params: serde_json::Value, context: ToolExecutionContext) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
+    fn execute(
+        &self,
+        params: serde_json::Value,
+        context: ToolExecutionContext,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let query = params.get("query")
+            let query = params
+                .get("query")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "query is required".to_string()
+                    message: "query is required".to_string(),
                 })?
                 .to_string();
 
-            let max_results = params.get("max_results")
+            let max_results = params
+                .get("max_results")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(5) as usize;
 
             // Try to get search API credentials
             let api_key = if let Some(ref accessor) = context.credential_accessor {
-                match accessor.get_credential("rockbot://web_search/api_key", &context.agent_id).await {
+                match accessor
+                    .get_credential("rockbot://web_search/api_key", &context.agent_id)
+                    .await
+                {
                     Ok(crate::CredentialResult::Granted { secret, .. }) => {
                         String::from_utf8(secret).ok()
                     }
@@ -1701,11 +1853,12 @@ impl Tool for WebSearchTool {
                     message: format!("Search request failed: {e}"),
                 })?;
 
-            let body: serde_json::Value = resp.json().await.map_err(|e| {
-                crate::ToolError::ExecutionFailed {
-                    message: format!("Failed to parse search response: {e}"),
-                }
-            })?;
+            let body: serde_json::Value =
+                resp.json()
+                    .await
+                    .map_err(|e| crate::ToolError::ExecutionFailed {
+                        message: format!("Failed to parse search response: {e}"),
+                    })?;
 
             // Extract web results from Brave Search response
             let results: Vec<serde_json::Value> = body
@@ -1797,7 +1950,10 @@ impl Tool for TestTool {
         context: ToolExecutionContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let filter = params.get("filter").and_then(|v| v.as_str()).map(str::to_string);
+            let filter = params
+                .get("filter")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
 
             let workdir = params
                 .get("workdir")
@@ -1815,17 +1971,15 @@ impl Tool for TestTool {
             let mut child = Command::new("sh");
             child.arg("-c").arg(&cmd).current_dir(&workdir);
 
-            let output = tokio::time::timeout(
-                std::time::Duration::from_secs(timeout_secs),
-                child.output(),
-            )
-            .await
-            .map_err(|_| crate::ToolError::ExecutionFailed {
-                message: format!("Test command timed out after {timeout_secs}s"),
-            })?
-            .map_err(|e| crate::ToolError::ExecutionFailed {
-                message: format!("Failed to run test command: {e}"),
-            })?;
+            let output =
+                tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), child.output())
+                    .await
+                    .map_err(|_| crate::ToolError::ExecutionFailed {
+                        message: format!("Test command timed out after {timeout_secs}s"),
+                    })?
+                    .map_err(|e| crate::ToolError::ExecutionFailed {
+                        message: format!("Failed to run test command: {e}"),
+                    })?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1886,7 +2040,9 @@ async fn detect_test_command(workdir: &std::path::Path, filter: Option<&str>) ->
     // Makefile with a test target
     let makefile = workdir.join("Makefile");
     if makefile.exists() {
-        let contents = tokio::fs::read_to_string(&makefile).await.unwrap_or_default();
+        let contents = tokio::fs::read_to_string(&makefile)
+            .await
+            .unwrap_or_default();
         if contents.contains("\ntest:") || contents.starts_with("test:") {
             return Ok("make test".to_string());
         }
@@ -1959,7 +2115,10 @@ impl Tool for LintTool {
         context: ToolExecutionContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let filter = params.get("filter").and_then(|v| v.as_str()).map(str::to_string);
+            let filter = params
+                .get("filter")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
 
             let workdir = params
                 .get("workdir")
@@ -1977,17 +2136,15 @@ impl Tool for LintTool {
             let mut child = Command::new("sh");
             child.arg("-c").arg(&cmd).current_dir(&workdir);
 
-            let output = tokio::time::timeout(
-                std::time::Duration::from_secs(timeout_secs),
-                child.output(),
-            )
-            .await
-            .map_err(|_| crate::ToolError::ExecutionFailed {
-                message: format!("Lint command timed out after {timeout_secs}s"),
-            })?
-            .map_err(|e| crate::ToolError::ExecutionFailed {
-                message: format!("Failed to run lint command: {e}"),
-            })?;
+            let output =
+                tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), child.output())
+                    .await
+                    .map_err(|_| crate::ToolError::ExecutionFailed {
+                        message: format!("Lint command timed out after {timeout_secs}s"),
+                    })?
+                    .map_err(|e| crate::ToolError::ExecutionFailed {
+                        message: format!("Failed to run lint command: {e}"),
+                    })?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2123,15 +2280,12 @@ impl Tool for ClarifyTool {
                     message: "Missing required parameter: question".to_string(),
                 })?;
 
-            let options = params
-                .get("options")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str())
-                        .map(String::from)
-                        .collect::<Vec<_>>()
-                });
+            let options = params.get("options").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            });
 
             let context = params.get("context").and_then(|v| v.as_str());
 
@@ -2183,7 +2337,10 @@ fn find_fuzzy_match(haystack: &str, needle: &str) -> Option<(String, f64)> {
 
     for i in 0..=(haystack_lines.len() - window_size) {
         let window: String = haystack_lines[i..i + window_size].join("\n");
-        let score = normalized_levenshtein(&normalize_whitespace(needle), &normalize_whitespace(&window));
+        let score = normalized_levenshtein(
+            &normalize_whitespace(needle),
+            &normalize_whitespace(&window),
+        );
         if score > best_score {
             best_score = score;
             best_window = Some(window);
@@ -2312,9 +2469,7 @@ impl Tool for BrowserTool {
                 .unwrap_or(3000);
 
             if !url.starts_with("http://") && !url.starts_with("https://") {
-                return Ok(ToolResult::error(
-                    "URL must start with http:// or https://",
-                ));
+                return Ok(ToolResult::error("URL must start with http:// or https://"));
             }
 
             // Try headless Chrome/Chromium first
@@ -2393,10 +2548,7 @@ fn find_chrome_binary() -> Option<String> {
         // Use `which` via a synchronous PATH search: check if any directory in
         // PATH contains this executable.
         if std::env::var_os("PATH")
-            .map(|path_val| {
-                std::env::split_paths(&path_val)
-                    .any(|dir| dir.join(bin).is_file())
-            })
+            .map(|path_val| std::env::split_paths(&path_val).any(|dir| dir.join(bin).is_file()))
             .unwrap_or(false)
         {
             return Some(bin.to_string());
@@ -2422,9 +2574,12 @@ async fn fetch_with_http_fallback(url: &str) -> Result<ToolResult> {
             message: format!("HTTP error: {e}"),
         })?;
 
-    let body = resp.text().await.map_err(|e| crate::ToolError::ExecutionFailed {
-        message: format!("Read error: {e}"),
-    })?;
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| crate::ToolError::ExecutionFailed {
+            message: format!("Read error: {e}"),
+        })?;
 
     let text = strip_html_tags(&body);
     Ok(ToolResult::text(format!(
@@ -2524,7 +2679,9 @@ mod tests {
     async fn test_edit_multiple_occurrences_without_replace_all_returns_error() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
-        tokio::fs::write(&file_path, "foo bar foo baz foo\n").await.unwrap();
+        tokio::fs::write(&file_path, "foo bar foo baz foo\n")
+            .await
+            .unwrap();
 
         let tool = EditTool::new();
         let params = serde_json::json!({
@@ -2537,7 +2694,10 @@ mod tests {
 
         assert!(matches!(result, ToolResult::Error { .. }));
         if let ToolResult::Error { message, .. } = result {
-            assert!(message.contains('3'), "expected count 3 in message: {message}");
+            assert!(
+                message.contains('3'),
+                "expected count 3 in message: {message}"
+            );
             assert!(message.contains("replace_all=true"));
         }
         // File should be unchanged
@@ -2549,7 +2709,9 @@ mod tests {
     async fn test_edit_multiple_occurrences_with_replace_all_replaces_all() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
-        tokio::fs::write(&file_path, "foo bar foo baz foo\n").await.unwrap();
+        tokio::fs::write(&file_path, "foo bar foo baz foo\n")
+            .await
+            .unwrap();
 
         let tool = EditTool::new();
         let params = serde_json::json!({
@@ -2621,7 +2783,9 @@ mod tests {
     async fn test_detect_test_command_cargo_with_filter() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
-        let cmd = detect_test_command(dir.path(), Some("my_test")).await.unwrap();
+        let cmd = detect_test_command(dir.path(), Some("my_test"))
+            .await
+            .unwrap();
         assert_eq!(cmd, "cargo test -- my_test");
     }
 
@@ -2637,7 +2801,9 @@ mod tests {
     async fn test_detect_test_command_npm_with_filter() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("package.json"), "{}").unwrap();
-        let cmd = detect_test_command(dir.path(), Some("myspec")).await.unwrap();
+        let cmd = detect_test_command(dir.path(), Some("myspec"))
+            .await
+            .unwrap();
         assert_eq!(cmd, "npx jest myspec");
     }
 
@@ -2653,7 +2819,9 @@ mod tests {
     async fn test_detect_test_command_python_setup_py() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("setup.py"), "").unwrap();
-        let cmd = detect_test_command(dir.path(), Some("test_foo")).await.unwrap();
+        let cmd = detect_test_command(dir.path(), Some("test_foo"))
+            .await
+            .unwrap();
         assert_eq!(cmd, "pytest test_foo");
     }
 
@@ -2734,7 +2902,10 @@ mod tests {
         let result = tool.execute(params, ctx).await;
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("timed out"), "Expected timeout error, got: {msg}");
+        assert!(
+            msg.contains("timed out"),
+            "Expected timeout error, got: {msg}"
+        );
     }
 
     #[test]
@@ -2782,7 +2953,9 @@ mod tests {
     async fn test_edit_fuzzy_whitespace_match() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.rs");
-        tokio::fs::write(&file_path, "fn  hello()  {\n    println!(\"hi\");\n}\n").await.unwrap();
+        tokio::fs::write(&file_path, "fn  hello()  {\n    println!(\"hi\");\n}\n")
+            .await
+            .unwrap();
 
         let tool = EditTool::new();
         let params = serde_json::json!({

@@ -26,7 +26,7 @@ pub mod event;
 pub mod state;
 pub mod ui;
 
-pub use app::{App, run_app};
+pub use app::{run_app, App};
 pub use credentials::CredentialsTui;
-pub use effects::{EffectState, palette};
+pub use effects::{palette, EffectState};
 pub use state::{AppState, Message};

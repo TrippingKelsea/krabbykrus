@@ -8,19 +8,30 @@ use ratatui::{
     Frame,
 };
 
+use super::render_spinner;
 use crate::tui::effects::{self, palette, EffectState};
 use crate::tui::state::{AgentStatus, AppState};
-use super::render_spinner;
 
 const CARD_WIDTH: u16 = 16;
 
 /// Render the dashboard page — cards in cards_area, detail in detail_area
-pub fn render_dashboard(frame: &mut Frame, cards_area: Rect, detail_area: Rect, state: &AppState, effect_state: &EffectState) {
+pub fn render_dashboard(
+    frame: &mut Frame,
+    cards_area: Rect,
+    detail_area: Rect,
+    state: &AppState,
+    effect_state: &EffectState,
+) {
     render_status_cards(frame, cards_area, state, effect_state);
     render_detail_panel(frame, detail_area, state);
 }
 
-fn render_status_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
+fn render_status_cards(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    effect_state: &EffectState,
+) {
     let cards = [
         ("Gateway", 0usize),
         ("Agents", 1),
@@ -28,7 +39,8 @@ fn render_status_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_s
         ("Vault", 3),
     ];
 
-    let mut constraints: Vec<Constraint> = cards.iter()
+    let mut constraints: Vec<Constraint> = cards
+        .iter()
         .map(|_| Constraint::Length(CARD_WIDTH))
         .collect();
     constraints.push(Constraint::Min(0));
@@ -70,7 +82,9 @@ fn render_status_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_s
 
         // Add label as first line
         let label_style = if is_selected {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
@@ -93,7 +107,10 @@ const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn gateway_card_lines(state: &AppState) -> Vec<Line<'static>> {
     if state.gateway_loading {
-        return vec![Line::from(Span::styled("...", Style::default().fg(Color::DarkGray)))];
+        return vec![Line::from(Span::styled(
+            "...",
+            Style::default().fg(Color::DarkGray),
+        ))];
     }
     let (status, color) = if state.gateway.connected {
         ("● Online", Color::Green)
@@ -119,47 +136,91 @@ fn gateway_card_lines(state: &AppState) -> Vec<Line<'static>> {
 
 fn agents_card_lines(state: &AppState) -> Vec<Line<'static>> {
     if state.agents_loading {
-        return vec![Line::from(Span::styled("...", Style::default().fg(Color::DarkGray)))];
+        return vec![Line::from(Span::styled(
+            "...",
+            Style::default().fg(Color::DarkGray),
+        ))];
     }
-    let active = state.agents.iter().filter(|a| a.status == AgentStatus::Active).count();
-    let pending = state.agents.iter().filter(|a| a.status == AgentStatus::Pending).count();
-    let mut lines = vec![
-        Line::from(Span::styled(format!("{active} active"), Style::default().fg(Color::Green))),
-    ];
+    let active = state
+        .agents
+        .iter()
+        .filter(|a| a.status == AgentStatus::Active)
+        .count();
+    let pending = state
+        .agents
+        .iter()
+        .filter(|a| a.status == AgentStatus::Pending)
+        .count();
+    let mut lines = vec![Line::from(Span::styled(
+        format!("{active} active"),
+        Style::default().fg(Color::Green),
+    ))];
     if pending > 0 {
-        lines.push(Line::from(Span::styled(format!("+{pending} pend"), Style::default().fg(Color::Yellow))));
+        lines.push(Line::from(Span::styled(
+            format!("+{pending} pend"),
+            Style::default().fg(Color::Yellow),
+        )));
     } else {
-        lines.push(Line::from(Span::styled(format!("{} total", state.agents.len()), Style::default().fg(Color::DarkGray))));
+        lines.push(Line::from(Span::styled(
+            format!("{} total", state.agents.len()),
+            Style::default().fg(Color::DarkGray),
+        )));
     }
     lines
 }
 
 fn sessions_card_lines(state: &AppState) -> Vec<Line<'static>> {
     if state.sessions_loading {
-        return vec![Line::from(Span::styled("...", Style::default().fg(Color::DarkGray)))];
+        return vec![Line::from(Span::styled(
+            "...",
+            Style::default().fg(Color::DarkGray),
+        ))];
     }
     let total_msgs: usize = state.sessions.iter().map(|s| s.message_count).sum();
     vec![
-        Line::from(Span::styled(format!("{} active", state.sessions.len()), Style::default().fg(Color::Cyan))),
-        Line::from(Span::styled(format!("{total_msgs} msgs"), Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            format!("{} active", state.sessions.len()),
+            Style::default().fg(Color::Cyan),
+        )),
+        Line::from(Span::styled(
+            format!("{total_msgs} msgs"),
+            Style::default().fg(Color::DarkGray),
+        )),
     ]
 }
 
 fn vault_card_lines(state: &AppState) -> Vec<Line<'static>> {
     if state.vault_loading {
-        return vec![Line::from(Span::styled("...", Style::default().fg(Color::DarkGray)))];
+        return vec![Line::from(Span::styled(
+            "...",
+            Style::default().fg(Color::DarkGray),
+        ))];
     }
     if !state.vault.initialized {
         return vec![
             Line::from(Span::styled("Not Init", Style::default().fg(Color::Yellow))),
-            Line::from(Span::styled("'i' to init", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "'i' to init",
+                Style::default().fg(Color::DarkGray),
+            )),
         ];
     }
-    let lock = if state.vault.locked { "Locked" } else { "Unlocked" };
-    let lock_color = if state.vault.locked { Color::Yellow } else { Color::Green };
+    let lock = if state.vault.locked {
+        "Locked"
+    } else {
+        "Unlocked"
+    };
+    let lock_color = if state.vault.locked {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
     vec![
         Line::from(Span::styled(lock, Style::default().fg(lock_color))),
-        Line::from(Span::styled(format!("{} endpts", state.vault.endpoint_count), Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            format!("{} endpts", state.vault.endpoint_count),
+            Style::default().fg(Color::DarkGray),
+        )),
     ]
 }
 
@@ -222,19 +283,32 @@ fn render_gateway_detail(frame: &mut Frame, area: Rect, state: &AppState) {
 
     if let Some(ref err) = state.gateway_error {
         content.push(Line::from(""));
-        content.push(Line::from(Span::styled(format!("Error: {err}"), Style::default().fg(Color::Red))));
+        content.push(Line::from(Span::styled(
+            format!("Error: {err}"),
+            Style::default().fg(Color::Red),
+        )));
     }
 
     // Show provider summary
     if !state.providers.is_empty() {
         content.push(Line::from(""));
-        content.push(Line::from(Span::styled("Providers:", Style::default().fg(Color::Cyan))));
+        content.push(Line::from(Span::styled(
+            "Providers:",
+            Style::default().fg(Color::Cyan),
+        )));
         for p in &state.providers {
-            let (ind, ind_color) = if p.available { ("●", Color::Green) } else { ("○", Color::Yellow) };
+            let (ind, ind_color) = if p.available {
+                ("●", Color::Green)
+            } else {
+                ("○", Color::Yellow)
+            };
             content.push(Line::from(vec![
                 Span::styled(format!("  {ind} "), Style::default().fg(ind_color)),
                 Span::raw(&p.name),
-                Span::styled(format!(" ({} models)", p.models.len()), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" ({} models)", p.models.len()),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]));
         }
     }
@@ -245,8 +319,7 @@ fn render_gateway_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(content)
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(content).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, body);
 }
 
@@ -261,9 +334,15 @@ fn render_agents_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     if state.agents.is_empty() {
         let content = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled("No agents configured", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "No agents configured",
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from(""),
-            Line::from(Span::styled("Go to Agents tab (3) to add agents", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "Go to Agents tab (3) to add agents",
+                Style::default().fg(Color::DarkGray),
+            )),
         ])
         .alignment(Alignment::Center);
         frame.render_widget(content, body);
@@ -274,22 +353,26 @@ fn render_agents_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         .style(Style::default().fg(Color::Cyan))
         .bottom_margin(1);
 
-    let rows: Vec<Row> = state.agents.iter().map(|agent| {
-        let status_style = match agent.status {
-            AgentStatus::Active => Style::default().fg(Color::Green),
-            AgentStatus::Pending => Style::default().fg(Color::Yellow),
-            AgentStatus::Error => Style::default().fg(Color::Red),
-            AgentStatus::Disabled => Style::default().fg(Color::DarkGray),
-        };
+    let rows: Vec<Row> = state
+        .agents
+        .iter()
+        .map(|agent| {
+            let status_style = match agent.status {
+                AgentStatus::Active => Style::default().fg(Color::Green),
+                AgentStatus::Pending => Style::default().fg(Color::Yellow),
+                AgentStatus::Error => Style::default().fg(Color::Red),
+                AgentStatus::Disabled => Style::default().fg(Color::DarkGray),
+            };
 
-        Row::new(vec![
-            agent.id.clone(),
-            agent.model.clone().unwrap_or_else(|| "-".to_string()),
-            format!("{}", agent.session_count),
-            agent.status.label().to_string(),
-        ])
-        .style(status_style)
-    }).collect();
+            Row::new(vec![
+                agent.id.clone(),
+                agent.model.clone().unwrap_or_else(|| "-".to_string()),
+                format!("{}", agent.session_count),
+                agent.status.label().to_string(),
+            ])
+            .style(status_style)
+        })
+        .collect();
 
     let widths = [
         Constraint::Percentage(30),
@@ -298,8 +381,7 @@ fn render_agents_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         Constraint::Percentage(20),
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header);
+    let table = Table::new(rows, widths).header(header);
 
     frame.render_widget(table, body);
 }
@@ -315,9 +397,15 @@ fn render_sessions_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     if state.sessions.is_empty() {
         let content = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled("No active sessions", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "No active sessions",
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from(""),
-            Line::from(Span::styled("Go to Sessions tab (4) to create one", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "Go to Sessions tab (4) to create one",
+                Style::default().fg(Color::DarkGray),
+            )),
         ])
         .alignment(Alignment::Center);
         frame.render_widget(content, body);
@@ -331,19 +419,34 @@ fn render_sessions_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         ]),
         Line::from(vec![
             Span::styled("Total Messages: ", Style::default().fg(Color::Cyan)),
-            Span::raw(format!("{}", state.sessions.iter().map(|s| s.message_count).sum::<usize>())),
+            Span::raw(format!(
+                "{}",
+                state
+                    .sessions
+                    .iter()
+                    .map(|s| s.message_count)
+                    .sum::<usize>()
+            )),
         ]),
         Line::from(""),
     ];
 
     for session in state.sessions.iter().take(10) {
-        let model_hint = session.model.as_ref()
+        let model_hint = session
+            .model
+            .as_ref()
             .and_then(|m| m.split('/').last())
             .unwrap_or("-");
         content.push(Line::from(vec![
             Span::styled(&session.agent_id, Style::default().fg(Color::White)),
-            Span::styled(format!("  {model_hint}"), Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("  ({} msgs)", session.message_count), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("  {model_hint}"),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("  ({} msgs)", session.message_count),
+                Style::default().fg(Color::Cyan),
+            ),
         ]));
     }
 
@@ -369,14 +472,20 @@ fn render_vault_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     let mut content = vec![];
 
     if !state.vault.initialized {
-        content.push(Line::from(Span::styled("Vault not initialized", Style::default().fg(Color::Yellow))));
+        content.push(Line::from(Span::styled(
+            "Vault not initialized",
+            Style::default().fg(Color::Yellow),
+        )));
         content.push(Line::from(""));
         content.push(Line::from(vec![
             Span::styled("Path: ", Style::default().fg(Color::Cyan)),
             Span::raw(state.vault_path.display().to_string()),
         ]));
         content.push(Line::from(""));
-        content.push(Line::from(Span::styled("Press 'i' to initialize", Style::default().fg(Color::Green))));
+        content.push(Line::from(Span::styled(
+            "Press 'i' to initialize",
+            Style::default().fg(Color::Green),
+        )));
     } else {
         let (lock_text, lock_color) = if state.vault.locked {
             ("Locked", Color::Yellow)
@@ -399,9 +508,15 @@ fn render_vault_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         content.push(Line::from(""));
 
         if state.vault.locked {
-            content.push(Line::from(Span::styled("Press 'u' to unlock", Style::default().fg(Color::Green))));
+            content.push(Line::from(Span::styled(
+                "Press 'u' to unlock",
+                Style::default().fg(Color::Green),
+            )));
         } else {
-            content.push(Line::from(Span::styled("Press 'l' to lock", Style::default().fg(Color::DarkGray))));
+            content.push(Line::from(Span::styled(
+                "Press 'l' to lock",
+                Style::default().fg(Color::DarkGray),
+            )));
         }
     }
 

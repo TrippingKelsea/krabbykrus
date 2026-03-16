@@ -69,7 +69,6 @@ pub enum RoutePolicy {
     Session,
 }
 
-
 /// The fully-resolved route for an incoming message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedAgentRoute {
@@ -107,7 +106,6 @@ pub enum SessionScope {
     PerAccountChannelPeer,
 }
 
-
 // ---------------------------------------------------------------------------
 // Session key
 // ---------------------------------------------------------------------------
@@ -125,7 +123,11 @@ pub struct SessionKey {
 
 impl SessionKey {
     /// Create a new session key.
-    pub fn new(scope: impl Into<String>, channel: impl Into<String>, identifier: impl Into<String>) -> Self {
+    pub fn new(
+        scope: impl Into<String>,
+        channel: impl Into<String>,
+        identifier: impl Into<String>,
+    ) -> Self {
         Self {
             scope: scope.into(),
             channel: channel.into(),
@@ -480,7 +482,10 @@ impl RoutingEngine {
         // 1. Peer binding
         if let Some(peer_id) = &ctx.peer_id {
             if let Some(b) = find_peer_binding(&all_bindings, &ctx.channel, peer_id) {
-                debug!("Route matched by peer binding for {}:{}", ctx.channel, peer_id);
+                debug!(
+                    "Route matched by peer binding for {}:{}",
+                    ctx.channel, peer_id
+                );
                 return self.build_route(ctx, b, MatchedByType::BindingPeer);
             }
         }
@@ -602,9 +607,7 @@ impl RoutingEngine {
     #[allow(clippy::unused_self)]
     fn compute_session_key(&self, ctx: &MessageRoutingContext, scope: &SessionScope) -> String {
         match scope {
-            SessionScope::Global => {
-                SessionKey::new("global", &ctx.channel, "shared").to_string()
-            }
+            SessionScope::Global => SessionKey::new("global", &ctx.channel, "shared").to_string(),
             SessionScope::PerSender => {
                 SessionKey::new("sender", &ctx.channel, &ctx.sender_id).to_string()
             }
@@ -658,10 +661,8 @@ impl RoutingEngine {
                     .transpose()
                     .unwrap_or(None);
 
-                let created_at =
-                    DateTime::from_timestamp(created_ts, 0).unwrap_or_else(Utc::now);
-                let updated_at =
-                    DateTime::from_timestamp(updated_ts, 0).unwrap_or_else(Utc::now);
+                let created_at = DateTime::from_timestamp(created_ts, 0).unwrap_or_else(Utc::now);
+                let updated_at = DateTime::from_timestamp(updated_ts, 0).unwrap_or_else(Utc::now);
 
                 Ok(Binding {
                     id,
@@ -705,15 +706,18 @@ fn find_peer_binding<'a>(
     channel: &str,
     peer_id: &str,
 ) -> Option<&'a Binding> {
-    bindings.iter().find(|b| {
-        matches!(
-            &b.kind,
-            BindingKind::Peer {
-                channel: ch,
-                peer_id: pid,
-            } if ch == channel && pid == peer_id
-        )
-    }).copied()
+    bindings
+        .iter()
+        .find(|b| {
+            matches!(
+                &b.kind,
+                BindingKind::Peer {
+                    channel: ch,
+                    peer_id: pid,
+                } if ch == channel && pid == peer_id
+            )
+        })
+        .copied()
 }
 
 fn find_guild_roles_binding<'a>(
@@ -722,18 +726,21 @@ fn find_guild_roles_binding<'a>(
     guild_id: &str,
     sender_roles: &[String],
 ) -> Option<&'a Binding> {
-    bindings.iter().find(|b| {
-        matches!(
-            &b.kind,
-            BindingKind::GuildRoles {
-                channel: ch,
-                guild_id: gid,
-                role_ids,
-            } if ch == channel
-                && gid == guild_id
-                && role_ids.iter().any(|r| sender_roles.contains(r))
-        )
-    }).copied()
+    bindings
+        .iter()
+        .find(|b| {
+            matches!(
+                &b.kind,
+                BindingKind::GuildRoles {
+                    channel: ch,
+                    guild_id: gid,
+                    role_ids,
+                } if ch == channel
+                    && gid == guild_id
+                    && role_ids.iter().any(|r| sender_roles.contains(r))
+            )
+        })
+        .copied()
 }
 
 fn find_guild_binding<'a>(
@@ -741,15 +748,18 @@ fn find_guild_binding<'a>(
     channel: &str,
     guild_id: &str,
 ) -> Option<&'a Binding> {
-    bindings.iter().find(|b| {
-        matches!(
-            &b.kind,
-            BindingKind::Guild {
-                channel: ch,
-                guild_id: gid,
-            } if ch == channel && gid == guild_id
-        )
-    }).copied()
+    bindings
+        .iter()
+        .find(|b| {
+            matches!(
+                &b.kind,
+                BindingKind::Guild {
+                    channel: ch,
+                    guild_id: gid,
+                } if ch == channel && gid == guild_id
+            )
+        })
+        .copied()
 }
 
 fn find_team_binding<'a>(
@@ -757,15 +767,18 @@ fn find_team_binding<'a>(
     channel: &str,
     team_id: &str,
 ) -> Option<&'a Binding> {
-    bindings.iter().find(|b| {
-        matches!(
-            &b.kind,
-            BindingKind::Team {
-                channel: ch,
-                team_id: tid,
-            } if ch == channel && tid == team_id
-        )
-    }).copied()
+    bindings
+        .iter()
+        .find(|b| {
+            matches!(
+                &b.kind,
+                BindingKind::Team {
+                    channel: ch,
+                    team_id: tid,
+                } if ch == channel && tid == team_id
+            )
+        })
+        .copied()
 }
 
 fn find_account_binding<'a>(
@@ -773,27 +786,30 @@ fn find_account_binding<'a>(
     channel: &str,
     account_id: &str,
 ) -> Option<&'a Binding> {
-    bindings.iter().find(|b| {
-        matches!(
-            &b.kind,
-            BindingKind::Account {
-                channel: ch,
-                account_id: aid,
-            } if ch == channel && aid == account_id
-        )
-    }).copied()
+    bindings
+        .iter()
+        .find(|b| {
+            matches!(
+                &b.kind,
+                BindingKind::Account {
+                    channel: ch,
+                    account_id: aid,
+                } if ch == channel && aid == account_id
+            )
+        })
+        .copied()
 }
 
-fn find_channel_binding<'a>(
-    bindings: &[&'a Binding],
-    channel: &str,
-) -> Option<&'a Binding> {
-    bindings.iter().find(|b| {
-        matches!(
-            &b.kind,
-            BindingKind::Channel { channel: ch } if ch == channel
-        )
-    }).copied()
+fn find_channel_binding<'a>(bindings: &[&'a Binding], channel: &str) -> Option<&'a Binding> {
+    bindings
+        .iter()
+        .find(|b| {
+            matches!(
+                &b.kind,
+                BindingKind::Channel { channel: ch } if ch == channel
+            )
+        })
+        .copied()
 }
 
 // ---------------------------------------------------------------------------
@@ -1041,10 +1057,9 @@ mod tests {
 
         // Per-sender scope via a binding override.
         let temp_db2 = NamedTempFile::new().unwrap();
-        let engine2 =
-            RoutingEngine::new(temp_db2.path(), "default-agent", SessionScope::PerSender)
-                .await
-                .unwrap();
+        let engine2 = RoutingEngine::new(temp_db2.path(), "default-agent", SessionScope::PerSender)
+            .await
+            .unwrap();
 
         let route2 = engine2.resolve(&ctx).await;
         assert_eq!(route2.session_key, "sender:telegram:user_456");
@@ -1057,10 +1072,9 @@ mod tests {
 
         // Create engine and add a binding.
         {
-            let engine =
-                RoutingEngine::new(&path, "default-agent", SessionScope::PerPeer)
-                    .await
-                    .unwrap();
+            let engine = RoutingEngine::new(&path, "default-agent", SessionScope::PerPeer)
+                .await
+                .unwrap();
 
             let binding = Binding::new(
                 "persisted-agent",
@@ -1072,10 +1086,9 @@ mod tests {
         }
 
         // Create a fresh engine from the same database.
-        let engine2 =
-            RoutingEngine::new(&path, "default-agent", SessionScope::PerPeer)
-                .await
-                .unwrap();
+        let engine2 = RoutingEngine::new(&path, "default-agent", SessionScope::PerPeer)
+            .await
+            .unwrap();
 
         let ctx = telegram_ctx();
         let route = engine2.resolve(&ctx).await;

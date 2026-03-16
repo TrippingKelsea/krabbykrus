@@ -58,17 +58,17 @@ pub mod palette {
     pub const ACTIVE_PRIMARY: Color = Color::Rgb(147, 112, 219); // Medium purple
     pub const ACTIVE_SECONDARY: Color = Color::Rgb(186, 85, 211); // Medium orchid
     pub const ACTIVE_GLOW: Color = Color::Rgb(218, 112, 214); // Orchid
-    
+
     /// Inactive element colors
     pub const INACTIVE_BORDER: Color = Color::Rgb(88, 88, 88); // Dark gray
     pub const INACTIVE_TEXT: Color = Color::Rgb(128, 128, 128); // Gray
-    
+
     /// Status colors
     pub const SUCCESS: Color = Color::Rgb(46, 204, 113); // Green
     pub const WARNING: Color = Color::Rgb(241, 196, 15); // Yellow
     pub const ERROR: Color = Color::Rgb(231, 76, 60); // Red
     pub const INFO: Color = Color::Rgb(52, 152, 219); // Blue
-    
+
     /// Provider status colors
     pub const CONFIGURED: Color = Color::Rgb(46, 204, 113); // Green
     pub const UNCONFIGURED: Color = Color::Rgb(241, 196, 15); // Yellow/amber
@@ -85,27 +85,27 @@ pub fn pulse_value(elapsed_secs: f64, speed: f64) -> f64 {
 /// Get the active border color with pulse effect
 pub fn active_border_color(elapsed_secs: f64) -> Color {
     let pulse = pulse_value(elapsed_secs, 0.5); // Slow pulse
-    
+
     // Interpolate between primary and glow colors
     let r1 = 147u8;
     let g1 = 112u8;
     let b1 = 219u8;
-    
+
     let r2 = 218u8;
     let g2 = 112u8;
     let b2 = 214u8;
-    
+
     let r = (r1 as f64 + (r2 as f64 - r1 as f64) * pulse) as u8;
     let g = (g1 as f64 + (g2 as f64 - g1 as f64) * pulse) as u8;
     let b = (b1 as f64 + (b2 as f64 - b1 as f64) * pulse) as u8;
-    
+
     Color::Rgb(r, g, b)
 }
 
 /// Get style for active pane border
 pub fn active_border_style(elapsed_secs: f64) -> ratatui::style::Style {
     use ratatui::style::{Modifier, Style};
-    
+
     Style::default()
         .fg(active_border_color(elapsed_secs))
         .add_modifier(Modifier::BOLD)
@@ -114,9 +114,8 @@ pub fn active_border_style(elapsed_secs: f64) -> ratatui::style::Style {
 /// Get style for inactive pane border
 pub fn inactive_border_style() -> ratatui::style::Style {
     use ratatui::style::Style;
-    
-    Style::default()
-        .fg(palette::INACTIVE_BORDER)
+
+    Style::default().fg(palette::INACTIVE_BORDER)
 }
 
 /// Tab indicator styling

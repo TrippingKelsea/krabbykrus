@@ -12,7 +12,7 @@ use rockbot_core::session::SessionManager;
 use rockbot_core::Agent;
 use rockbot_llm::LlmProviderRegistry;
 use rockbot_memory::MemoryManager;
-use rockbot_security::{SecurityConfig, SecurityManager, SandboxConfig, CapabilityConfig};
+use rockbot_security::{CapabilityConfig, SandboxConfig, SecurityConfig, SecurityManager};
 use rockbot_tools::{ToolConfig, ToolRegistry};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -121,10 +121,13 @@ async fn main() -> Result<()> {
     println!("  ✓ Agent created\n");
 
     // Create a test message
-    let user_message = Message::text("Hello! What's 2 + 2? Please answer briefly.")
-        .with_role(MessageRole::User);
+    let user_message =
+        Message::text("Hello! What's 2 + 2? Please answer briefly.").with_role(MessageRole::User);
 
-    println!("💬 Sending message: \"{}\"", user_message.extract_text().unwrap_or_default());
+    println!(
+        "💬 Sending message: \"{}\"",
+        user_message.extract_text().unwrap_or_default()
+    );
     println!("   (This may take a moment...)\n");
 
     // Process the message
@@ -132,8 +135,12 @@ async fn main() -> Result<()> {
     match agent.process_message(session_id, user_message, None).await {
         Ok(response) => {
             println!("✅ Response received!");
-            println!("   Message: {}", response.message.extract_text().unwrap_or_default());
-            println!("   Tokens used: {} (prompt: {}, completion: {})",
+            println!(
+                "   Message: {}",
+                response.message.extract_text().unwrap_or_default()
+            );
+            println!(
+                "   Tokens used: {} (prompt: {}, completion: {})",
                 response.tokens_used.total_tokens,
                 response.tokens_used.prompt_tokens,
                 response.tokens_used.completion_tokens

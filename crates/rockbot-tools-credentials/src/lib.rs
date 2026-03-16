@@ -5,7 +5,7 @@
 
 use rockbot_credentials_schema::CredentialSchema;
 use rockbot_security::Capabilities;
-use rockbot_tools::{Tool, ToolError, message::ToolResult, ToolExecutionContext};
+use rockbot_tools::{message::ToolResult, Tool, ToolError, ToolExecutionContext};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -56,11 +56,11 @@ impl Tool for CredentialVaultTool {
         context: ToolExecutionContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + '_>> {
         Box::pin(async move {
-            let path = params.get("path")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| ToolError::InvalidParameters {
+            let path = params.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+                ToolError::InvalidParameters {
                     message: "Missing 'path' parameter".to_string(),
-                })?;
+                }
+            })?;
 
             if let Some(accessor) = &context.credential_accessor {
                 match accessor.get_credential(path, &context.agent_id).await {

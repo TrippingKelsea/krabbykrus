@@ -33,9 +33,9 @@ pub use rockbot_credentials_schema::CredentialSchema;
 use rockbot_security::{Capabilities, SecurityContext};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::future::Future;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -50,16 +50,16 @@ pub type Result<T> = std::result::Result<T, ToolError>;
 pub enum ToolError {
     #[error("Tool '{name}' not found")]
     NotFound { name: String },
-    
+
     #[error("Invalid parameters: {message}")]
     InvalidParameters { message: String },
-    
+
     #[error("Execution failed: {message}")]
     ExecutionFailed { message: String },
-    
+
     #[error("Security error: {message}")]
     SecurityError { message: String },
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -91,7 +91,11 @@ pub enum ApprovalResult {
 
 /// Callback for requesting human approval before tool execution
 pub type ApprovalCallback = Arc<
-    dyn Fn(String, String, serde_json::Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalResult> + Send>>
+    dyn Fn(
+            String,
+            String,
+            serde_json::Value,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalResult> + Send>>
         + Send
         + Sync,
 >;
@@ -126,7 +130,10 @@ impl std::fmt::Debug for ToolExecutionContext {
             .field("agent_id", &self.agent_id)
             .field("workspace_path", &self.workspace_path)
             .field("security_context", &self.security_context)
-            .field("has_credential_accessor", &self.credential_accessor.is_some())
+            .field(
+                "has_credential_accessor",
+                &self.credential_accessor.is_some(),
+            )
             .field("command_allowlist", &self.command_allowlist)
             .field("has_approval_callback", &self.approval_callback.is_some())
             .field("has_agent_invoker", &self.agent_invoker.is_some())
@@ -174,7 +181,7 @@ pub trait CredentialAccessor: Send + Sync {
     /// Get a credential for the given path (e.g., "saggyclaw://homeassistant/api")
     /// Returns the decrypted secret bytes if access is allowed
     async fn get_credential(&self, path: &str, agent_id: &str) -> Result<CredentialResult>;
-    
+
     /// Check if a credential exists without retrieving it
     async fn has_credential(&self, path: &str) -> Result<bool>;
 }
@@ -190,18 +197,11 @@ pub enum CredentialResult {
         credential_type: CredentialApplicationType,
     },
     /// Access denied
-    Denied {
-        reason: String,
-    },
+    Denied { reason: String },
     /// Requires human approval (HIL)
-    PendingApproval {
-        request_id: String,
-        message: String,
-    },
+    PendingApproval { request_id: String, message: String },
     /// Credential not found
-    NotFound {
-        path: String,
-    },
+    NotFound { path: String },
 }
 
 /// How to apply a credential to a request
@@ -242,16 +242,16 @@ pub struct ToolDefinition {
 pub trait Tool: Send + Sync {
     /// Tool name
     fn name(&self) -> &str;
-    
+
     /// Tool description
     fn description(&self) -> &str;
-    
+
     /// Tool parameters schema (JSON Schema)
     fn parameters(&self) -> serde_json::Value;
-    
+
     /// Required capabilities
     fn required_capabilities(&self) -> Capabilities;
-    
+
     /// Execute the tool
     fn execute(
         &self,
@@ -332,7 +332,11 @@ pub struct AgentTool {
 
 impl AgentTool {
     pub fn new(agent_id: String, tool_name: String, tool_description: String) -> Self {
-        Self { agent_id, tool_name, tool_description }
+        Self {
+            agent_id,
+            tool_name,
+            tool_description,
+        }
     }
 }
 
@@ -368,23 +372,26 @@ impl Tool for AgentTool {
         context: ToolExecutionContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let message = params.get("message")
+            let message = params
+                .get("message")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| ToolError::InvalidParameters {
                     message: "Missing required 'message' parameter".to_string(),
                 })?;
 
-            let invoker = context.agent_invoker.as_ref()
-                .ok_or_else(|| ToolError::ExecutionFailed {
-                    message: "No agent invoker available for agent-as-tool delegation".to_string(),
-                })?;
+            let invoker =
+                context
+                    .agent_invoker
+                    .as_ref()
+                    .ok_or_else(|| ToolError::ExecutionFailed {
+                        message: "No agent invoker available for agent-as-tool delegation"
+                            .to_string(),
+                    })?;
 
             let max_depth = 3u32;
             if context.delegation_depth >= max_depth {
                 return Err(ToolError::ExecutionFailed {
-                    message: format!(
-                        "Agent delegation depth limit ({max_depth}) exceeded"
-                    ),
+                    message: format!("Agent delegation depth limit ({max_depth}) exceeded"),
                 });
             }
 
@@ -395,12 +402,15 @@ impl Tool for AgentTool {
                 });
             }
 
-            match invoker.invoke_agent(
-                &self.agent_id,
-                message,
-                &context.session_id,
-                context.delegation_depth + 1,
-            ).await {
+            match invoker
+                .invoke_agent(
+                    &self.agent_id,
+                    message,
+                    &context.session_id,
+                    context.delegation_depth + 1,
+                )
+                .await
+            {
                 Ok(response) => Ok(ToolResult::Text { content: response }),
                 Err(e) => Err(ToolError::ExecutionFailed {
                     message: format!("Agent '{}' invocation failed: {e}", self.agent_id),
@@ -417,35 +427,70 @@ impl ToolRegistry {
             tools: Arc::new(RwLock::new(HashMap::new())),
             config,
         };
-        
+
         // Register built-in tools based on profile
         registry.register_builtin_tools().await?;
-        
+
         Ok(registry)
     }
-    
+
     /// Register built-in tools based on configuration
     async fn register_builtin_tools(&self) -> Result<()> {
         let tools_to_register = match self.config.profile.as_str() {
             "minimal" => vec!["read", "write"],
-            "standard" => vec!["read", "write", "edit", "exec", "glob", "grep", "patch", "invoke_agent", "handoff", "web_fetch", "web_search", "test", "lint", "clarify"],
-            "full" => vec!["read", "write", "edit", "exec", "glob", "grep", "patch", "memory_get", "memory_search", "invoke_agent", "handoff", "web_fetch", "web_search", "browser", "test", "lint", "clarify", "blackboard_read", "blackboard_write"],
+            "standard" => vec![
+                "read",
+                "write",
+                "edit",
+                "exec",
+                "glob",
+                "grep",
+                "patch",
+                "invoke_agent",
+                "handoff",
+                "web_fetch",
+                "web_search",
+                "test",
+                "lint",
+                "clarify",
+            ],
+            "full" => vec![
+                "read",
+                "write",
+                "edit",
+                "exec",
+                "glob",
+                "grep",
+                "patch",
+                "memory_get",
+                "memory_search",
+                "invoke_agent",
+                "handoff",
+                "web_fetch",
+                "web_search",
+                "browser",
+                "test",
+                "lint",
+                "clarify",
+                "blackboard_read",
+                "blackboard_write",
+            ],
             _ => vec!["read", "write", "edit", "exec", "glob", "grep", "patch"],
         };
-        
+
         for tool_name in tools_to_register {
             if self.config.deny.contains(&tool_name.to_string()) {
                 continue;
             }
-            
+
             if let Some(tool) = self.create_builtin_tool(tool_name).await? {
                 self.register_tool(tool).await;
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Create a built-in tool by name
     async fn create_builtin_tool(&self, name: &str) -> Result<Option<Arc<dyn Tool>>> {
         match name {
@@ -471,32 +516,35 @@ impl ToolRegistry {
             _ => Ok(None),
         }
     }
-    
+
     /// Register a tool
     pub async fn register_tool(&self, tool: Arc<dyn Tool>) {
         let mut tools = self.tools.write().await;
         tools.insert(tool.name().to_string(), tool);
     }
-    
+
     /// Get available tools for given capabilities
-    pub async fn get_available_tools(&self, capabilities: &Capabilities) -> Result<Vec<Arc<dyn Tool>>> {
+    pub async fn get_available_tools(
+        &self,
+        capabilities: &Capabilities,
+    ) -> Result<Vec<Arc<dyn Tool>>> {
         let tools = self.tools.read().await;
         let mut available = Vec::new();
-        
+
         for tool in tools.values() {
             if capabilities.allows(&tool.required_capabilities()) {
                 available.push(tool.clone());
             }
         }
-        
+
         Ok(available)
     }
-    
+
     /// Get tool definitions for LLM integration
     pub async fn get_tool_definitions(&self, tool_names: &[String]) -> Result<Vec<ToolDefinition>> {
         let tools = self.tools.read().await;
         let mut definitions = Vec::new();
-        
+
         for tool_name in tool_names {
             if let Some(tool) = tools.get(tool_name) {
                 definitions.push(ToolDefinition {
@@ -507,10 +555,10 @@ impl ToolRegistry {
                 });
             }
         }
-        
+
         Ok(definitions)
     }
-    
+
     /// Execute a tool by name
     pub async fn execute_tool(
         &self,
@@ -519,17 +567,24 @@ impl ToolRegistry {
         context: ToolExecutionContext,
     ) -> Result<ToolExecutionResult> {
         let start_time = std::time::Instant::now();
-        
+
         let tools = self.tools.read().await;
-        let tool = tools.get(tool_name)
-            .ok_or_else(|| ToolError::NotFound { name: tool_name.to_string() })?;
-        
+        let tool = tools.get(tool_name).ok_or_else(|| ToolError::NotFound {
+            name: tool_name.to_string(),
+        })?;
+
         // Parse parameters
-        let params: serde_json::Value = serde_json::from_str(params)
-            .map_err(|e| ToolError::InvalidParameters { message: e.to_string() })?;
-        
+        let params: serde_json::Value =
+            serde_json::from_str(params).map_err(|e| ToolError::InvalidParameters {
+                message: e.to_string(),
+            })?;
+
         // Check capabilities
-        if !context.security_context.capabilities.allows(&tool.required_capabilities()) {
+        if !context
+            .security_context
+            .capabilities
+            .allows(&tool.required_capabilities())
+        {
             return Err(ToolError::SecurityError {
                 message: "Insufficient capabilities for tool execution".to_string(),
             });
@@ -538,7 +593,8 @@ impl ToolRegistry {
         // Check if tool requires human approval
         if tool.requires_approval() {
             // Check command allowlist for exec-like tools
-            let is_allowlisted = params.get("command")
+            let is_allowlisted = params
+                .get("command")
                 .and_then(|v| v.as_str())
                 .and_then(|cmd| cmd.split_whitespace().next())
                 .is_some_and(|exe| context.command_allowlist.iter().any(|a| a == exe));
@@ -549,13 +605,16 @@ impl ToolRegistry {
                         tool_name.to_string(),
                         context.agent_id.clone(),
                         params.clone(),
-                    ).await;
+                    )
+                    .await;
                     match result {
                         ApprovalResult::Approved => { /* proceed */ }
                         ApprovalResult::Denied { reason } => {
                             return Ok(ToolExecutionResult {
                                 tool_name: tool_name.to_string(),
-                                result: ToolResult::error(format!("Tool execution denied: {reason}")),
+                                result: ToolResult::error(format!(
+                                    "Tool execution denied: {reason}"
+                                )),
                                 execution_time_ms: start_time.elapsed().as_millis() as u64,
                                 success: false,
                             });
@@ -563,7 +622,9 @@ impl ToolRegistry {
                         ApprovalResult::Pending { request_id } => {
                             return Ok(ToolExecutionResult {
                                 tool_name: tool_name.to_string(),
-                                result: ToolResult::error(format!("Approval pending: {request_id}")),
+                                result: ToolResult::error(format!(
+                                    "Approval pending: {request_id}"
+                                )),
                                 execution_time_ms: start_time.elapsed().as_millis() as u64,
                                 success: false,
                             });
@@ -601,12 +662,12 @@ impl ToolRegistry {
         // Execute tool
         let result = tool.execute(params, context).await;
         let execution_time_ms = start_time.elapsed().as_millis() as u64;
-        
+
         let (tool_result, success) = match result {
             Ok(result) => (result, true),
             Err(e) => (ToolResult::error(e.to_string()), false),
         };
-        
+
         Ok(ToolExecutionResult {
             tool_name: tool_name.to_string(),
             result: tool_result,
@@ -619,14 +680,26 @@ impl ToolRegistry {
 // Message types for compatibility
 pub mod message {
     use serde::{Deserialize, Serialize};
-    
+
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(tag = "type")]
     pub enum ToolResult {
-        Text { content: String },
-        Json { data: serde_json::Value },
-        File { path: String, content: Option<Vec<u8>>, mime_type: Option<String> },
-        Error { message: String, code: Option<String>, details: Option<serde_json::Value> },
+        Text {
+            content: String,
+        },
+        Json {
+            data: serde_json::Value,
+        },
+        File {
+            path: String,
+            content: Option<Vec<u8>>,
+            mime_type: Option<String>,
+        },
+        Error {
+            message: String,
+            code: Option<String>,
+            details: Option<serde_json::Value>,
+        },
         Handoff {
             target_agent_id: String,
             context: String,
@@ -636,7 +709,9 @@ pub mod message {
 
     impl ToolResult {
         pub fn text<S: Into<String>>(content: S) -> Self {
-            Self::Text { content: content.into() }
+            Self::Text {
+                content: content.into(),
+            }
         }
 
         pub fn json(data: serde_json::Value) -> Self {
@@ -674,12 +749,18 @@ impl MockToolRegistry {
     pub fn new() -> Self {
         Self
     }
-    
-    pub async fn get_available_tools(&self, _capabilities: &rockbot_security::Capabilities) -> Result<Vec<Arc<dyn Tool>>> {
+
+    pub async fn get_available_tools(
+        &self,
+        _capabilities: &rockbot_security::Capabilities,
+    ) -> Result<Vec<Arc<dyn Tool>>> {
         Ok(Vec::new())
     }
-    
-    pub async fn get_tool_definitions(&self, _tool_names: &[String]) -> Result<Vec<ToolDefinition>> {
+
+    pub async fn get_tool_definitions(
+        &self,
+        _tool_names: &[String],
+    ) -> Result<Vec<ToolDefinition>> {
         Ok(Vec::new())
     }
 }
@@ -688,7 +769,7 @@ impl MockToolRegistry {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
-    
+
     #[tokio::test]
     async fn test_tool_registry_creation() {
         let config = ToolConfig {
@@ -732,7 +813,11 @@ mod tests {
             credential_accessor: None,
             command_allowlist: vec![],
             approval_callback: Some(Arc::new(|_tool, _agent, _params| {
-                Box::pin(async { ApprovalResult::Denied { reason: "not allowed".to_string() } })
+                Box::pin(async {
+                    ApprovalResult::Denied {
+                        reason: "not allowed".to_string(),
+                    }
+                })
             })),
             agent_invoker: None,
             delegation_depth: 0,
@@ -740,11 +825,10 @@ mod tests {
             swarm_id: None,
         };
 
-        let result = registry.execute_tool(
-            "exec",
-            r#"{"command": "echo hello"}"#,
-            context,
-        ).await.unwrap();
+        let result = registry
+            .execute_tool("exec", r#"{"command": "echo hello"}"#, context)
+            .await
+            .unwrap();
 
         assert!(!result.success);
         match &result.result {
@@ -782,7 +866,11 @@ mod tests {
             command_allowlist: vec!["echo".to_string()],
             approval_callback: Some(Arc::new(|_tool, _agent, _params| {
                 // Should never be called for allowlisted commands
-                Box::pin(async { ApprovalResult::Denied { reason: "should not reach".to_string() } })
+                Box::pin(async {
+                    ApprovalResult::Denied {
+                        reason: "should not reach".to_string(),
+                    }
+                })
             })),
             agent_invoker: None,
             delegation_depth: 0,
@@ -790,11 +878,10 @@ mod tests {
             swarm_id: None,
         };
 
-        let result = registry.execute_tool(
-            "exec",
-            r#"{"command": "echo hello"}"#,
-            context,
-        ).await.unwrap();
+        let result = registry
+            .execute_tool("exec", r#"{"command": "echo hello"}"#, context)
+            .await
+            .unwrap();
 
         // echo should succeed since it's allowlisted, skipping the deny callback
         assert!(result.success);
@@ -870,11 +957,14 @@ mod tests {
             swarm_id: None,
         };
 
-        let result = registry.execute_tool(
-            "invoke_agent",
-            r#"{"agent_id": "agent2", "message": "do something"}"#,
-            context,
-        ).await.unwrap();
+        let result = registry
+            .execute_tool(
+                "invoke_agent",
+                r#"{"agent_id": "agent2", "message": "do something"}"#,
+                context,
+            )
+            .await
+            .unwrap();
 
         assert!(result.success);
         match &result.result {
@@ -914,11 +1004,14 @@ mod tests {
             swarm_id: None,
         };
 
-        let result = registry.execute_tool(
-            "invoke_agent",
-            r#"{"agent_id": "agent2", "message": "do something"}"#,
-            context,
-        ).await.unwrap();
+        let result = registry
+            .execute_tool(
+                "invoke_agent",
+                r#"{"agent_id": "agent2", "message": "do something"}"#,
+                context,
+            )
+            .await
+            .unwrap();
 
         // Tool returns an error message via ToolResult::Error (not Err)
         match &result.result {
@@ -957,11 +1050,14 @@ mod tests {
             swarm_id: None,
         };
 
-        let result = registry.execute_tool(
-            "invoke_agent",
-            r#"{"agent_id": "agent1", "message": "do something"}"#,
-            context,
-        ).await.unwrap();
+        let result = registry
+            .execute_tool(
+                "invoke_agent",
+                r#"{"agent_id": "agent1", "message": "do something"}"#,
+                context,
+            )
+            .await
+            .unwrap();
 
         // Tool returns an error message via ToolResult::Error (not Err)
         match &result.result {

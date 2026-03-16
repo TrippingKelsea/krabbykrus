@@ -10,13 +10,13 @@ use thiserror::Error;
 pub enum SecurityError {
     #[error("Access denied to resource: {resource}")]
     AccessDenied { resource: String },
-    
+
     #[error("Capability '{capability}' not granted")]
     CapabilityDenied { capability: String },
-    
+
     #[error("Sandbox creation failed: {message}")]
     SandboxCreationFailed { message: String },
-    
+
     #[error("Authentication failed")]
     AuthenticationFailed,
 }
@@ -125,38 +125,38 @@ impl Capabilities {
             capabilities: HashSet::new(),
         }
     }
-    
+
     /// Create filesystem read capabilities
     pub fn filesystem_read() -> Self {
         let mut caps = Self::new();
         caps.add(Capability::FilesystemRead(PathBuf::from(".")));
         caps
     }
-    
+
     /// Create filesystem write capabilities
     pub fn filesystem_write() -> Self {
         let mut caps = Self::new();
         caps.add(Capability::FilesystemWrite(PathBuf::from(".")));
         caps
     }
-    
+
     /// Create process execution capabilities
     pub fn process_execute() -> Self {
         let mut caps = Self::new();
         caps.add(Capability::ProcessExecute);
         caps
     }
-    
+
     /// Add a capability
     pub fn add(&mut self, capability: Capability) {
         self.capabilities.insert(capability);
     }
-    
+
     /// Remove a capability
     pub fn remove(&mut self, capability: &Capability) {
         self.capabilities.remove(capability);
     }
-    
+
     /// Check if this capability set allows the required capabilities
     pub fn allows(&self, required: &Capabilities) -> bool {
         for required_cap in &required.capabilities {
@@ -166,7 +166,7 @@ impl Capabilities {
         }
         true
     }
-    
+
     /// Check if a specific capability is granted
     pub fn has_capability(&self, capability: &Capability) -> bool {
         match capability {
@@ -191,7 +191,7 @@ impl Capabilities {
             _ => self.capabilities.contains(capability),
         }
     }
-    
+
     /// Extend capabilities with another set
     pub fn extend(&mut self, other: Capabilities) {
         self.capabilities.extend(other.capabilities);
@@ -206,7 +206,7 @@ impl SecurityManager {
             session_contexts: tokio::sync::RwLock::new(std::collections::HashMap::new()),
         })
     }
-    
+
     /// Get security context for a session
     pub async fn get_session_context(&self, session_id: &str) -> Result<SecurityContext> {
         let contexts = self.session_contexts.read().await;
@@ -218,7 +218,7 @@ impl SecurityManager {
             self.create_session_context(session_id).await
         }
     }
-    
+
     /// Create security context for a new session
     pub async fn create_session_context(&self, session_id: &str) -> Result<SecurityContext> {
         let mut capabilities = Capabilities::new();
@@ -251,31 +251,36 @@ impl SecurityManager {
             // Default: allow process execution for exec tool
             capabilities.add(Capability::ProcessExecute);
         }
-        
+
         let context = SecurityContext {
             session_id: session_id.to_string(),
             capabilities,
             sandbox_enabled: self.config.sandbox.mode != "disabled",
             restrictions: SecurityRestrictions::default(),
         };
-        
+
         // Store context
         let mut contexts = self.session_contexts.write().await;
         contexts.insert(session_id.to_string(), context.clone());
-        
+
         Ok(context)
     }
-    
+
     /// Check if access to a resource is allowed
-    pub async fn check_access(&self, session_id: &str, resource: &str, capability: &Capability) -> Result<()> {
+    pub async fn check_access(
+        &self,
+        session_id: &str,
+        resource: &str,
+        capability: &Capability,
+    ) -> Result<()> {
         let context = self.get_session_context(session_id).await?;
-        
+
         if !context.capabilities.has_capability(capability) {
             return Err(SecurityError::AccessDenied {
                 resource: resource.to_string(),
             });
         }
-        
+
         Ok(())
     }
 }
@@ -296,11 +301,17 @@ pub enum EnforcementResult {
 /// - Executable allowlist: rejected if `allowed_executables` is non-empty and the
 ///   command is not in the list
 /// - Returns the configured `max_execution_time` for use by execution tools
-pub fn enforce_path(path: &std::path::Path, restrictions: &SecurityRestrictions) -> EnforcementResult {
+pub fn enforce_path(
+    path: &std::path::Path,
+    restrictions: &SecurityRestrictions,
+) -> EnforcementResult {
     for forbidden in &restrictions.forbidden_paths {
         if path.starts_with(forbidden) || path == forbidden {
             return EnforcementResult::Denied {
-                reason: format!("Path '{}' is forbidden by security restrictions", path.display()),
+                reason: format!(
+                    "Path '{}' is forbidden by security restrictions",
+                    path.display()
+                ),
             };
         }
     }
@@ -328,7 +339,10 @@ pub fn enforce_timeout(restrictions: &SecurityRestrictions) -> Option<std::time:
 }
 
 /// Enforce all applicable restrictions for a file operation.
-pub fn enforce_file_access(path: &std::path::Path, restrictions: &SecurityRestrictions) -> EnforcementResult {
+pub fn enforce_file_access(
+    path: &std::path::Path,
+    restrictions: &SecurityRestrictions,
+) -> EnforcementResult {
     // Check forbidden paths
     if let result @ EnforcementResult::Denied { .. } = enforce_path(path, restrictions) {
         return result;
@@ -354,7 +368,7 @@ impl MockSecurityManager {
         capabilities.add(Capability::FilesystemRead(std::path::PathBuf::from(".")));
         capabilities.add(Capability::FilesystemWrite(std::path::PathBuf::from(".")));
         capabilities.add(Capability::ProcessExecute);
-        
+
         Self {
             default_context: SecurityContext {
                 session_id: "mock-session".to_string(),
@@ -364,7 +378,7 @@ impl MockSecurityManager {
             },
         }
     }
-    
+
     pub async fn get_session_context(&self, _session_id: &str) -> Result<SecurityContext> {
         Ok(self.default_context.clone())
     }
@@ -374,16 +388,16 @@ impl MockSecurityManager {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
-    
+
     #[test]
     fn test_capabilities() {
         let mut caps = Capabilities::new();
         caps.add(Capability::FilesystemRead(PathBuf::from("/tmp")));
-        
+
         assert!(caps.has_capability(&Capability::FilesystemRead(PathBuf::from("/tmp/test.txt"))));
         assert!(!caps.has_capability(&Capability::FilesystemWrite(PathBuf::from("/tmp/test.txt"))));
     }
-    
+
     #[tokio::test]
     async fn test_security_manager() {
         let config = SecurityConfig {
@@ -394,10 +408,13 @@ mod tests {
             },
             capabilities: CapabilityConfig::default(),
         };
-        
+
         let manager = SecurityManager::new(config).await.unwrap();
-        let context = manager.create_session_context("test-session").await.unwrap();
-        
+        let context = manager
+            .create_session_context("test-session")
+            .await
+            .unwrap();
+
         assert_eq!(context.session_id, "test-session");
         assert!(context.sandbox_enabled);
     }
@@ -414,7 +431,9 @@ mod tests {
     #[test]
     fn test_enforce_path_forbidden() {
         let mut restrictions = SecurityRestrictions::default();
-        restrictions.forbidden_paths.insert(PathBuf::from("/etc/secrets"));
+        restrictions
+            .forbidden_paths
+            .insert(PathBuf::from("/etc/secrets"));
         assert!(matches!(
             enforce_path(std::path::Path::new("/etc/secrets/key.pem"), &restrictions),
             EnforcementResult::Denied { .. }
@@ -439,8 +458,14 @@ mod tests {
             allowed_executables: Some(allowed),
             ..Default::default()
         };
-        assert!(matches!(enforce_executable("ls", &restrictions), EnforcementResult::Allowed));
-        assert!(matches!(enforce_executable("rm", &restrictions), EnforcementResult::Denied { .. }));
+        assert!(matches!(
+            enforce_executable("ls", &restrictions),
+            EnforcementResult::Allowed
+        ));
+        assert!(matches!(
+            enforce_executable("rm", &restrictions),
+            EnforcementResult::Denied { .. }
+        ));
     }
 
     #[test]
@@ -449,6 +474,9 @@ mod tests {
             max_execution_time: Some(std::time::Duration::from_secs(30)),
             ..Default::default()
         };
-        assert_eq!(enforce_timeout(&restrictions), Some(std::time::Duration::from_secs(30)));
+        assert_eq!(
+            enforce_timeout(&restrictions),
+            Some(std::time::Duration::from_secs(30))
+        );
     }
 }

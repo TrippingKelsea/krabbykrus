@@ -133,7 +133,10 @@ mod tests {
         let loaded = backend.load(&key_path).unwrap();
         let pubkey_loaded = loaded.key_pair().unwrap().public_key_der();
 
-        assert_eq!(pubkey_original, pubkey_loaded, "Loaded key should match generated key");
+        assert_eq!(
+            pubkey_original, pubkey_loaded,
+            "Loaded key should match generated key"
+        );
     }
 
     #[test]

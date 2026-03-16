@@ -8,8 +8,13 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::state::{AddCredentialState, AgentInfo, CredentialSchemaInfo, CreateSessionState, EditAgentState, EditContextFileState, EditCredentialState, EditPermissionState, EditProviderState, EndpointInfo, ModelProvider, PermissionRule, SessionInfo, SessionMode, ViewContextFilesState, get_fields_for_endpoint_type};
 use super::centered_rect;
+use crate::tui::state::{
+    get_fields_for_endpoint_type, AddCredentialState, AgentInfo, CreateSessionState,
+    CredentialSchemaInfo, EditAgentState, EditContextFileState, EditCredentialState,
+    EditPermissionState, EditProviderState, EndpointInfo, ModelProvider, PermissionRule,
+    SessionInfo, SessionMode, ViewContextFilesState,
+};
 
 /// Endpoint types for the add credential modal
 pub const ENDPOINT_TYPES: &[(&str, &str)] = &[
@@ -44,15 +49,15 @@ pub fn render_password_modal(
 ) {
     let modal_area = centered_rect(50, 20, area);
     frame.render_widget(Clear, modal_area);
-    
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
         .title("Vault");
-    
+
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
-    
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -63,21 +68,20 @@ pub fn render_password_modal(
         ])
         .split(inner);
 
-    let prompt_para = Paragraph::new(prompt)
-        .style(Style::default().fg(Color::White));
+    let prompt_para = Paragraph::new(prompt).style(Style::default().fg(Color::White));
     frame.render_widget(prompt_para, chunks[0]);
-    
+
     let display_value = if masked {
         "*".repeat(input.len())
     } else {
         input.to_string()
     };
-    
+
     let input_para = Paragraph::new(format!("{display_value}█"))
         .style(Style::default().fg(Color::Yellow))
         .block(Block::default().borders(Borders::ALL));
     frame.render_widget(input_para, chunks[1]);
-    
+
     let help = Paragraph::new("Enter to submit, Esc to cancel")
         .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(help, chunks[2]);
@@ -87,50 +91,54 @@ pub fn render_password_modal(
 pub fn render_confirm_modal(frame: &mut Frame, area: Rect, message: &str) {
     let modal_area = centered_rect(40, 15, area);
     frame.render_widget(Clear, modal_area);
-    
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow))
         .title("Confirm");
-    
+
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
-    
+
     let text = vec![
         Line::from(""),
         Line::from(message.to_string()),
         Line::from(""),
-        Line::from(Span::styled("[y]es  [n]o", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            "[y]es  [n]o",
+            Style::default().fg(Color::DarkGray),
+        )),
     ];
-    
-    let para = Paragraph::new(text)
-        .alignment(Alignment::Center);
+
+    let para = Paragraph::new(text).alignment(Alignment::Center);
     frame.render_widget(para, inner);
 }
 
 /// Render the add credential modal with dynamic fields
 pub fn render_add_credential_modal(frame: &mut Frame, area: Rect, state: &AddCredentialState) {
     let fields = get_fields_for_endpoint_type(state.endpoint_type);
-    
+
     // Calculate modal height based on number of fields
     // Name (3) + Type (3) + dynamic fields (3 each) + help (2) + layout margins (2) + block borders (2)
     let content_height = 3 + 3 + (fields.len() * 3) + 2 + 4;
-    let modal_height = (content_height as u16).min(area.height.saturating_sub(4)).max(20);
+    let modal_height = (content_height as u16)
+        .min(area.height.saturating_sub(4))
+        .max(20);
     let modal_percent_y = ((modal_height as f32 / area.height as f32) * 100.0) as u16;
-    
+
     let modal_area = centered_rect(65, modal_percent_y.max(50), area);
     frame.render_widget(Clear, modal_area);
-    
+
     let title_type_name = get_endpoint_type_name(state.endpoint_type);
-    
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
         .title(format!("Add {title_type_name} Endpoint"));
-    
+
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
-    
+
     // Build constraints dynamically
     let mut constraints = vec![
         Constraint::Length(3), // Name
@@ -140,8 +148,8 @@ pub fn render_add_credential_modal(frame: &mut Frame, area: Rect, state: &AddCre
         constraints.push(Constraint::Length(3));
     }
     constraints.push(Constraint::Length(2)); // Help
-    constraints.push(Constraint::Min(0));    // Spacer
-    
+    constraints.push(Constraint::Min(0)); // Spacer
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -159,7 +167,7 @@ pub fn render_add_credential_modal(frame: &mut Frame, area: Rect, state: &AddCre
         false,
         true,
     );
-    
+
     // Render Type selector - use render_input_field with arrows in the value
     let selector_type_name = get_endpoint_type_name(state.endpoint_type);
     let type_value = format!("◀ {selector_type_name} ▶");
@@ -173,19 +181,22 @@ pub fn render_add_credential_modal(frame: &mut Frame, area: Rect, state: &AddCre
         false,
         false, // not required (it always has a value)
     );
-    
+
     // Render dynamic fields
     for (i, field) in fields.iter().enumerate() {
-        let value = state.field_values.get(i).map_or("", std::string::String::as_str);
+        let value = state
+            .field_values
+            .get(i)
+            .map_or("", std::string::String::as_str);
         let is_active = state.dynamic_field_index() == Some(i);
-        
+
         // Add required indicator
         let label = if field.required {
             format!("{} *", field.label)
         } else {
             field.label.to_string()
         };
-        
+
         render_input_field(
             frame,
             chunks[2 + i],
@@ -197,7 +208,7 @@ pub fn render_add_credential_modal(frame: &mut Frame, area: Rect, state: &AddCre
             field.required,
         );
     }
-    
+
     // Help text
     let help_idx = 2 + fields.len();
     if help_idx < chunks.len() {
@@ -208,7 +219,7 @@ pub fn render_add_credential_modal(frame: &mut Frame, area: Rect, state: &AddCre
         } else {
             "Tab/↑↓: Navigate | Enter: Next | Esc: Cancel"
         };
-        
+
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
@@ -233,7 +244,7 @@ fn render_input_field(
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    
+
     let label_style = if active {
         Style::default().fg(Color::Yellow)
     } else if required && value.is_empty() {
@@ -241,7 +252,7 @@ fn render_input_field(
     } else {
         Style::default().fg(Color::White)
     };
-    
+
     let display_value = if masked && !value.is_empty() {
         "*".repeat(value.len())
     } else if value.is_empty() && !active {
@@ -249,7 +260,7 @@ fn render_input_field(
     } else {
         value.to_string()
     };
-    
+
     let value_style = if value.is_empty() && !active {
         Style::default().fg(Color::DarkGray) // Placeholder style
     } else if active {
@@ -257,44 +268,49 @@ fn render_input_field(
     } else {
         Style::default().fg(Color::White)
     };
-    
+
     let cursor = if active { "█" } else { "" };
-    
+
     let text = Line::from(vec![
         Span::styled(format!("{label}: "), label_style),
         Span::styled(display_value, value_style),
         Span::styled(cursor, Style::default().fg(Color::Yellow)),
     ]);
-    
-    let paragraph = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).border_style(border_style));
-    
+
+    let paragraph = Paragraph::new(text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style),
+    );
+
     frame.render_widget(paragraph, area);
 }
 
 /// Render the edit credential modal (similar to add but pre-populated)
 pub fn render_edit_credential_modal(frame: &mut Frame, area: Rect, state: &EditCredentialState) {
     let fields = get_fields_for_endpoint_type(state.endpoint_type);
-    
+
     // Calculate modal height based on number of fields
     // Name (3) + dynamic fields (3 each) + help (2) + layout margins (2) + block borders (2)
     let content_height = 3 + (fields.len() * 3) + 2 + 4;
-    let modal_height = (content_height as u16).min(area.height.saturating_sub(4)).max(20);
+    let modal_height = (content_height as u16)
+        .min(area.height.saturating_sub(4))
+        .max(20);
     let modal_percent_y = ((modal_height as f32 / area.height as f32) * 100.0) as u16;
-    
+
     let modal_area = centered_rect(65, modal_percent_y.max(50), area);
     frame.render_widget(Clear, modal_area);
-    
+
     let title_type_name = get_endpoint_type_name(state.endpoint_type);
-    
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Green))
         .title(format!("Edit {title_type_name} Endpoint"));
-    
+
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
-    
+
     // Build constraints dynamically (no type selector in edit mode)
     let mut constraints = vec![
         Constraint::Length(3), // Name
@@ -303,8 +319,8 @@ pub fn render_edit_credential_modal(frame: &mut Frame, area: Rect, state: &EditC
         constraints.push(Constraint::Length(3));
     }
     constraints.push(Constraint::Length(2)); // Help
-    constraints.push(Constraint::Min(0));    // Spacer
-    
+    constraints.push(Constraint::Min(0)); // Spacer
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -322,12 +338,15 @@ pub fn render_edit_credential_modal(frame: &mut Frame, area: Rect, state: &EditC
         false,
         true,
     );
-    
+
     // Render dynamic fields
     for (i, field) in fields.iter().enumerate() {
-        let value = state.field_values.get(i).map_or("", std::string::String::as_str);
+        let value = state
+            .field_values
+            .get(i)
+            .map_or("", std::string::String::as_str);
         let is_active = state.dynamic_field_index() == Some(i);
-        
+
         // Add required indicator and modified indicator for secrets
         let label = if field.masked && state.secret_modified {
             format!("{} * (modified)", field.label)
@@ -336,7 +355,7 @@ pub fn render_edit_credential_modal(frame: &mut Frame, area: Rect, state: &EditC
         } else {
             field.label.to_string()
         };
-        
+
         render_input_field(
             frame,
             chunks[1 + i],
@@ -348,7 +367,7 @@ pub fn render_edit_credential_modal(frame: &mut Frame, area: Rect, state: &EditC
             field.required,
         );
     }
-    
+
     // Help text
     let help_idx = 1 + fields.len();
     if help_idx < chunks.len() {
@@ -357,7 +376,7 @@ pub fn render_edit_credential_modal(frame: &mut Frame, area: Rect, state: &EditC
         } else {
             "Tab/↑↓: Navigate | Enter: Next | Esc: Cancel"
         };
-        
+
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
@@ -367,25 +386,25 @@ pub fn render_edit_credential_modal(frame: &mut Frame, area: Rect, state: &EditC
 
 /// Render the view session modal
 pub fn render_view_session_modal(
-    frame: &mut Frame, 
-    area: Rect, 
+    frame: &mut Frame,
+    area: Rect,
     session_key: &str,
     sessions: &[SessionInfo],
 ) {
     let modal_area = centered_rect(60, 50, area);
     frame.render_widget(Clear, modal_area);
-    
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
         .title(format!("Session: {session_key}"));
-    
+
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
-    
+
     // Find session info
     let session = sessions.iter().find(|s| s.key == session_key);
-    
+
     let content = if let Some(session) = session {
         vec![
             Line::from(""),
@@ -401,27 +420,27 @@ pub fn render_view_session_modal(
                 Span::styled("Channel: ", Style::default().fg(Color::Gray)),
                 Span::styled(
                     session.channel.as_deref().unwrap_or("unknown"),
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(Color::Yellow),
                 ),
             ]),
             Line::from(vec![
                 Span::styled("Started: ", Style::default().fg(Color::Gray)),
                 Span::styled(
                     session.started_at.as_deref().unwrap_or("unknown"),
-                    Style::default().fg(Color::White)
+                    Style::default().fg(Color::White),
                 ),
             ]),
             Line::from(vec![
                 Span::styled("Messages: ", Style::default().fg(Color::Gray)),
                 Span::styled(
                     session.message_count.to_string(),
-                    Style::default().fg(Color::Green)
+                    Style::default().fg(Color::Green),
                 ),
             ]),
             Line::from(""),
             Line::from(Span::styled(
                 "Press Esc or Enter to close",
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(Color::DarkGray),
             )),
         ]
     } else {
@@ -429,26 +448,26 @@ pub fn render_view_session_modal(
             Line::from(""),
             Line::from(Span::styled(
                 "Session not found",
-                Style::default().fg(Color::Red)
+                Style::default().fg(Color::Red),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "Press Esc or Enter to close",
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(Color::DarkGray),
             )),
         ]
     };
-    
+
     let paragraph = Paragraph::new(content)
         .alignment(Alignment::Left)
         .block(Block::default().borders(Borders::NONE));
-    
+
     let inner_margin = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([Constraint::Min(0)])
         .split(inner);
-    
+
     frame.render_widget(paragraph, inner_margin[0]);
 }
 
@@ -456,11 +475,7 @@ pub fn render_view_session_modal(
 ///
 /// This renders the same form whether opened from Credentials→Providers or Models→Edit.
 /// The form fields come entirely from the provider's credential schema.
-pub fn render_edit_provider_modal(
-    frame: &mut Frame,
-    area: Rect,
-    state: &EditProviderState,
-) {
+pub fn render_edit_provider_modal(frame: &mut Frame, area: Rect, state: &EditProviderState) {
     // Calculate modal height based on field count
     let field_count = state.current_auth_method().map_or(0, |m| m.fields.len());
     let modal_percent = (40 + field_count as u16 * 5).min(80);
@@ -478,7 +493,9 @@ pub fn render_edit_provider_modal(
     let mut lines = vec![
         Line::from(Span::styled(
             &state.provider_name,
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
@@ -486,7 +503,8 @@ pub fn render_edit_provider_modal(
     // Auth type selector (field 0) — show label from schema auth method
     let auth_type_focused = state.field_index == 0;
     let auth_method_count = state.schema.as_ref().map_or(1, |s| s.auth_methods.len());
-    let auth_label = state.current_auth_method()
+    let auth_label = state
+        .current_auth_method()
         .map_or_else(|| state.auth_type.label().to_string(), |m| m.label.clone());
     let auth_display = if auth_method_count > 1 {
         format!("◀ {auth_label} ▶")
@@ -497,23 +515,25 @@ pub fn render_edit_provider_modal(
     lines.push(Line::from(vec![
         Span::styled(
             if auth_type_focused { "▶ " } else { "  " },
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(Color::Yellow),
         ),
         Span::styled("Auth Type: ", Style::default().fg(Color::Cyan)),
         Span::styled(
             auth_display,
             if auth_type_focused {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
-            }
+            },
         ),
     ]));
 
     if auth_type_focused && auth_method_count > 1 {
         lines.push(Line::from(Span::styled(
             "    (←/→ to change)",
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(Color::DarkGray),
         )));
     }
     lines.push(Line::from(""));
@@ -525,7 +545,7 @@ pub fn render_edit_provider_modal(
             if let Some(hint) = &method.hint {
                 lines.push(Line::from(Span::styled(
                     format!("  {hint}"),
-                    Style::default().fg(Color::Gray)
+                    Style::default().fg(Color::Gray),
                 )));
                 lines.push(Line::from(""));
             }
@@ -534,14 +554,13 @@ pub fn render_edit_provider_modal(
         // Render each field from the schema
         for (i, field) in method.fields.iter().enumerate() {
             let field_focused = state.field_index == i + 1;
-            let value = state.field_values
-                .get(i)
-                .map_or("", |(_, v)| v.as_str());
+            let value = state.field_values.get(i).map_or("", |(_, v)| v.as_str());
 
             // Show env var detection for fields with env_var set
-            let env_detected = field.env_var.as_ref().and_then(|var| {
-                std::env::var(var).ok().map(|_| var.clone())
-            });
+            let env_detected = field
+                .env_var
+                .as_ref()
+                .and_then(|var| std::env::var(var).ok().map(|_| var.clone()));
 
             // Build label with required indicator
             let label_text = if field.required {
@@ -554,7 +573,9 @@ pub fn render_edit_provider_modal(
             let display_value = if field.secret && !value.is_empty() && !field_focused {
                 "*".repeat(value.len().min(30))
             } else if value.is_empty() && !field_focused {
-                field.default.as_deref()
+                field
+                    .default
+                    .as_deref()
                     .or(field.placeholder.as_deref())
                     .unwrap_or("")
                     .to_string()
@@ -565,7 +586,11 @@ pub fn render_edit_provider_modal(
             let value_style = if field_focused {
                 Style::default().fg(Color::Yellow)
             } else if !value.is_empty() {
-                if field.secret { Style::default().fg(Color::Green) } else { Style::default().fg(Color::White) }
+                if field.secret {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::White)
+                }
             } else if field.default.is_some() {
                 Style::default().fg(Color::White)
             } else {
@@ -575,7 +600,7 @@ pub fn render_edit_provider_modal(
             lines.push(Line::from(vec![
                 Span::styled(
                     if field_focused { "▶ " } else { "  " },
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(Color::Yellow),
                 ),
                 Span::styled(format!("{label_text}: "), Style::default().fg(Color::Cyan)),
                 Span::styled(display_value, value_style),
@@ -590,13 +615,13 @@ pub fn render_edit_provider_modal(
             if let Some(env_var) = &env_detected {
                 lines.push(Line::from(Span::styled(
                     format!("    ✓ Found in ${env_var}"),
-                    Style::default().fg(Color::Green)
+                    Style::default().fg(Color::Green),
                 )));
             } else if let Some(env_var) = &field.env_var {
                 if field_focused {
                     lines.push(Line::from(Span::styled(
                         format!("    env: ${env_var}"),
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(Color::DarkGray),
                     )));
                 }
             }
@@ -608,7 +633,7 @@ pub fn render_edit_provider_modal(
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     format!("  {hint}"),
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(Color::DarkGray),
                 )));
             }
         }
@@ -617,14 +642,14 @@ pub fn render_edit_provider_modal(
         if let Some(url) = &method.docs_url {
             lines.push(Line::from(Span::styled(
                 format!("  Docs: {url}"),
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(Color::DarkGray),
             )));
         }
     } else {
         // No schema — legacy fallback message
         lines.push(Line::from(Span::styled(
             "  No configuration schema available for this provider.",
-            Style::default().fg(Color::Gray)
+            Style::default().fg(Color::Gray),
         )));
     }
 
@@ -632,7 +657,7 @@ pub fn render_edit_provider_modal(
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Tab/↑↓: Navigate │ ←→: Auth Type │ Enter: Save │ Esc: Cancel",
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::DarkGray),
     )));
 
     let paragraph = Paragraph::new(lines)
@@ -660,10 +685,15 @@ pub fn render_edit_agent_modal(
     let modal_inner_width = ((area.width as f32) * 0.65) as usize;
     let field_inner_width = modal_inner_width.saturating_sub(4).max(1); // borders + margin
     let prompt_line_count = {
-        state.system_prompt.split('\n').map(|line| {
-            let char_count = line.len().max(1);
-            (char_count + field_inner_width - 1) / field_inner_width
-        }).sum::<usize>().clamp(1, 10)
+        state
+            .system_prompt
+            .split('\n')
+            .map(|line| {
+                let char_count = line.len().max(1);
+                (char_count + field_inner_width - 1) / field_inner_width
+            })
+            .sum::<usize>()
+            .clamp(1, 10)
     };
     let prompt_height = (prompt_line_count as u16) + 2;
 
@@ -699,7 +729,7 @@ pub fn render_edit_agent_modal(
         Constraint::Length(3),             // Max Tokens
         Constraint::Length(prompt_height), // System Prompt (grows up to 12)
         Constraint::Length(2),             // Help/subagent info
-        Constraint::Min(0),               // Spacer
+        Constraint::Min(0),                // Spacer
     ];
 
     let chunks = Layout::default()
@@ -710,17 +740,33 @@ pub fn render_edit_agent_modal(
 
     // Field 0: Agent ID
     let id_active = state.field_index == 0;
-    let id_label = if state.is_edit { "Agent ID (read-only)" } else { "Agent ID" };
+    let id_label = if state.is_edit {
+        "Agent ID (read-only)"
+    } else {
+        "Agent ID"
+    };
     render_input_field(
-        frame, chunks[0], id_label, &state.id,
-        "e.g., my-agent", id_active, false, true,
+        frame,
+        chunks[0],
+        id_label,
+        &state.id,
+        "e.g., my-agent",
+        id_active,
+        false,
+        true,
     );
 
     // Field 1: Model (picker or text input)
     if state.available_models.is_empty() {
         render_input_field(
-            frame, chunks[1], "Model", &state.model,
-            "e.g., anthropic/claude-sonnet-4-20250514", state.field_index == 1, false, false,
+            frame,
+            chunks[1],
+            "Model",
+            &state.model,
+            "e.g., anthropic/claude-sonnet-4-20250514",
+            state.field_index == 1,
+            false,
+            false,
         );
     } else {
         let is_active = state.field_index == 1;
@@ -732,7 +778,8 @@ pub fn render_edit_agent_modal(
         } else {
             format!("◀ {} (custom) ▶", state.model)
         };
-        let hint = format!("{}/{} models available — ←→ to cycle",
+        let hint = format!(
+            "{}/{} models available — ←→ to cycle",
             state.selected_model_index.map_or(0, |i| i + 1),
             state.available_models.len()
         );
@@ -765,38 +812,72 @@ pub fn render_edit_agent_modal(
     // Field 2: Parent Agent (subagent)
     let parent_hint = if !state.parent_id.is_empty() {
         let parent_exists = agents.iter().any(|a| a.id == state.parent_id);
-        if parent_exists { "(valid parent)" } else { "(parent not found!)" }
+        if parent_exists {
+            "(valid parent)"
+        } else {
+            "(parent not found!)"
+        }
     } else {
         "empty = top-level agent"
     };
     let parent_label = format!("Parent Agent {parent_hint}");
     render_input_field(
-        frame, chunks[2], &parent_label, &state.parent_id,
-        "leave empty for top-level", state.field_index == 2, false, false,
+        frame,
+        chunks[2],
+        &parent_label,
+        &state.parent_id,
+        "leave empty for top-level",
+        state.field_index == 2,
+        false,
+        false,
     );
 
     // Field 3: Workspace
     render_input_field(
-        frame, chunks[3], "Workspace", &state.workspace,
-        "uses default if empty", state.field_index == 3, false, false,
+        frame,
+        chunks[3],
+        "Workspace",
+        &state.workspace,
+        "uses default if empty",
+        state.field_index == 3,
+        false,
+        false,
     );
 
     // Field 4: Max Tool Calls
     render_input_field(
-        frame, chunks[4], "Max Tool Calls", &state.max_tool_calls,
-        "dynamic (32-160)", state.field_index == 4, false, false,
+        frame,
+        chunks[4],
+        "Max Tool Calls",
+        &state.max_tool_calls,
+        "dynamic (32-160)",
+        state.field_index == 4,
+        false,
+        false,
     );
 
     // Field 5: Temperature
     render_input_field(
-        frame, chunks[5], "Temperature", &state.temperature,
-        "0.3", state.field_index == 5, false, false,
+        frame,
+        chunks[5],
+        "Temperature",
+        &state.temperature,
+        "0.3",
+        state.field_index == 5,
+        false,
+        false,
     );
 
     // Field 6: Max Tokens
     render_input_field(
-        frame, chunks[6], "Max Tokens", &state.max_tokens,
-        "16000", state.field_index == 6, false, false,
+        frame,
+        chunks[6],
+        "Max Tokens",
+        &state.max_tokens,
+        "16000",
+        state.field_index == 6,
+        false,
+        false,
     );
 
     // Field 7: System Prompt (multi-line textarea)
@@ -844,28 +925,27 @@ pub fn render_edit_agent_modal(
     }
 
     // Subagent info / help line
-    let subagents: Vec<&str> = agents.iter()
+    let subagents: Vec<&str> = agents
+        .iter()
         .filter(|a| a.parent_id.as_deref() == Some(&state.id))
         .map(|a| a.id.as_str())
         .collect();
 
     let help_text = if !subagents.is_empty() {
-        format!("Subagents: {} | Tab:Nav | Ctrl+S:Save | Esc:Cancel", subagents.join(", "))
+        format!(
+            "Subagents: {} | Tab:Nav | Ctrl+S:Save | Esc:Cancel",
+            subagents.join(", ")
+        )
     } else {
         "Tab/Up/Down:Navigate | Ctrl+S:Save | Esc:Cancel".to_string()
     };
 
-    let help = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray));
+    let help = Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray));
     frame.render_widget(help, chunks[8]);
 }
 
 /// Render the create session modal
-pub fn render_create_session_modal(
-    frame: &mut Frame,
-    area: Rect,
-    state: &CreateSessionState,
-) {
+pub fn render_create_session_modal(frame: &mut Frame, area: Rect, state: &CreateSessionState) {
     let modal_area = centered_rect(55, 40, area);
     frame.render_widget(Clear, modal_area);
 
@@ -884,7 +964,7 @@ pub fn render_create_session_modal(
             Constraint::Length(3), // Mode selector
             Constraint::Length(4), // Model/Agent picker
             Constraint::Length(2), // Help text
-            Constraint::Min(0),   // Spacer
+            Constraint::Min(0),    // Spacer
         ])
         .split(inner);
 
@@ -932,12 +1012,19 @@ pub fn render_create_session_modal(
                 .title("Model");
 
             let (display, hint) = if state.available_models.is_empty() {
-                ("(no models available)".to_string(), "Start gateway and configure providers".to_string())
+                (
+                    "(no models available)".to_string(),
+                    "Start gateway and configure providers".to_string(),
+                )
             } else {
                 let model = &state.available_models[state.selected_model_index];
                 (
                     format!("◀ {} ▶", model.label),
-                    format!("{}/{} — ←→ to cycle", state.selected_model_index + 1, state.available_models.len()),
+                    format!(
+                        "{}/{} — ←→ to cycle",
+                        state.selected_model_index + 1,
+                        state.available_models.len()
+                    ),
                 )
             };
 
@@ -955,12 +1042,19 @@ pub fn render_create_session_modal(
                 .title("Agent");
 
             let (display, hint) = if state.available_agents.is_empty() {
-                ("(no agents available)".to_string(), "Create an agent first".to_string())
+                (
+                    "(no agents available)".to_string(),
+                    "Create an agent first".to_string(),
+                )
             } else {
                 let (_, ref name) = state.available_agents[state.selected_agent_index];
                 (
                     format!("◀ {} ▶", name),
-                    format!("{}/{} — ←→ to cycle", state.selected_agent_index + 1, state.available_agents.len()),
+                    format!(
+                        "{}/{} — ←→ to cycle",
+                        state.selected_agent_index + 1,
+                        state.available_agents.len()
+                    ),
                 )
             };
 
@@ -974,12 +1068,10 @@ pub fn render_create_session_modal(
     }
 
     // Help
-    let help_lines = vec![
-        Line::from(Span::styled(
-            "←→:Cycle │ Tab/↑↓:Navigate │ Enter:Create │ Esc:Cancel",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
+    let help_lines = vec![Line::from(Span::styled(
+        "←→:Cycle │ Tab/↑↓:Navigate │ Enter:Create │ Esc:Cancel",
+        Style::default().fg(Color::DarkGray),
+    ))];
     let help = Paragraph::new(help_lines);
     frame.render_widget(help, chunks[2]);
 }
@@ -1017,7 +1109,12 @@ pub fn render_view_endpoint_modal(
             ]),
             Line::from(vec![
                 Span::styled("Name: ", Style::default().fg(Color::Cyan)),
-                Span::styled(&ep.name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    &ep.name,
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]),
             Line::from(vec![
                 Span::styled("Type: ", Style::default().fg(Color::Cyan)),
@@ -1044,9 +1141,15 @@ pub fn render_view_endpoint_modal(
     } else {
         vec![
             Line::from(""),
-            Line::from(Span::styled("Endpoint not found", Style::default().fg(Color::Red))),
+            Line::from(Span::styled(
+                "Endpoint not found",
+                Style::default().fg(Color::Red),
+            )),
             Line::from(""),
-            Line::from(Span::styled("Esc:Close", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "Esc:Close",
+                Style::default().fg(Color::DarkGray),
+            )),
         ]
     };
 
@@ -1104,7 +1207,9 @@ pub fn render_view_provider_modal(
                 Span::styled("Provider: ", Style::default().fg(Color::Cyan)),
                 Span::styled(
                     &schema.provider_name,
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(vec![
@@ -1133,7 +1238,10 @@ pub fn render_view_provider_modal(
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(&method.label, Style::default().fg(Color::White)),
-                    Span::styled(format!(" ({field_count} fields)"), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!(" ({field_count} fields)"),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ]));
             }
         }
@@ -1148,9 +1256,15 @@ pub fn render_view_provider_modal(
     } else {
         vec![
             Line::from(""),
-            Line::from(Span::styled("Provider not found", Style::default().fg(Color::Red))),
+            Line::from(Span::styled(
+                "Provider not found",
+                Style::default().fg(Color::Red),
+            )),
             Line::from(""),
-            Line::from(Span::styled("Esc:Close", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "Esc:Close",
+                Style::default().fg(Color::DarkGray),
+            )),
         ]
     };
 
@@ -1191,8 +1305,7 @@ pub fn render_view_model_list_modal(
     frame.render_widget(block, modal_area);
 
     let Some(provider) = provider else {
-        let msg = Paragraph::new("Provider not found")
-            .style(Style::default().fg(Color::Red));
+        let msg = Paragraph::new("Provider not found").style(Style::default().fg(Color::Red));
         frame.render_widget(msg, inner);
         return;
     };
@@ -1200,7 +1313,10 @@ pub fn render_view_model_list_modal(
     if provider.models.is_empty() {
         let msg = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled("No models available", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "No models available",
+                Style::default().fg(Color::DarkGray),
+            )),
         ])
         .alignment(Alignment::Center);
         frame.render_widget(msg, inner);
@@ -1213,7 +1329,9 @@ pub fn render_view_model_list_modal(
     // Header
     lines.push(Line::from(Span::styled(
         "  Model ID",
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 
@@ -1227,7 +1345,9 @@ pub fn render_view_model_list_modal(
 
         let prefix = if is_highlighted { "▶ " } else { "  " };
         let name_style = if is_highlighted {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
@@ -1244,7 +1364,10 @@ pub fn render_view_model_list_modal(
         lines.push(Line::from(vec![
             Span::raw("    "),
             Span::styled(&model.id, Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("  ({tokens_info})"), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("  ({tokens_info})"),
+                Style::default().fg(Color::Cyan),
+            ),
         ]));
 
         if !model.description.is_empty() {
@@ -1258,7 +1381,11 @@ pub fn render_view_model_list_modal(
 
     // Footer
     lines.push(Line::from(Span::styled(
-        format!("↑↓:Scroll ({}/{}) │ Esc:Close", scroll + 1, provider.models.len()),
+        format!(
+            "↑↓:Scroll ({}/{}) │ Esc:Close",
+            scroll + 1,
+            provider.models.len()
+        ),
         Style::default().fg(Color::DarkGray),
     )));
 
@@ -1276,8 +1403,7 @@ pub fn render_view_model_list_modal(
         0
     };
 
-    let paragraph = Paragraph::new(lines)
-        .scroll((line_scroll as u16, 0));
+    let paragraph = Paragraph::new(lines).scroll((line_scroll as u16, 0));
 
     let model_list_inner = Layout::default()
         .direction(Direction::Vertical)
@@ -1289,11 +1415,7 @@ pub fn render_view_model_list_modal(
 }
 
 /// Render the permission editor modal
-pub fn render_edit_permission_modal(
-    frame: &mut Frame,
-    area: Rect,
-    state: &EditPermissionState,
-) {
+pub fn render_edit_permission_modal(frame: &mut Frame, area: Rect, state: &EditPermissionState) {
     let modal_area = centered_rect(55, 45, area);
     frame.render_widget(Clear, modal_area);
 
@@ -1319,7 +1441,7 @@ pub fn render_edit_permission_modal(
             Constraint::Length(3), // Source selector
             Constraint::Length(3), // Access level selector
             Constraint::Length(2), // Help
-            Constraint::Min(0),   // Spacer
+            Constraint::Min(0),    // Spacer
         ])
         .split(inner);
 
@@ -1341,7 +1463,11 @@ pub fn render_edit_permission_modal(
     } else {
         Style::default().fg(Color::Gray)
     };
-    let ep_hint = format!("{}/{} — ←→ to cycle", state.selected_endpoint + 1, state.endpoints.len());
+    let ep_hint = format!(
+        "{}/{} — ←→ to cycle",
+        state.selected_endpoint + 1,
+        state.endpoints.len()
+    );
     let ep_content = if ep_active {
         vec![
             Line::from(Span::styled(ep_display, ep_style)),
@@ -1360,8 +1486,10 @@ pub fn render_edit_permission_modal(
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let source_label = state.sources.get(state.selected_source)
-        .map_or_else(|| "(none)".to_string(), crate::tui::state::PermissionSource::label);
+    let source_label = state.sources.get(state.selected_source).map_or_else(
+        || "(none)".to_string(),
+        crate::tui::state::PermissionSource::label,
+    );
     let source_display = format!("◀ {source_label} ▶");
     let source_block = Block::default()
         .borders(Borders::ALL)
@@ -1372,11 +1500,18 @@ pub fn render_edit_permission_modal(
     } else {
         Style::default().fg(Color::Gray)
     };
-    let source_hint = format!("{}/{} — ←→ to cycle", state.selected_source + 1, state.sources.len());
+    let source_hint = format!(
+        "{}/{} — ←→ to cycle",
+        state.selected_source + 1,
+        state.sources.len()
+    );
     let source_content = if source_active {
         vec![
             Line::from(Span::styled(source_display, source_style)),
-            Line::from(Span::styled(source_hint, Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                source_hint,
+                Style::default().fg(Color::DarkGray),
+            )),
         ]
     } else {
         vec![Line::from(Span::styled(source_display, source_style))]
@@ -1398,11 +1533,14 @@ pub fn render_edit_permission_modal(
         .border_style(access_border)
         .title("Access Level");
     let access_style = if access_active {
-        Style::default().fg(access_color).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(access_color)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(access_color)
     };
-    let access_para = Paragraph::new(Span::styled(access_display, access_style)).block(access_block);
+    let access_para =
+        Paragraph::new(Span::styled(access_display, access_style)).block(access_block);
     frame.render_widget(access_para, chunks[2]);
 
     // Help
@@ -1455,7 +1593,12 @@ pub fn render_view_permission_modal(
         ]),
         Line::from(vec![
             Span::styled("  Access:      ", Style::default().fg(Color::Cyan)),
-            Span::styled(rule.access.label(), Style::default().fg(access_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                rule.access.label(),
+                Style::default()
+                    .fg(access_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  Priority:    ", Style::default().fg(Color::Cyan)),
@@ -1522,20 +1665,27 @@ pub fn render_view_context_files_modal(
             Span::styled("○", Style::default().fg(Color::DarkGray))
         };
 
-        let name = Span::styled(
-            format!(" {:<24}", file.name),
-            style,
-        );
+        let name = Span::styled(format!(" {:<24}", file.name), style);
 
         let size = if file.exists {
             Span::styled(
                 format!(" {:>6} bytes", file.size_bytes),
-                if is_selected { style } else { Style::default().fg(Color::DarkGray) },
+                if is_selected {
+                    style
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
             )
         } else {
             Span::styled(
                 " (not created) ",
-                if is_selected { style } else { Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC) },
+                if is_selected {
+                    style
+                } else {
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC)
+                },
             )
         };
 
@@ -1565,16 +1715,15 @@ pub fn render_view_context_files_modal(
 }
 
 /// Render the context file editor modal (near-fullscreen markdown editor)
-pub fn render_edit_context_file_modal(
-    frame: &mut Frame,
-    area: Rect,
-    state: &EditContextFileState,
-) {
+pub fn render_edit_context_file_modal(frame: &mut Frame, area: Rect, state: &EditContextFileState) {
     let modal_area = centered_rect(90, 90, area);
     frame.render_widget(Clear, modal_area);
 
     let dirty_indicator = if state.is_dirty { " *" } else { "" };
-    let title = format!(" {} / {}{} ", state.agent_id, state.filename, dirty_indicator);
+    let title = format!(
+        " {} / {}{} ",
+        state.agent_id, state.filename, dirty_indicator
+    );
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
@@ -1618,14 +1767,14 @@ pub fn render_edit_context_file_modal(
             display_lines.push(Line::from(vec![
                 line_num,
                 Span::raw(before.to_string()),
-                Span::styled(cursor_char, Style::default().fg(Color::Black).bg(Color::White)),
+                Span::styled(
+                    cursor_char,
+                    Style::default().fg(Color::Black).bg(Color::White),
+                ),
                 Span::raw(rest.to_string()),
             ]));
         } else {
-            display_lines.push(Line::from(vec![
-                line_num,
-                Span::raw(line_text.to_string()),
-            ]));
+            display_lines.push(Line::from(vec![line_num, Span::raw(line_text.to_string())]));
         }
     }
 

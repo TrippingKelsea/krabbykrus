@@ -130,7 +130,8 @@ impl Gateway {
                 }
             }
             "help" => "## /credentials\n\n| Command | Description |\n|---------|-------------|\n\
-                        | `list` | Show status |\n| `help` | This help |\n".to_string(),
+                        | `list` | Show status |\n| `help` | This help |\n"
+                .to_string(),
             other => format!("Unknown: `{other}`. Try `/credentials help`."),
         })
     }
@@ -144,8 +145,14 @@ impl Gateway {
             "" | "status" => {
                 let path = self.credentials_config.vault_path.display();
                 let enabled = self.credentials_config.enabled;
-                let exists = rockbot_credentials::CredentialVault::exists(&self.credentials_config.vault_path);
-                let state = if self.credential_manager.is_some() { "unlocked" } else { "not initialized" };
+                let exists = rockbot_credentials::CredentialVault::exists(
+                    &self.credentials_config.vault_path,
+                );
+                let state = if self.credential_manager.is_some() {
+                    "unlocked"
+                } else {
+                    "not initialized"
+                };
                 format!(
                     "## Vault\n\n| Field | Value |\n|-------|-------|\n\
                      | Enabled | `{enabled}` |\n| Initialized | `{exists}` |\n\
@@ -153,7 +160,8 @@ impl Gateway {
                 )
             }
             "help" => "## /vault\n\n| Command | Description |\n|---------|-------------|\n\
-                        | `status` | Vault status |\n| `help` | This help |\n".to_string(),
+                        | `status` | Vault status |\n| `help` | This help |\n"
+                .to_string(),
             other => format!("Unknown: `{other}`. Try `/vault help`."),
         })
     }
@@ -174,27 +182,36 @@ impl Gateway {
                         "## Noise Sessions\n\n| Conn | Type | Capabilities | Dir |\n|------|------|--------------|-----|\n",
                     );
                     for (id, caps) in &executors {
-                        let cl: Vec<&str> = caps.capabilities.iter().map(|c| {
-                            use rockbot_client::remote_exec::ToolCapability;
-                            match c {
-                                ToolCapability::Filesystem => "fs",
-                                ToolCapability::Shell => "sh",
-                                ToolCapability::Network => "net",
-                                ToolCapability::Browser => "browser",
-                                ToolCapability::Agent => "agent",
-                                ToolCapability::Memory => "mem",
-                                ToolCapability::Full => "full",
-                            }
-                        }).collect();
+                        let cl: Vec<&str> = caps
+                            .capabilities
+                            .iter()
+                            .map(|c| {
+                                use rockbot_client::remote_exec::ToolCapability;
+                                match c {
+                                    ToolCapability::Filesystem => "fs",
+                                    ToolCapability::Shell => "sh",
+                                    ToolCapability::Network => "net",
+                                    ToolCapability::Browser => "browser",
+                                    ToolCapability::Agent => "agent",
+                                    ToolCapability::Memory => "mem",
+                                    ToolCapability::Full => "full",
+                                }
+                            })
+                            .collect();
                         let short = if id.len() > 8 { &id[..8] } else { id };
                         let wd = caps.working_dir.as_deref().unwrap_or("-");
-                        out.push_str(&format!("| `{short}…` | `{}` | {} | `{wd}` |\n", caps.client_type, cl.join(", ")));
+                        out.push_str(&format!(
+                            "| `{short}…` | `{}` | {} | `{wd}` |\n",
+                            caps.client_type,
+                            cl.join(", ")
+                        ));
                     }
                     out
                 }
             }
             "help" => "## /noise\n\n| Command | Description |\n|---------|-------------|\n\
-                        | `status` | Active sessions |\n| `help` | This help |\n".to_string(),
+                        | `status` | Active sessions |\n| `help` | This help |\n"
+                .to_string(),
             other => format!("Unknown: `{other}`. Try `/noise help`."),
         })
     }
@@ -203,18 +220,17 @@ impl Gateway {
     async fn handle_overseer_command(&self, trimmed: &str) -> Option<String> {
         let sub = trimmed.strip_prefix("/overseer").unwrap_or("").trim();
         match sub {
-            "init" if self.overseer().is_none() => {
-                Some(
-                    "## Overseer Setup\n\n\
+            "init" if self.overseer().is_none() => Some(
+                "## Overseer Setup\n\n\
                      Add the following to your `rockbot.toml`:\n\n\
                      ```toml\n\
                      [overseer]\n\
                      enabled = true\n\
                      model_path = \"/path/to/model.gguf\"\n\
                      ```\n\n\
-                     Then restart the gateway.".to_string()
-                )
-            }
+                     Then restart the gateway."
+                    .to_string(),
+            ),
             _ => None, // Let the overseer module handle its own commands
         }
     }

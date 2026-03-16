@@ -15,15 +15,13 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::components::{
-    render_add_credential_modal, render_confirm_modal, render_dashboard,
-    render_agents, render_credentials, render_edit_credential_modal, render_edit_provider_modal,
-    render_edit_agent_modal,
-    render_cron_jobs, render_models, render_password_modal, render_sessions, render_settings, render_sidebar,
-    render_status_bar, render_view_session_modal,
-    render_view_endpoint_modal, render_view_provider_modal,
-    render_view_model_list_modal, render_edit_permission_modal,
-    render_view_permission_modal,
-    render_view_context_files_modal, render_edit_context_file_modal,
+    render_add_credential_modal, render_agents, render_confirm_modal, render_credentials,
+    render_cron_jobs, render_dashboard, render_edit_agent_modal, render_edit_context_file_modal,
+    render_edit_credential_modal, render_edit_permission_modal, render_edit_provider_modal,
+    render_models, render_password_modal, render_sessions, render_settings, render_sidebar,
+    render_status_bar, render_view_context_files_modal, render_view_endpoint_modal,
+    render_view_model_list_modal, render_view_permission_modal, render_view_provider_modal,
+    render_view_session_modal,
 };
 use super::effects::EffectState;
 use super::state::{
@@ -35,9 +33,13 @@ use super::state::{
 /// Check if Claude Code OAuth credentials are available
 pub fn has_claude_credentials() -> bool {
     #[cfg(feature = "anthropic")]
-    { rockbot_llm::AnthropicProvider::has_credentials() }
+    {
+        rockbot_llm::AnthropicProvider::has_credentials()
+    }
     #[cfg(not(feature = "anthropic"))]
-    { false }
+    {
+        false
+    }
 }
 
 /// Content tabs for views that have sub-tabs
@@ -52,7 +54,12 @@ pub enum CredentialsTab {
 
 impl CredentialsTab {
     pub fn all() -> Vec<Self> {
-        vec![Self::Endpoints, Self::Providers, Self::Permissions, Self::Audit]
+        vec![
+            Self::Endpoints,
+            Self::Providers,
+            Self::Permissions,
+            Self::Audit,
+        ]
     }
 
     pub fn label(&self) -> &'static str {
@@ -129,10 +136,18 @@ impl App {
     fn prev_content_tab(&mut self) {
         match self.state.menu_item {
             MenuItem::Credentials => {
-                self.state.credentials_tab = if self.state.credentials_tab == 0 { 3 } else { self.state.credentials_tab - 1 };
+                self.state.credentials_tab = if self.state.credentials_tab == 0 {
+                    3
+                } else {
+                    self.state.credentials_tab - 1
+                };
             }
             MenuItem::Models => {
-                self.models_tab = if self.models_tab == 0 { 2 } else { self.models_tab - 1 };
+                self.models_tab = if self.models_tab == 0 {
+                    2
+                } else {
+                    self.models_tab - 1
+                };
             }
             _ => {}
         }
@@ -392,7 +407,12 @@ impl App {
     /// Auto-unlock a keyfile-protected vault (no user interaction needed)
     fn auto_unlock_keyfile_vault(&mut self, path_hint: Option<String>) {
         let keyfile_path = path_hint.or_else(|| {
-            dirs::config_dir().map(|d| d.join("rockbot").join("vault.key").to_string_lossy().to_string())
+            dirs::config_dir().map(|d| {
+                d.join("rockbot")
+                    .join("vault.key")
+                    .to_string_lossy()
+                    .to_string()
+            })
         });
 
         if let Some(kf_path) = keyfile_path {
@@ -403,7 +423,8 @@ impl App {
                         match storage.unlock_with_keyfile(&kf_pathbuf) {
                             Ok(()) => {
                                 // Load endpoints after unlocking
-                                let endpoints: Vec<EndpointInfo> = storage.list_endpoints()
+                                let endpoints: Vec<EndpointInfo> = storage
+                                    .list_endpoints()
                                     .into_iter()
                                     .map(|e| EndpointInfo {
                                         id: e.id.to_string(),
@@ -419,15 +440,18 @@ impl App {
                                 self.state.vault.locked = false;
                                 self.state.vault.endpoint_count = endpoints.len();
                                 self.state.endpoints = endpoints;
-                                self.state.status_message = Some(("✅ Vault auto-unlocked".to_string(), false));
+                                self.state.status_message =
+                                    Some(("✅ Vault auto-unlocked".to_string(), false));
                             }
                             Err(e) => {
-                                self.state.status_message = Some((format!("❌ Auto-unlock failed: {e}"), true));
+                                self.state.status_message =
+                                    Some((format!("❌ Auto-unlock failed: {e}"), true));
                             }
                         }
                     }
                     Err(e) => {
-                        self.state.status_message = Some((format!("❌ Failed to open vault: {e}"), true));
+                        self.state.status_message =
+                            Some((format!("❌ Failed to open vault: {e}"), true));
                     }
                 }
             }
@@ -489,7 +513,10 @@ impl App {
                 let idx = *provider_index;
                 self.handle_view_provider(key, idx)
             }
-            InputMode::ViewModelList { provider_index, scroll } => {
+            InputMode::ViewModelList {
+                provider_index,
+                scroll,
+            } => {
                 let idx = *provider_index;
                 let s = *scroll;
                 self.handle_view_model_list(key, idx, s)
@@ -599,14 +626,17 @@ impl App {
                     }
                     MenuItem::CronJobs => {
                         if !self.state.cron_jobs.is_empty() {
-                            self.state.selected_cron_job = (self.state.selected_cron_job + 1) % self.state.cron_jobs.len();
+                            self.state.selected_cron_job =
+                                (self.state.selected_cron_job + 1) % self.state.cron_jobs.len();
                         }
                     }
                     _ => {}
                 }
             }
             // Page Up/Down for faster scrolling
-            KeyCode::PageUp if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions => {
+            KeyCode::PageUp
+                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions =>
+            {
                 if let Some(chat) = self.state.active_chat_mut() {
                     if chat.auto_scroll {
                         chat.scroll = chat.max_scroll.get();
@@ -615,7 +645,9 @@ impl App {
                     chat.scroll = chat.scroll.saturating_sub(10);
                 }
             }
-            KeyCode::PageDown if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions => {
+            KeyCode::PageDown
+                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions =>
+            {
                 if let Some(chat) = self.state.active_chat_mut() {
                     if !chat.auto_scroll {
                         chat.scroll = chat.scroll.saturating_add(10);
@@ -626,43 +658,41 @@ impl App {
                 }
             }
             // End key re-enables auto-scroll for chat
-            KeyCode::End if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions => {
+            KeyCode::End
+                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions =>
+            {
                 if let Some(chat) = self.state.active_chat_mut() {
                     chat.auto_scroll = true;
                 }
             }
             // Enter to view details
-            KeyCode::Enter if !self.state.sidebar_focus => {
-                match self.state.menu_item {
-                    MenuItem::Credentials => {
-                        match self.state.credentials_tab {
-                            0 if !self.state.endpoints.is_empty() => {
-                                self.state.input_mode = InputMode::ViewEndpoint {
-                                    endpoint_index: self.state.selected_endpoint,
-                                };
-                            }
-                            1 => {
-                                self.state.input_mode = InputMode::ViewProvider {
-                                    provider_index: self.state.selected_provider_index,
-                                };
-                            }
-                            2 if !self.state.permissions.is_empty() => {
-                                self.state.input_mode = InputMode::ViewPermission {
-                                    permission_index: self.state.selected_permission,
-                                };
-                            }
-                            _ => {}
-                        }
+            KeyCode::Enter if !self.state.sidebar_focus => match self.state.menu_item {
+                MenuItem::Credentials => match self.state.credentials_tab {
+                    0 if !self.state.endpoints.is_empty() => {
+                        self.state.input_mode = InputMode::ViewEndpoint {
+                            endpoint_index: self.state.selected_endpoint,
+                        };
                     }
-                    MenuItem::Models if !self.state.providers.is_empty() => {
-                        self.state.input_mode = InputMode::ViewModelList {
-                            provider_index: self.state.selected_provider,
-                            scroll: 0,
+                    1 => {
+                        self.state.input_mode = InputMode::ViewProvider {
+                            provider_index: self.state.selected_provider_index,
+                        };
+                    }
+                    2 if !self.state.permissions.is_empty() => {
+                        self.state.input_mode = InputMode::ViewPermission {
+                            permission_index: self.state.selected_permission,
                         };
                     }
                     _ => {}
+                },
+                MenuItem::Models if !self.state.providers.is_empty() => {
+                    self.state.input_mode = InputMode::ViewModelList {
+                        provider_index: self.state.selected_provider,
+                        scroll: 0,
+                    };
                 }
-            }
+                _ => {}
+            },
 
             // Tab navigation within views (Shift+[ and Shift+])
             KeyCode::Char('[') if key.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -710,13 +740,17 @@ impl App {
             KeyCode::Char('c') if !self.state.sidebar_focus => {
                 self.handle_chat_action();
             }
-            KeyCode::Char('n') if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions => {
+            KeyCode::Char('n')
+                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Sessions =>
+            {
                 self.handle_new_session_action();
             }
             KeyCode::Char('e') if !self.state.sidebar_focus => {
                 self.handle_edit_action();
             }
-            KeyCode::Char('f') if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Agents => {
+            KeyCode::Char('f')
+                if !self.state.sidebar_focus && self.state.menu_item == MenuItem::Agents =>
+            {
                 if let Some(agent) = self.state.agents.get(self.state.selected_agent) {
                     let agent_id = agent.id.clone();
                     self.state.input_mode = InputMode::ViewContextFiles(ViewContextFilesState {
@@ -770,11 +804,15 @@ impl App {
             MenuItem::Credentials if self.state.vault.initialized && !self.state.vault.locked => {
                 if self.state.credentials_tab == 1 {
                     // Providers tab — open schema-driven configure form for selected provider
-                    if let Some(schema) = self.state.credential_schemas.get(self.state.selected_provider_index).cloned() {
+                    if let Some(schema) = self
+                        .state
+                        .credential_schemas
+                        .get(self.state.selected_provider_index)
+                        .cloned()
+                    {
                         let idx = self.state.selected_provider_index;
-                        self.state.input_mode = InputMode::EditProvider(
-                            EditProviderState::from_schema(&schema, idx)
-                        );
+                        self.state.input_mode =
+                            InputMode::EditProvider(EditProviderState::from_schema(&schema, idx));
                         return;
                     }
                 }
@@ -870,10 +908,19 @@ impl App {
 
     fn handle_unlock_action(&mut self) {
         // Debug: log unlock attempt
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/rockbot_debug.log") {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/rockbot_debug.log")
+        {
             use std::io::Write;
-            let _ = writeln!(f, "handle_unlock_action: initialized={}, locked={}, method={:?}",
-                self.state.vault.initialized, self.state.vault.locked, self.state.vault.unlock_method);
+            let _ = writeln!(
+                f,
+                "handle_unlock_action: initialized={}, locked={}, method={:?}",
+                self.state.vault.initialized,
+                self.state.vault.locked,
+                self.state.vault.unlock_method
+            );
         }
 
         if !self.state.vault.initialized || !self.state.vault.locked {
@@ -891,14 +938,23 @@ impl App {
             }
             UnlockMethod::Keyfile { path } => {
                 // Debug: log keyfile unlock attempt
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/rockbot_debug.log") {
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/rockbot_debug.log")
+                {
                     use std::io::Write;
                     let _ = writeln!(f, "Keyfile unlock: path={path:?}");
                 }
 
                 // Auto-unlock with keyfile - no password needed
                 let keyfile_path = path.clone().or_else(|| {
-                    dirs::config_dir().map(|d| d.join("rockbot").join("vault.key").to_string_lossy().to_string())
+                    dirs::config_dir().map(|d| {
+                        d.join("rockbot")
+                            .join("vault.key")
+                            .to_string_lossy()
+                            .to_string()
+                    })
                 });
 
                 if let Some(kf_path) = keyfile_path {
@@ -910,14 +966,16 @@ impl App {
                                 match storage.unlock_with_keyfile(&kf_pathbuf) {
                                     Ok(()) => {
                                         // Load endpoints after unlocking
-                                        let endpoints: Vec<EndpointInfo> = storage.list_endpoints()
+                                        let endpoints: Vec<EndpointInfo> = storage
+                                            .list_endpoints()
                                             .into_iter()
                                             .map(|e| EndpointInfo {
                                                 id: e.id.to_string(),
                                                 name: e.name.clone(),
                                                 endpoint_type: format!("{:?}", e.endpoint_type),
                                                 base_url: e.base_url.clone(),
-                                                has_credential: e.credential_id != uuid::Uuid::nil(),
+                                                has_credential: e.credential_id
+                                                    != uuid::Uuid::nil(),
                                                 expiration: None,
                                             })
                                             .collect();
@@ -926,22 +984,27 @@ impl App {
                                         self.state.vault.locked = false;
                                         self.state.vault.endpoint_count = endpoints.len();
                                         self.state.endpoints = endpoints;
-                                        self.state.status_message = Some(("✅ Unlocked with keyfile".to_string(), false));
+                                        self.state.status_message =
+                                            Some(("✅ Unlocked with keyfile".to_string(), false));
                                     }
                                     Err(e) => {
-                                        self.state.status_message = Some((format!("❌ Keyfile unlock failed: {e}"), true));
+                                        self.state.status_message =
+                                            Some((format!("❌ Keyfile unlock failed: {e}"), true));
                                     }
                                 }
                             }
                             Err(e) => {
-                                self.state.status_message = Some((format!("❌ Failed to open vault: {e}"), true));
+                                self.state.status_message =
+                                    Some((format!("❌ Failed to open vault: {e}"), true));
                             }
                         }
                     } else {
-                        self.state.status_message = Some((format!("Keyfile not found: {kf_path}"), true));
+                        self.state.status_message =
+                            Some((format!("Keyfile not found: {kf_path}"), true));
                     }
                 } else {
-                    self.state.status_message = Some(("No keyfile path configured".to_string(), true));
+                    self.state.status_message =
+                        Some(("No keyfile path configured".to_string(), true));
                 }
             }
             UnlockMethod::Age { public_key } => {
@@ -959,9 +1022,14 @@ impl App {
             }
             UnlockMethod::SshKey { path } => {
                 // Try SSH agent unlock
-                let ssh_path = path.clone().unwrap_or_else(|| "~/.ssh/id_ed25519".to_string());
+                let ssh_path = path
+                    .clone()
+                    .unwrap_or_else(|| "~/.ssh/id_ed25519".to_string());
                 // TODO: Actually unlock via SSH agent
-                self.state.status_message = Some((format!("SSH unlock not yet implemented (key: {ssh_path})"), true));
+                self.state.status_message = Some((
+                    format!("SSH unlock not yet implemented (key: {ssh_path})"),
+                    true,
+                ));
             }
             UnlockMethod::Unknown => {
                 // Default to password prompt
@@ -987,8 +1055,9 @@ impl App {
 
         if !has_provider {
             self.state.status_message = Some((
-                "No LLM providers available — configure one in Models or Credentials → Providers".to_string(),
-                true
+                "No LLM providers available — configure one in Models or Credentials → Providers"
+                    .to_string(),
+                true,
             ));
             return;
         }
@@ -1004,7 +1073,10 @@ impl App {
                 self.state.chat_model = Some(model.clone());
             } else if !session.agent_id.is_empty() {
                 // Fall back to agent's configured model
-                self.state.chat_model = self.state.agents.iter()
+                self.state.chat_model = self
+                    .state
+                    .agents
+                    .iter()
                     .find(|a| a.id == session.agent_id)
                     .and_then(|a| a.model.clone());
             }
@@ -1023,15 +1095,13 @@ impl App {
         let has_provider = self.state.providers.iter().any(|p| p.available);
         if !has_provider {
             self.state.status_message = Some((
-                "No LLM providers available — configure one in Models or Credentials → Providers".to_string(),
-                true
+                "No LLM providers available — configure one in Models or Credentials → Providers"
+                    .to_string(),
+                true,
             ));
             return;
         }
-        let create_state = CreateSessionState::new(
-            &self.state.providers,
-            &self.state.agents,
-        );
+        let create_state = CreateSessionState::new(&self.state.providers, &self.state.agents);
         self.state.input_mode = InputMode::CreateSession(create_state);
     }
 
@@ -1052,7 +1122,11 @@ impl App {
                 &endpoint.name,
                 endpoint_type,
                 &endpoint.base_url,
-                if endpoint.has_credential { Some(&endpoint.id) } else { None },
+                if endpoint.has_credential {
+                    Some(&endpoint.id)
+                } else {
+                    None
+                },
             );
 
             if let Some(ref vault) = self.vault {
@@ -1079,7 +1153,8 @@ impl App {
     fn edit_permission_at(&mut self, permission_index: usize) {
         use super::state::EditPermissionState;
         if let Some(rule) = self.state.permissions.get(permission_index) {
-            let edit_state = EditPermissionState::from_rule(rule, &self.state.endpoints, &self.state.agents);
+            let edit_state =
+                EditPermissionState::from_rule(rule, &self.state.endpoints, &self.state.agents);
             self.state.input_mode = InputMode::EditPermission(edit_state);
         }
     }
@@ -1107,7 +1182,10 @@ impl App {
                 let provider = self.state.providers.get(idx);
                 // Find matching credential schema by provider ID
                 let schema = provider.and_then(|p| {
-                    self.state.credential_schemas.iter().find(|s| s.provider_id == p.id)
+                    self.state
+                        .credential_schemas
+                        .iter()
+                        .find(|s| s.provider_id == p.id)
                 });
                 let edit_state = if let Some(schema) = schema {
                     EditProviderState::from_schema(schema, idx)
@@ -1137,7 +1215,7 @@ impl App {
         if self.state.menu_item == MenuItem::Sessions {
             if let Some(session) = self.state.sessions.get(self.state.selected_session) {
                 self.state.input_mode = InputMode::ViewSession {
-                    session_key: session.key.clone()
+                    session_key: session.key.clone(),
                 };
                 // Spawn async task to load session details
                 self.spawn_session_details(&session.key);
@@ -1157,7 +1235,8 @@ impl App {
         if self.state.credentials_tab == 2 && !self.state.permissions.is_empty() {
             // On permissions tab with a selected permission — edit it
             if let Some(rule) = self.state.permissions.get(self.state.selected_permission) {
-                let edit_state = EditPermissionState::from_rule(rule, &self.state.endpoints, &self.state.agents);
+                let edit_state =
+                    EditPermissionState::from_rule(rule, &self.state.endpoints, &self.state.agents);
                 self.state.input_mode = InputMode::EditPermission(edit_state);
             }
         } else {
@@ -1167,12 +1246,17 @@ impl App {
             } else {
                 None
             };
-            let edit_state = EditPermissionState::new(&self.state.endpoints, &self.state.agents, preselect);
+            let edit_state =
+                EditPermissionState::new(&self.state.endpoints, &self.state.agents, preselect);
             self.state.input_mode = InputMode::EditPermission(edit_state);
         }
     }
 
-    fn handle_edit_permission(&mut self, key: KeyEvent, mut state: super::state::EditPermissionState) -> Result<()> {
+    fn handle_edit_permission(
+        &mut self,
+        key: KeyEvent,
+        mut state: super::state::EditPermissionState,
+    ) -> Result<()> {
         let field_count: usize = 3; // endpoint, source, access
         match key.code {
             KeyCode::Esc => {
@@ -1183,7 +1267,11 @@ impl App {
                 self.state.input_mode = InputMode::EditPermission(state);
             }
             KeyCode::BackTab | KeyCode::Up => {
-                state.field_index = if state.field_index == 0 { field_count - 1 } else { state.field_index - 1 };
+                state.field_index = if state.field_index == 0 {
+                    field_count - 1
+                } else {
+                    state.field_index - 1
+                };
                 self.state.input_mode = InputMode::EditPermission(state);
             }
             KeyCode::Left => {
@@ -1217,27 +1305,43 @@ impl App {
         if state.is_edit {
             // Update existing rule: find by endpoint+source combo and update access
             if let Some(rule) = self.state.permissions.iter_mut().find(|r| {
-                r.endpoint_id == state.selected_endpoint_id() && r.source == state.sources[state.selected_source]
+                r.endpoint_id == state.selected_endpoint_id()
+                    && r.source == state.sources[state.selected_source]
             }) {
                 rule.access = state.access;
             } else {
                 // Source changed — remove old, add new
-                let next_priority = self.state.permissions.iter().map(|r| r.priority).max().unwrap_or(0) + 1;
+                let next_priority = self
+                    .state
+                    .permissions
+                    .iter()
+                    .map(|r| r.priority)
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
                 self.state.permissions.push(state.to_rule(next_priority));
             }
         } else {
             // New rule — remove existing rule for same endpoint+source combo
             self.state.permissions.retain(|r| {
-                !(r.endpoint_id == state.selected_endpoint_id() && r.source == state.sources[state.selected_source])
+                !(r.endpoint_id == state.selected_endpoint_id()
+                    && r.source == state.sources[state.selected_source])
             });
-            let next_priority = self.state.permissions.iter().map(|r| r.priority).max().unwrap_or(0) + 1;
+            let next_priority = self
+                .state
+                .permissions
+                .iter()
+                .map(|r| r.priority)
+                .max()
+                .unwrap_or(0)
+                + 1;
             self.state.permissions.push(state.to_rule(next_priority));
         }
         // Re-sort by priority
         self.state.permissions.sort_by_key(|r| r.priority);
         self.state.status_message = Some((
             format!("Permission set for '{}'", state.selected_endpoint_name()),
-            false
+            false,
         ));
         self.state.input_mode = InputMode::Normal;
     }
@@ -1245,7 +1349,9 @@ impl App {
     fn move_permission(&mut self, up: bool) {
         let idx = self.state.selected_permission;
         let len = self.state.permissions.len();
-        if len < 2 { return; }
+        if len < 2 {
+            return;
+        }
         if up && idx > 0 {
             self.state.permissions.swap(idx, idx - 1);
             // Update priorities
@@ -1262,9 +1368,13 @@ impl App {
 
     fn handle_test_action(&mut self) {
         if self.state.menu_item == MenuItem::Models {
-            let idx = self.state.selected_provider.min(self.state.providers.len().saturating_sub(1));
+            let idx = self
+                .state
+                .selected_provider
+                .min(self.state.providers.len().saturating_sub(1));
             if let Some(provider) = self.state.providers.get(idx) {
-                self.state.status_message = Some((format!("Testing {} connection...", provider.name), false));
+                self.state.status_message =
+                    Some((format!("Testing {} connection...", provider.name), false));
                 self.spawn_model_test_via_gateway(&provider.id, &provider.name);
             }
         } else if self.state.menu_item == MenuItem::CronJobs {
@@ -1342,10 +1452,7 @@ impl App {
                     ));
                 }
                 Err(e) => {
-                    let _ = tx.send(Message::SetStatus(
-                        format!("❌ {name}: {e}"),
-                        true,
-                    ));
+                    let _ = tx.send(Message::SetStatus(format!("❌ {name}: {e}"), true));
                 }
             }
         });
@@ -1378,19 +1485,24 @@ impl App {
                 if session.agent_id.is_empty() {
                     None
                 } else {
-                    self.state.agents.iter()
+                    self.state
+                        .agents
+                        .iter()
                         .find(|a| a.id == session.agent_id)
                         .and_then(|a| a.model.clone())
                 }
             });
             // Set agent_id for agent-bound sessions
-            self.state.chat_agent_id = if !session.agent_id.is_empty() && !session.agent_id.starts_with("ad-hoc") {
-                Some(session.agent_id.clone())
-            } else {
-                None
-            };
+            self.state.chat_agent_id =
+                if !session.agent_id.is_empty() && !session.agent_id.starts_with("ad-hoc") {
+                    Some(session.agent_id.clone())
+                } else {
+                    None
+                };
             // Load messages if not already loaded
-            let already_loaded = self.state.session_chats
+            let already_loaded = self
+                .state
+                .session_chats
                 .get(&key)
                 .map_or(false, |c| c.loaded);
             if !already_loaded {
@@ -1406,18 +1518,29 @@ impl App {
         tokio::spawn(async move {
             match kill_session(&gw, &key).await {
                 Ok(()) => {
-                    let _ = tx.send(Message::SetStatus(format!("✅ Session archived: {key}"), false));
+                    let _ = tx.send(Message::SetStatus(
+                        format!("✅ Session archived: {key}"),
+                        false,
+                    ));
                     let _ = tx.send(Message::ReloadSessions);
                 }
                 Err(e) => {
-                    let _ = tx.send(Message::SetStatus(format!("❌ Failed to archive session: {e}"), true));
+                    let _ = tx.send(Message::SetStatus(
+                        format!("❌ Failed to archive session: {e}"),
+                        true,
+                    ));
                 }
             }
         });
     }
 
     #[allow(clippy::needless_pass_by_value)]
-    fn handle_password_input(&mut self, key: KeyEvent, _masked: bool, action: PasswordAction) -> Result<()> {
+    fn handle_password_input(
+        &mut self,
+        key: KeyEvent,
+        _masked: bool,
+        action: PasswordAction,
+    ) -> Result<()> {
         match key.code {
             KeyCode::Enter => {
                 let password = self.state.input_buffer.clone();
@@ -1425,14 +1548,16 @@ impl App {
                 self.state.input_mode = InputMode::Normal;
 
                 if password.is_empty() {
-                    self.state.status_message = Some(("Password cannot be empty".to_string(), true));
+                    self.state.status_message =
+                        Some(("Password cannot be empty".to_string(), true));
                     return Ok(());
                 }
 
                 match action {
                     PasswordAction::InitVault => {
                         if password.len() < 8 {
-                            self.state.status_message = Some(("Password must be at least 8 characters".to_string(), true));
+                            self.state.status_message =
+                                Some(("Password must be at least 8 characters".to_string(), true));
                         } else {
                             // Initialize vault with password
                             match rockbot_credentials::CredentialVault::init_with_password(
@@ -1444,10 +1569,12 @@ impl App {
                                     self.state.vault.initialized = true;
                                     self.state.vault.locked = false;
                                     self.state.vault.unlock_method = UnlockMethod::Password;
-                                    self.state.status_message = Some(("✅ Vault initialized!".to_string(), false));
+                                    self.state.status_message =
+                                        Some(("✅ Vault initialized!".to_string(), false));
                                 }
                                 Err(e) => {
-                                    self.state.status_message = Some((format!("❌ Init failed: {e}"), true));
+                                    self.state.status_message =
+                                        Some((format!("❌ Init failed: {e}"), true));
                                 }
                             }
                         }
@@ -1459,14 +1586,16 @@ impl App {
                                 match storage.unlock_with_password(&password) {
                                     Ok(()) => {
                                         // Load endpoints after unlocking
-                                        let endpoints: Vec<EndpointInfo> = storage.list_endpoints()
+                                        let endpoints: Vec<EndpointInfo> = storage
+                                            .list_endpoints()
                                             .into_iter()
                                             .map(|e| EndpointInfo {
                                                 id: e.id.to_string(),
                                                 name: e.name.clone(),
                                                 endpoint_type: format!("{:?}", e.endpoint_type),
                                                 base_url: e.base_url.clone(),
-                                                has_credential: e.credential_id != uuid::Uuid::nil(),
+                                                has_credential: e.credential_id
+                                                    != uuid::Uuid::nil(),
                                                 expiration: None,
                                             })
                                             .collect();
@@ -1475,15 +1604,18 @@ impl App {
                                         self.state.vault.locked = false;
                                         self.state.vault.endpoint_count = endpoints.len();
                                         self.state.endpoints = endpoints;
-                                        self.state.status_message = Some(("✅ Vault unlocked".to_string(), false));
+                                        self.state.status_message =
+                                            Some(("✅ Vault unlocked".to_string(), false));
                                     }
                                     Err(e) => {
-                                        self.state.status_message = Some((format!("❌ Wrong password: {e}"), true));
+                                        self.state.status_message =
+                                            Some((format!("❌ Wrong password: {e}"), true));
                                     }
                                 }
                             }
                             Err(e) => {
-                                self.state.status_message = Some((format!("❌ Failed to open vault: {e}"), true));
+                                self.state.status_message =
+                                    Some((format!("❌ Failed to open vault: {e}"), true));
                             }
                         }
                     }
@@ -1505,7 +1637,11 @@ impl App {
         Ok(())
     }
 
-    fn handle_add_credential(&mut self, key: KeyEvent, mut state: AddCredentialState) -> Result<()> {
+    fn handle_add_credential(
+        &mut self,
+        key: KeyEvent,
+        mut state: AddCredentialState,
+    ) -> Result<()> {
         use super::components::modals::ENDPOINT_TYPES;
 
         match key.code {
@@ -1578,7 +1714,8 @@ impl App {
         } else if let Some(ref mut vault) = self.vault {
             match add_credential_to_vault(vault, &state) {
                 Ok(endpoint_name) => {
-                    self.state.endpoints = vault.list_endpoints()
+                    self.state.endpoints = vault
+                        .list_endpoints()
                         .into_iter()
                         .map(|e| EndpointInfo {
                             id: e.id.to_string(),
@@ -1591,8 +1728,13 @@ impl App {
                         .collect();
                     self.state.vault.endpoint_count = self.state.endpoints.len();
                     // Create default permission: Any Source with HIL access
-                    if let Some(ep) = self.state.endpoints.iter().find(|e| e.name == endpoint_name) {
-                        use super::state::{PermissionRule, PermissionSource, AccessLevel};
+                    if let Some(ep) = self
+                        .state
+                        .endpoints
+                        .iter()
+                        .find(|e| e.name == endpoint_name)
+                    {
+                        use super::state::{AccessLevel, PermissionRule, PermissionSource};
                         let next_priority = self.state.permissions.len() + 1;
                         self.state.permissions.push(PermissionRule {
                             endpoint_id: ep.id.clone(),
@@ -1616,7 +1758,11 @@ impl App {
         }
     }
 
-    fn handle_edit_credential(&mut self, key: KeyEvent, mut state: EditCredentialState) -> Result<()> {
+    fn handle_edit_credential(
+        &mut self,
+        key: KeyEvent,
+        mut state: EditCredentialState,
+    ) -> Result<()> {
         match key.code {
             KeyCode::Esc => {
                 self.state.input_mode = InputMode::Normal;
@@ -1665,7 +1811,8 @@ impl App {
         } else if let Some(ref mut vault) = self.vault {
             match update_credential_in_vault(vault, &state) {
                 Ok(endpoint_name) => {
-                    self.state.endpoints = vault.list_endpoints()
+                    self.state.endpoints = vault
+                        .list_endpoints()
                         .into_iter()
                         .map(|e| EndpointInfo {
                             id: e.id.to_string(),
@@ -1691,7 +1838,11 @@ impl App {
         }
     }
 
-    fn handle_edit_provider(&mut self, key: KeyEvent, mut state: super::state::EditProviderState) -> Result<()> {
+    fn handle_edit_provider(
+        &mut self,
+        key: KeyEvent,
+        mut state: super::state::EditProviderState,
+    ) -> Result<()> {
         match key.code {
             KeyCode::Esc => {
                 self.state.input_mode = InputMode::Normal;
@@ -1762,13 +1913,16 @@ impl App {
         if state.auth_type == ProviderAuthType::SessionKey {
             if has_claude_credentials() {
                 self.state.status_message = Some((
-                    format!("✅ {} configured with Claude Code OAuth", state.provider_name),
-                    false
+                    format!(
+                        "✅ {} configured with Claude Code OAuth",
+                        state.provider_name
+                    ),
+                    false,
                 ));
             } else {
                 self.state.status_message = Some((
                     "❌ Run 'claude' in terminal to authenticate with Claude Code".to_string(),
-                    true
+                    true,
                 ));
             }
             return;
@@ -1777,7 +1931,7 @@ impl App {
         if state.auth_type == ProviderAuthType::None {
             self.state.status_message = Some((
                 format!("✅ {} - no authentication needed", state.provider_name),
-                false
+                false,
             ));
             return;
         }
@@ -1786,33 +1940,45 @@ impl App {
         let secret_value = state.api_key(); // Checks api_key, bot_token, access_token, token, first secret field
 
         // For AWS credentials, also check specific field IDs
-        let secret_value = if secret_value.is_empty() && state.auth_type == ProviderAuthType::AwsCredentials {
-            // For AWS, store all secret fields as a JSON object
-            let mut aws_creds = serde_json::Map::new();
-            for field_id in &["access_key_id", "secret_access_key", "session_token", "bearer_token"] {
-                if let Some(val) = state.get_field_value_by_id(field_id) {
-                    if !val.is_empty() {
-                        aws_creds.insert(field_id.to_string(), serde_json::Value::String(val.to_string()));
+        let secret_value =
+            if secret_value.is_empty() && state.auth_type == ProviderAuthType::AwsCredentials {
+                // For AWS, store all secret fields as a JSON object
+                let mut aws_creds = serde_json::Map::new();
+                for field_id in &[
+                    "access_key_id",
+                    "secret_access_key",
+                    "session_token",
+                    "bearer_token",
+                ] {
+                    if let Some(val) = state.get_field_value_by_id(field_id) {
+                        if !val.is_empty() {
+                            aws_creds.insert(
+                                field_id.to_string(),
+                                serde_json::Value::String(val.to_string()),
+                            );
+                        }
                     }
                 }
-            }
-            if aws_creds.is_empty() {
-                self.state.status_message = Some((
-                    format!("💡 Set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION={}", state.aws_region()),
-                    false
-                ));
-                return;
-            }
-            serde_json::to_string(&aws_creds).unwrap_or_default()
-        } else {
-            secret_value
-        };
+                if aws_creds.is_empty() {
+                    self.state.status_message = Some((
+                        format!(
+                            "💡 Set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION={}",
+                            state.aws_region()
+                        ),
+                        false,
+                    ));
+                    return;
+                }
+                serde_json::to_string(&aws_creds).unwrap_or_default()
+            } else {
+                secret_value
+            };
 
         if secret_value.is_empty() {
             if let Some(env_var) = state.env_var_hint() {
                 self.state.status_message = Some((
                     format!("💡 Set {env_var} environment variable to persist credentials"),
-                    false
+                    false,
                 ));
             }
             return;
@@ -1820,10 +1986,16 @@ impl App {
 
         // Determine base URL
         let base_url = if state.provider_id == "bedrock" {
-            state.get_field_value_by_id("endpoint_url")
+            state
+                .get_field_value_by_id("endpoint_url")
                 .filter(|v| !v.is_empty())
                 .map(|v| v.to_string())
-                .unwrap_or_else(|| format!("https://bedrock-runtime.{}.amazonaws.com", state.aws_region()))
+                .unwrap_or_else(|| {
+                    format!(
+                        "https://bedrock-runtime.{}.amazonaws.com",
+                        state.aws_region()
+                    )
+                })
         } else {
             let url = state.base_url();
             if url.is_empty() {
@@ -1860,11 +2032,13 @@ impl App {
         let tx = self.state.tx.clone();
         let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match save_provider_via_gateway(&gw, &provider_name, &endpoint_type, &base_url, &secret).await {
+            match save_provider_via_gateway(&gw, &provider_name, &endpoint_type, &base_url, &secret)
+                .await
+            {
                 Ok(()) => {
                     let _ = tx.send(Message::SetStatus(
                         format!("✅ {provider_name} credentials saved"),
-                        false
+                        false,
                     ));
                     // Reload providers to reflect updated availability
                     let _ = tx.send(Message::ReloadProviders);
@@ -1872,7 +2046,7 @@ impl App {
                 Err(e) => {
                     let _ = tx.send(Message::SetStatus(
                         format!("❌ Failed to save {provider_name} credentials: {e}"),
-                        true
+                        true,
                     ));
                 }
             }
@@ -1881,7 +2055,11 @@ impl App {
 
     fn handle_edit_agent(&mut self, key: KeyEvent, mut state: EditAgentState) -> Result<()> {
         let set_mode = |s: EditAgentState| -> InputMode {
-            if s.is_edit { InputMode::EditAgent(s) } else { InputMode::AddAgent(s) }
+            if s.is_edit {
+                InputMode::EditAgent(s)
+            } else {
+                InputMode::AddAgent(s)
+            }
         };
 
         match key.code {
@@ -1912,9 +2090,8 @@ impl App {
                     self.state.status_message = Some((error, true));
                     self.state.input_mode = set_mode(state);
                 } else if !state.is_edit && self.state.agents.iter().any(|a| a.id == state.id) {
-                    self.state.status_message = Some((
-                        format!("Agent '{}' already exists", state.id), true
-                    ));
+                    self.state.status_message =
+                        Some((format!("Agent '{}' already exists", state.id), true));
                     self.state.input_mode = InputMode::AddAgent(state);
                 } else {
                     self.save_agent_to_config(&state);
@@ -1934,9 +2111,8 @@ impl App {
                         self.state.status_message = Some((error, true));
                         self.state.input_mode = set_mode(state);
                     } else if !state.is_edit && self.state.agents.iter().any(|a| a.id == state.id) {
-                        self.state.status_message = Some((
-                            format!("Agent '{}' already exists", state.id), true
-                        ));
+                        self.state.status_message =
+                            Some((format!("Agent '{}' already exists", state.id), true));
                         self.state.input_mode = InputMode::AddAgent(state);
                     } else {
                         self.save_agent_to_config(&state);
@@ -1964,7 +2140,11 @@ impl App {
         Ok(())
     }
 
-    fn handle_create_session(&mut self, key: KeyEvent, mut state: CreateSessionState) -> Result<()> {
+    fn handle_create_session(
+        &mut self,
+        key: KeyEvent,
+        mut state: CreateSessionState,
+    ) -> Result<()> {
         match key.code {
             KeyCode::Esc => {
                 self.state.input_mode = InputMode::Normal;
@@ -2008,14 +2188,18 @@ impl App {
                             self.state.input_mode = InputMode::ChatInput;
                             self.state.clear_input();
                         } else {
-                            self.state.status_message = Some(("No model available".to_string(), true));
+                            self.state.status_message =
+                                Some(("No model available".to_string(), true));
                             self.state.input_mode = InputMode::CreateSession(state);
                         }
                     }
                     SessionMode::AgentBound => {
                         if let Some(agent_id) = state.selected_agent_id() {
                             let agent_id = agent_id.to_string();
-                            let agent_model = self.state.agents.iter()
+                            let agent_model = self
+                                .state
+                                .agents
+                                .iter()
                                 .find(|a| a.id == agent_id)
                                 .and_then(|a| a.model.clone());
                             self.spawn_create_session(Some(agent_id.clone()), agent_model.clone());
@@ -2024,7 +2208,8 @@ impl App {
                             self.state.input_mode = InputMode::ChatInput;
                             self.state.clear_input();
                         } else {
-                            self.state.status_message = Some(("No agent available".to_string(), true));
+                            self.state.status_message =
+                                Some(("No agent available".to_string(), true));
                             self.state.input_mode = InputMode::CreateSession(state);
                         }
                     }
@@ -2056,20 +2241,35 @@ impl App {
         // Build the JSON body for the gateway API
         let mut body = serde_json::Map::new();
         if !state.is_edit {
-            body.insert("id".to_string(), serde_json::Value::String(state.id.clone()));
+            body.insert(
+                "id".to_string(),
+                serde_json::Value::String(state.id.clone()),
+            );
         }
         if !state.model.is_empty() {
-            body.insert("model".to_string(), serde_json::Value::String(state.model.clone()));
+            body.insert(
+                "model".to_string(),
+                serde_json::Value::String(state.model.clone()),
+            );
         }
         if !state.parent_id.is_empty() {
-            body.insert("parent_id".to_string(), serde_json::Value::String(state.parent_id.clone()));
+            body.insert(
+                "parent_id".to_string(),
+                serde_json::Value::String(state.parent_id.clone()),
+            );
         }
         if !state.workspace.is_empty() {
-            body.insert("workspace".to_string(), serde_json::Value::String(state.workspace.clone()));
+            body.insert(
+                "workspace".to_string(),
+                serde_json::Value::String(state.workspace.clone()),
+            );
         }
         if !state.max_tool_calls.is_empty() {
             if let Ok(n) = state.max_tool_calls.parse::<u32>() {
-                body.insert("max_tool_calls".to_string(), serde_json::Value::Number(n.into()));
+                body.insert(
+                    "max_tool_calls".to_string(),
+                    serde_json::Value::Number(n.into()),
+                );
             }
         }
         if !state.temperature.is_empty() {
@@ -2081,13 +2281,22 @@ impl App {
         }
         if !state.max_tokens.is_empty() {
             if let Ok(n) = state.max_tokens.parse::<u32>() {
-                body.insert("max_tokens".to_string(), serde_json::Value::Number(n.into()));
+                body.insert(
+                    "max_tokens".to_string(),
+                    serde_json::Value::Number(n.into()),
+                );
             }
         }
         if !state.system_prompt.is_empty() {
-            body.insert("system_prompt".to_string(), serde_json::Value::String(state.system_prompt.clone()));
+            body.insert(
+                "system_prompt".to_string(),
+                serde_json::Value::String(state.system_prompt.clone()),
+            );
         }
-        body.insert("enabled".to_string(), serde_json::Value::Bool(state.enabled));
+        body.insert(
+            "enabled".to_string(),
+            serde_json::Value::Bool(state.enabled),
+        );
 
         let json_body = serde_json::Value::Object(body);
         let is_edit = state.is_edit;
@@ -2098,18 +2307,21 @@ impl App {
 
         // Try gateway API first, fall back to direct config file edit
         tokio::spawn(async move {
-            let client = reqwest::Client::builder().danger_accept_invalid_certs(true)
+            let client = reqwest::Client::builder()
+                .danger_accept_invalid_certs(true)
                 .timeout(std::time::Duration::from_secs(5))
                 .build()
                 .unwrap();
 
             let gateway_result = if is_edit {
-                client.put(format!("{gateway_url}/api/agents/{agent_id}"))
+                client
+                    .put(format!("{gateway_url}/api/agents/{agent_id}"))
                     .json(&json_body)
                     .send()
                     .await
             } else {
-                client.post(format!("{gateway_url}/api/agents"))
+                client
+                    .post(format!("{gateway_url}/api/agents"))
                     .json(&json_body)
                     .send()
                     .await
@@ -2124,7 +2336,9 @@ impl App {
                 }
                 Ok(resp) => {
                     let err_text = resp.text().await.unwrap_or_default();
-                    let _ = tx.send(Message::AgentSaveError(format!("Gateway error: {err_text}")));
+                    let _ = tx.send(Message::AgentSaveError(format!(
+                        "Gateway error: {err_text}"
+                    )));
                 }
                 Err(_) => {
                     // Gateway unreachable — fall back to direct config file edit
@@ -2132,7 +2346,10 @@ impl App {
                         Ok(()) => {
                             let action = if is_edit { "updated" } else { "created" };
                             let _ = tx.send(Message::AgentSaved(agent_id));
-                            let _ = tx.send(Message::SetStatus(format!("Agent {action} (offline)"), false));
+                            let _ = tx.send(Message::SetStatus(
+                                format!("Agent {action} (offline)"),
+                                false,
+                            ));
                             let _ = tx.send(Message::ReloadAgents);
                         }
                         Err(e) => {
@@ -2155,7 +2372,8 @@ fn save_agent_to_config_file(
     agent_id: &str,
 ) -> Result<()> {
     let content = std::fs::read_to_string(config_path)?;
-    let mut doc: toml_edit::DocumentMut = content.parse()
+    let mut doc: toml_edit::DocumentMut = content
+        .parse()
         .map_err(|e| anyhow::anyhow!("Failed to parse config: {e}"))?;
 
     if !doc.contains_key("agents") {
@@ -2192,19 +2410,38 @@ fn save_agent_to_config_file(
 /// Apply JSON fields to a toml_edit table
 fn apply_agent_fields_to_table(table: &mut toml_edit::Table, json: &serde_json::Value) {
     if let Some(model) = json.get("model").and_then(|v| v.as_str()) {
-        if model.is_empty() { table.remove("model"); } else { table["model"] = toml_edit::value(model); }
+        if model.is_empty() {
+            table.remove("model");
+        } else {
+            table["model"] = toml_edit::value(model);
+        }
     }
     if let Some(parent_id) = json.get("parent_id").and_then(|v| v.as_str()) {
-        if parent_id.is_empty() { table.remove("parent_id"); } else { table["parent_id"] = toml_edit::value(parent_id); }
+        if parent_id.is_empty() {
+            table.remove("parent_id");
+        } else {
+            table["parent_id"] = toml_edit::value(parent_id);
+        }
     }
     if let Some(workspace) = json.get("workspace").and_then(|v| v.as_str()) {
-        if workspace.is_empty() { table.remove("workspace"); } else { table["workspace"] = toml_edit::value(workspace); }
+        if workspace.is_empty() {
+            table.remove("workspace");
+        } else {
+            table["workspace"] = toml_edit::value(workspace);
+        }
     }
-    if let Some(max_tool_calls) = json.get("max_tool_calls").and_then(serde_json::Value::as_i64) {
+    if let Some(max_tool_calls) = json
+        .get("max_tool_calls")
+        .and_then(serde_json::Value::as_i64)
+    {
         table["max_tool_calls"] = toml_edit::value(max_tool_calls);
     }
     if let Some(system_prompt) = json.get("system_prompt").and_then(|v| v.as_str()) {
-        if system_prompt.is_empty() { table.remove("system_prompt"); } else { table["system_prompt"] = toml_edit::value(system_prompt); }
+        if system_prompt.is_empty() {
+            table.remove("system_prompt");
+        } else {
+            table["system_prompt"] = toml_edit::value(system_prompt);
+        }
     }
     if let Some(enabled) = json.get("enabled").and_then(serde_json::Value::as_bool) {
         table["enabled"] = toml_edit::value(enabled);
@@ -2248,24 +2485,31 @@ impl App {
                 self.state.selected_permission = permission_index;
                 self.move_permission(true);
                 let new_idx = self.state.selected_permission;
-                self.state.input_mode = InputMode::ViewPermission { permission_index: new_idx };
+                self.state.input_mode = InputMode::ViewPermission {
+                    permission_index: new_idx,
+                };
             }
             KeyCode::Char('-') | KeyCode::Char('J') => {
                 // Move rule down in priority
                 self.state.selected_permission = permission_index;
                 self.move_permission(false);
                 let new_idx = self.state.selected_permission;
-                self.state.input_mode = InputMode::ViewPermission { permission_index: new_idx };
+                self.state.input_mode = InputMode::ViewPermission {
+                    permission_index: new_idx,
+                };
             }
             KeyCode::Char('d') => {
                 if permission_index < self.state.permissions.len() {
-                    let rule_name = self.state.permissions[permission_index].endpoint_name.clone();
+                    let rule_name = self.state.permissions[permission_index]
+                        .endpoint_name
+                        .clone();
                     self.state.permissions.remove(permission_index);
                     // Renumber priorities
                     for (i, rule) in self.state.permissions.iter_mut().enumerate() {
                         rule.priority = i + 1;
                     }
-                    self.state.status_message = Some((format!("Removed rule for '{rule_name}'"), false));
+                    self.state.status_message =
+                        Some((format!("Removed rule for '{rule_name}'"), false));
                     self.state.input_mode = InputMode::Normal;
                 }
             }
@@ -2292,13 +2536,21 @@ impl App {
         Ok(())
     }
 
-    fn handle_view_model_list(&mut self, key: KeyEvent, provider_index: usize, scroll: usize) -> Result<()> {
+    fn handle_view_model_list(
+        &mut self,
+        key: KeyEvent,
+        provider_index: usize,
+        scroll: usize,
+    ) -> Result<()> {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
                 self.state.input_mode = InputMode::Normal;
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                let model_count = self.state.providers.get(provider_index)
+                let model_count = self
+                    .state
+                    .providers
+                    .get(provider_index)
                     .map_or(0, |p| p.models.len());
                 if scroll + 1 < model_count {
                     self.state.input_mode = InputMode::ViewModelList {
@@ -2332,35 +2584,45 @@ impl App {
                                     match vault.delete_endpoint(uuid) {
                                         Ok(()) => {
                                             // Refresh endpoints list
-                                            self.state.endpoints = vault.list_endpoints()
+                                            self.state.endpoints = vault
+                                                .list_endpoints()
                                                 .into_iter()
                                                 .map(|e| EndpointInfo {
                                                     id: e.id.to_string(),
                                                     name: e.name.clone(),
                                                     endpoint_type: format!("{:?}", e.endpoint_type),
                                                     base_url: e.base_url.clone(),
-                                                    has_credential: e.credential_id != uuid::Uuid::nil(),
+                                                    has_credential: e.credential_id
+                                                        != uuid::Uuid::nil(),
                                                     expiration: None,
                                                 })
                                                 .collect();
-                                            self.state.vault.endpoint_count = self.state.endpoints.len();
+                                            self.state.vault.endpoint_count =
+                                                self.state.endpoints.len();
                                             // Reset selection if needed
-                                            if self.state.selected_endpoint >= self.state.endpoints.len() {
-                                                self.state.selected_endpoint = self.state.endpoints.len().saturating_sub(1);
+                                            if self.state.selected_endpoint
+                                                >= self.state.endpoints.len()
+                                            {
+                                                self.state.selected_endpoint =
+                                                    self.state.endpoints.len().saturating_sub(1);
                                             }
-                                            self.state.status_message = Some(("✅ Deleted endpoint".to_string(), false));
+                                            self.state.status_message =
+                                                Some(("✅ Deleted endpoint".to_string(), false));
                                         }
                                         Err(e) => {
-                                            self.state.status_message = Some((format!("❌ Delete failed: {e}"), true));
+                                            self.state.status_message =
+                                                Some((format!("❌ Delete failed: {e}"), true));
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    self.state.status_message = Some((format!("❌ Invalid endpoint ID: {e}"), true));
+                                    self.state.status_message =
+                                        Some((format!("❌ Invalid endpoint ID: {e}"), true));
                                 }
                             }
                         } else {
-                            self.state.status_message = Some(("❌ Vault not unlocked".to_string(), true));
+                            self.state.status_message =
+                                Some(("❌ Vault not unlocked".to_string(), true));
                         }
                     }
                     ConfirmAction::DeleteAgent(id) => {
@@ -2369,7 +2631,10 @@ impl App {
                         if self.state.selected_agent >= self.state.agents.len() {
                             self.state.selected_agent = self.state.agents.len().saturating_sub(1);
                         }
-                        self.state.status_message = Some((format!("Disabled agent: {id} (edit config to persist)"), false));
+                        self.state.status_message = Some((
+                            format!("Disabled agent: {id} (edit config to persist)"),
+                            false,
+                        ));
                     }
                     ConfirmAction::KillSession(key) => {
                         // Spawn async task to kill session via gateway API
@@ -2402,7 +2667,11 @@ impl App {
         Ok(())
     }
 
-    fn handle_view_context_files(&mut self, key: KeyEvent, state: ViewContextFilesState) -> Result<()> {
+    fn handle_view_context_files(
+        &mut self,
+        key: KeyEvent,
+        state: ViewContextFilesState,
+    ) -> Result<()> {
         match key.code {
             KeyCode::Esc => {
                 self.state.input_mode = InputMode::Normal;
@@ -2430,9 +2699,12 @@ impl App {
                         self.fetch_context_file(&agent_id, &filename);
                     } else {
                         // Open editor with empty content for new file
-                        self.state.input_mode = InputMode::EditContextFile(
-                            super::state::EditContextFileState::new(agent_id, filename, String::new())
-                        );
+                        self.state.input_mode =
+                            InputMode::EditContextFile(super::state::EditContextFileState::new(
+                                agent_id,
+                                filename,
+                                String::new(),
+                            ));
                     }
                 }
             }
@@ -2441,7 +2713,11 @@ impl App {
         Ok(())
     }
 
-    fn handle_edit_context_file(&mut self, key: KeyEvent, mut state: super::state::EditContextFileState) -> Result<()> {
+    fn handle_edit_context_file(
+        &mut self,
+        key: KeyEvent,
+        mut state: super::state::EditContextFileState,
+    ) -> Result<()> {
         match key.code {
             KeyCode::Esc => {
                 if state.is_dirty {
@@ -2507,8 +2783,12 @@ impl App {
                 self.state.input_mode = InputMode::EditContextFile(state);
             }
             KeyCode::End => {
-                let line_len = state.content.split('\n')
-                    .nth(state.cursor_line).unwrap_or("").len();
+                let line_len = state
+                    .content
+                    .split('\n')
+                    .nth(state.cursor_line)
+                    .unwrap_or("")
+                    .len();
                 state.cursor_col = line_len;
                 self.state.input_mode = InputMode::EditContextFile(state);
             }
@@ -2537,12 +2817,15 @@ impl App {
                     }
                 }
                 Ok(resp) => {
-                    let _ = tx.send(Message::ContextFileError(
-                        format!("Failed to list files: {}", resp.status())
-                    ));
+                    let _ = tx.send(Message::ContextFileError(format!(
+                        "Failed to list files: {}",
+                        resp.status()
+                    )));
                 }
                 Err(e) => {
-                    let _ = tx.send(Message::ContextFileError(format!("Failed to list files: {e}")));
+                    let _ = tx.send(Message::ContextFileError(format!(
+                        "Failed to list files: {e}"
+                    )));
                 }
             }
         });
@@ -2558,17 +2841,24 @@ impl App {
             match reqwest::get(&url).await {
                 Ok(resp) if resp.status().is_success() => {
                     if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        let content = json.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let content = json
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         let _ = tx.send(Message::ContextFileLoaded(agent_id, filename, content));
                     }
                 }
                 Ok(resp) => {
-                    let _ = tx.send(Message::ContextFileError(
-                        format!("Failed to load {filename}: {}", resp.status())
-                    ));
+                    let _ = tx.send(Message::ContextFileError(format!(
+                        "Failed to load {filename}: {}",
+                        resp.status()
+                    )));
                 }
                 Err(e) => {
-                    let _ = tx.send(Message::ContextFileError(format!("Failed to load {filename}: {e}")));
+                    let _ = tx.send(Message::ContextFileError(format!(
+                        "Failed to load {filename}: {e}"
+                    )));
                 }
             }
         });
@@ -2588,12 +2878,15 @@ impl App {
                     let _ = tx.send(Message::ContextFileSaved(agent_id, filename));
                 }
                 Ok(resp) => {
-                    let _ = tx.send(Message::ContextFileError(
-                        format!("Failed to save {filename}: {}", resp.status())
-                    ));
+                    let _ = tx.send(Message::ContextFileError(format!(
+                        "Failed to save {filename}: {}",
+                        resp.status()
+                    )));
                 }
                 Err(e) => {
-                    let _ = tx.send(Message::ContextFileError(format!("Failed to save {filename}: {e}")));
+                    let _ = tx.send(Message::ContextFileError(format!(
+                        "Failed to save {filename}: {e}"
+                    )));
                 }
             }
         });
@@ -2605,11 +2898,16 @@ impl App {
                 self.state.input_mode = InputMode::Normal;
             }
             // Shift+Enter or Alt+Enter inserts a newline (up to 10 lines)
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) || key.modifiers.contains(KeyModifiers::ALT) => {
+            KeyCode::Enter
+                if key.modifiers.contains(KeyModifiers::SHIFT)
+                    || key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 self.insert_chat_newline();
             }
             // Ctrl+J (LF) or Ctrl+N inserts a newline — universally supported fallback
-            KeyCode::Char('j') | KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('j') | KeyCode::Char('n')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 self.insert_chat_newline();
             }
             // Plain Enter sends the message
@@ -2716,9 +3014,16 @@ impl App {
     }
 
     fn insert_chat_newline(&mut self) {
-        let newline_count = self.state.input_buffer.chars().filter(|&c| c == '\n').count();
+        let newline_count = self
+            .state
+            .input_buffer
+            .chars()
+            .filter(|&c| c == '\n')
+            .count();
         if newline_count < 9 {
-            self.state.input_buffer.insert(self.state.input_cursor, '\n');
+            self.state
+                .input_buffer
+                .insert(self.state.input_cursor, '\n');
             self.state.input_cursor += 1;
         }
     }
@@ -2742,7 +3047,9 @@ impl App {
             if chat.loading {
                 return; // Already processing
             }
-            chat.messages.iter().rev()
+            chat.messages
+                .iter()
+                .rev()
                 .find(|m| m.role == super::state::ChatRole::User)
                 .map(|m| m.content.clone())
         } else {
@@ -2752,11 +3059,19 @@ impl App {
         if let Some(message) = last_user_msg {
             if let Some(chat) = self.state.active_chat_mut() {
                 // Remove trailing error/system messages
-                while chat.messages.last().is_some_and(|m| m.role == super::state::ChatRole::System) {
+                while chat
+                    .messages
+                    .last()
+                    .is_some_and(|m| m.role == super::state::ChatRole::System)
+                {
                     chat.messages.pop();
                 }
                 // Remove the previous assistant response too
-                if chat.messages.last().is_some_and(|m| m.role == super::state::ChatRole::Assistant) {
+                if chat
+                    .messages
+                    .last()
+                    .is_some_and(|m| m.role == super::state::ChatRole::Assistant)
+                {
                     chat.messages.pop();
                 }
                 chat.loading = true;
@@ -2806,7 +3121,10 @@ impl App {
         }
 
         // Ensure [providers.<provider>] section exists
-        if !doc["providers"].as_table().is_some_and(|t| t.contains_key(provider_section)) {
+        if !doc["providers"]
+            .as_table()
+            .is_some_and(|t| t.contains_key(provider_section))
+        {
             doc["providers"][provider_section] = toml_edit::Item::Table(toml_edit::Table::new());
         }
 
@@ -2831,7 +3149,7 @@ impl App {
             tracing::warn!("Failed to save provider config: {}", e);
             self.state.status_message = Some((
                 format!("⚠️ Auth mode set but failed to save config: {e}"),
-                true
+                true,
             ));
         } else {
             tracing::info!("Saved {} auth mode: {}", provider_section, auth_mode);
@@ -2844,7 +3162,9 @@ impl App {
         let session_key = self.state.active_session_key().unwrap_or("").to_string();
         // Resolve agent_id from chat_agent_id or the selected session's agent_id
         let agent_id = self.state.chat_agent_id.clone().or_else(|| {
-            self.state.sessions.get(self.state.selected_session)
+            self.state
+                .sessions
+                .get(self.state.selected_session)
                 .map(|s| &s.agent_id)
                 .filter(|id| !id.is_empty() && !id.starts_with("ad-hoc"))
                 .cloned()
@@ -2899,13 +3219,21 @@ impl App {
         // Layout: top strip (menu + cards) | main content | status bar
         let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(5), Constraint::Min(0), Constraint::Length(1)])
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Min(0),
+                Constraint::Length(1),
+            ])
             .split(frame.area());
 
         // Top strip: menu (left) | 1-col gap | cards (right)
         let top = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(22), Constraint::Length(1), Constraint::Min(0)])
+            .constraints([
+                Constraint::Length(22),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
             .split(rows[0]);
 
         // Sidebar menu — same height as cards
@@ -2922,18 +3250,66 @@ impl App {
 
         // Content: page cards in top strip, detail in main area
         match self.state.menu_item {
-            MenuItem::Dashboard => render_dashboard(frame, cards_area, detail_area, &self.state, &self.effect_state),
-            MenuItem::Credentials => render_credentials(frame, cards_area, detail_area, &self.state, self.state.credentials_tab, &self.effect_state),
-            MenuItem::Agents => render_agents(frame, cards_area, detail_area, &self.state, &self.effect_state),
-            MenuItem::Sessions => render_sessions(frame, cards_area, detail_area, &self.state, &self.effect_state),
-            MenuItem::CronJobs => render_cron_jobs(frame, cards_area, detail_area, &self.state, &self.effect_state),
-            MenuItem::Models => render_models(frame, cards_area, detail_area, &self.state, &self.effect_state),
-            MenuItem::Settings => render_settings(frame, cards_area, detail_area, &self.state, &self.effect_state),
+            MenuItem::Dashboard => render_dashboard(
+                frame,
+                cards_area,
+                detail_area,
+                &self.state,
+                &self.effect_state,
+            ),
+            MenuItem::Credentials => render_credentials(
+                frame,
+                cards_area,
+                detail_area,
+                &self.state,
+                self.state.credentials_tab,
+                &self.effect_state,
+            ),
+            MenuItem::Agents => render_agents(
+                frame,
+                cards_area,
+                detail_area,
+                &self.state,
+                &self.effect_state,
+            ),
+            MenuItem::Sessions => render_sessions(
+                frame,
+                cards_area,
+                detail_area,
+                &self.state,
+                &self.effect_state,
+            ),
+            MenuItem::CronJobs => render_cron_jobs(
+                frame,
+                cards_area,
+                detail_area,
+                &self.state,
+                &self.effect_state,
+            ),
+            MenuItem::Models => render_models(
+                frame,
+                cards_area,
+                detail_area,
+                &self.state,
+                &self.effect_state,
+            ),
+            MenuItem::Settings => render_settings(
+                frame,
+                cards_area,
+                detail_area,
+                &self.state,
+                &self.effect_state,
+            ),
         }
 
         // Status bar
         let help_text = self.get_help_text();
-        render_status_bar(frame, rows[2], self.state.status_message.as_ref(), &help_text);
+        render_status_bar(
+            frame,
+            rows[2],
+            self.state.status_message.as_ref(),
+            &help_text,
+        );
 
         // Render modals on top
         self.render_modals(frame);
@@ -2972,16 +3348,41 @@ impl App {
                 render_view_session_modal(frame, frame.area(), session_key, &self.state.sessions);
             }
             InputMode::ViewEndpoint { endpoint_index } => {
-                render_view_endpoint_modal(frame, frame.area(), *endpoint_index, &self.state.endpoints);
+                render_view_endpoint_modal(
+                    frame,
+                    frame.area(),
+                    *endpoint_index,
+                    &self.state.endpoints,
+                );
             }
             InputMode::ViewProvider { provider_index } => {
-                render_view_provider_modal(frame, frame.area(), *provider_index, &self.state.credential_schemas, &self.state.endpoints);
+                render_view_provider_modal(
+                    frame,
+                    frame.area(),
+                    *provider_index,
+                    &self.state.credential_schemas,
+                    &self.state.endpoints,
+                );
             }
-            InputMode::ViewModelList { provider_index, scroll } => {
-                render_view_model_list_modal(frame, frame.area(), *provider_index, *scroll, &self.state.providers);
+            InputMode::ViewModelList {
+                provider_index,
+                scroll,
+            } => {
+                render_view_model_list_modal(
+                    frame,
+                    frame.area(),
+                    *provider_index,
+                    *scroll,
+                    &self.state.providers,
+                );
             }
             InputMode::ViewPermission { permission_index } => {
-                render_view_permission_modal(frame, frame.area(), *permission_index, &self.state.permissions);
+                render_view_permission_modal(
+                    frame,
+                    frame.area(),
+                    *permission_index,
+                    &self.state.permissions,
+                );
             }
             InputMode::EditPermission(state) => {
                 render_edit_permission_modal(frame, frame.area(), state);
@@ -3000,7 +3401,8 @@ impl App {
         match &self.state.input_mode {
             InputMode::Normal => {
                 if self.state.sidebar_focus {
-                    "Ctrl+Q:Quit │ ↑↓/jk:Navigate │ Enter:Select │ Tab:→Content │ 1-7:Quick".to_string()
+                    "Ctrl+Q:Quit │ ↑↓/jk:Navigate │ Enter:Select │ Tab:→Content │ 1-7:Quick"
+                        .to_string()
                 } else {
                     match self.state.menu_item {
                         MenuItem::Dashboard => {
@@ -3034,19 +3436,36 @@ impl App {
                 }
             }
             InputMode::PasswordInput { .. } => "Enter:Submit │ Esc:Cancel".to_string(),
-            InputMode::AddCredential(_) => "↑↓/Tab:Navigate │ ←→:Type │ Enter:Submit │ Esc:Cancel".to_string(),
+            InputMode::AddCredential(_) => {
+                "↑↓/Tab:Navigate │ ←→:Type │ Enter:Submit │ Esc:Cancel".to_string()
+            }
             InputMode::Confirm { .. } => "y:Yes │ n:No │ Esc:Cancel".to_string(),
-            InputMode::ChatInput => "Enter:Send │ Ctrl+J:Newline │ PgUp/Dn:Scroll │ Ctrl+R:Retry │ Esc:Close".to_string(),
-            InputMode::EditCredential(_) => "↑↓/Tab:Navigate │ Enter:Submit │ Esc:Cancel".to_string(),
-            InputMode::EditProvider(_) => "↑↓/Tab:Navigate │ ←→:Auth Type │ Enter:Save │ Esc:Cancel".to_string(),
-            InputMode::AddAgent(_) | InputMode::EditAgent(_) => "↑↓/Tab:Navigate │ ←→:Cycle Model │ Ctrl+S:Save │ Esc:Cancel".to_string(),
-            InputMode::CreateSession(_) => "↑↓/Tab:Navigate │ ←→:Cycle │ Enter:Create │ Esc:Cancel".to_string(),
+            InputMode::ChatInput => {
+                "Enter:Send │ Ctrl+J:Newline │ PgUp/Dn:Scroll │ Ctrl+R:Retry │ Esc:Close"
+                    .to_string()
+            }
+            InputMode::EditCredential(_) => {
+                "↑↓/Tab:Navigate │ Enter:Submit │ Esc:Cancel".to_string()
+            }
+            InputMode::EditProvider(_) => {
+                "↑↓/Tab:Navigate │ ←→:Auth Type │ Enter:Save │ Esc:Cancel".to_string()
+            }
+            InputMode::AddAgent(_) | InputMode::EditAgent(_) => {
+                "↑↓/Tab:Navigate │ ←→:Cycle Model │ Ctrl+S:Save │ Esc:Cancel".to_string()
+            }
+            InputMode::CreateSession(_) => {
+                "↑↓/Tab:Navigate │ ←→:Cycle │ Enter:Create │ Esc:Cancel".to_string()
+            }
             InputMode::ViewSession { .. } => "Esc/Enter:Close".to_string(),
             InputMode::ViewEndpoint { .. } => "e:Edit │ Esc:Close".to_string(),
             InputMode::ViewProvider { .. } => "e:Configure │ Esc:Close".to_string(),
             InputMode::ViewModelList { .. } => "↑↓:Scroll │ Esc:Close".to_string(),
-            InputMode::ViewPermission { .. } => "e:Edit │ +/-:Reorder │ d:Delete │ Esc:Close".to_string(),
-            InputMode::EditPermission(_) => "↑↓:Field │ ←→:Cycle │ Enter/Ctrl+S:Save │ Esc:Cancel".to_string(),
+            InputMode::ViewPermission { .. } => {
+                "e:Edit │ +/-:Reorder │ d:Delete │ Esc:Close".to_string()
+            }
+            InputMode::EditPermission(_) => {
+                "↑↓:Field │ ←→:Cycle │ Enter/Ctrl+S:Save │ Esc:Cancel".to_string()
+            }
             InputMode::ViewContextFiles(_) => "↑↓:Select │ Enter:Edit │ Esc:Close".to_string(),
             InputMode::EditContextFile(_) => "Ctrl+S:Save │ ↑↓←→:Move │ Esc:Back".to_string(),
         }
@@ -3058,7 +3477,7 @@ fn add_credential_to_vault(
     vault: &mut rockbot_credentials::CredentialVault,
     state: &AddCredentialState,
 ) -> Result<String> {
-    use rockbot_credentials::{EndpointType, CredentialType};
+    use rockbot_credentials::{CredentialType, EndpointType};
 
     // Map TUI endpoint type to core types
     let (endpoint_type, credential_type, secret_data) = match state.endpoint_type {
@@ -3100,7 +3519,8 @@ fn add_credential_to_vault(
         3 => {
             // API Key Service
             let api_key = state.get_field_value("api_key").unwrap_or("");
-            let header_name = state.get_field_value("header_name")
+            let header_name = state
+                .get_field_value("header_name")
                 .unwrap_or("X-API-Key")
                 .to_string();
 
@@ -3127,23 +3547,13 @@ fn add_credential_to_vault(
     };
 
     // Get URL from first field (all types have URL as first dynamic field)
-    let base_url = state.get_field_value("url")
-        .unwrap_or("")
-        .to_string();
+    let base_url = state.get_field_value("url").unwrap_or("").to_string();
 
     // Create endpoint
-    let endpoint = vault.create_endpoint(
-        state.name.clone(),
-        endpoint_type,
-        base_url,
-    )?;
+    let endpoint = vault.create_endpoint(state.name.clone(), endpoint_type, base_url)?;
 
     // Store credential
-    vault.store_credential(
-        endpoint.id,
-        credential_type,
-        &secret_data,
-    )?;
+    vault.store_credential(endpoint.id, credential_type, &secret_data)?;
 
     Ok(state.name.clone())
 }
@@ -3153,8 +3563,6 @@ fn update_credential_in_vault(
     vault: &mut rockbot_credentials::CredentialVault,
     state: &EditCredentialState,
 ) -> Result<String> {
-    
-
     let endpoint_id = uuid::Uuid::parse_str(&state.endpoint_id)?;
 
     // Get the existing endpoint
@@ -3162,7 +3570,8 @@ fn update_credential_in_vault(
 
     // Update endpoint metadata
     endpoint.name = state.name.clone();
-    endpoint.base_url = state.get_field_value("url")
+    endpoint.base_url = state
+        .get_field_value("url")
         .unwrap_or(&state.base_url)
         .to_string();
     endpoint.updated_at = chrono::Utc::now();
@@ -3174,19 +3583,35 @@ fn update_credential_in_vault(
         let secret_data = match state.endpoint_type {
             0 | 1 | 5 => {
                 // Home Assistant / Generic REST / Bearer Token
-                state.get_field_value("token").unwrap_or("").as_bytes().to_vec()
+                state
+                    .get_field_value("token")
+                    .unwrap_or("")
+                    .as_bytes()
+                    .to_vec()
             }
             2 => {
                 // OAuth2 Service
-                state.get_field_value("client_secret").unwrap_or("").as_bytes().to_vec()
+                state
+                    .get_field_value("client_secret")
+                    .unwrap_or("")
+                    .as_bytes()
+                    .to_vec()
             }
             3 => {
                 // API Key Service
-                state.get_field_value("api_key").unwrap_or("").as_bytes().to_vec()
+                state
+                    .get_field_value("api_key")
+                    .unwrap_or("")
+                    .as_bytes()
+                    .to_vec()
             }
             4 => {
                 // Basic Auth
-                state.get_field_value("password").unwrap_or("").as_bytes().to_vec()
+                state
+                    .get_field_value("password")
+                    .unwrap_or("")
+                    .as_bytes()
+                    .to_vec()
             }
             _ => vec![],
         };
@@ -3202,8 +3627,10 @@ fn update_credential_in_vault(
 /// Run the main async TUI event loop
 pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: String) -> Result<()> {
     use crossterm::{
+        event::{
+            KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        },
         execute,
-        event::{PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags, KeyboardEnhancementFlags},
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     };
     use ratatui::backend::CrosstermBackend;
@@ -3217,7 +3644,8 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: Str
     let has_keyboard_enhancement = execute!(
         stdout,
         PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-    ).is_ok();
+    )
+    .is_ok();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -3330,7 +3758,8 @@ async fn initiate_noise_handshake(sender: &rockbot_client::GatewaySender) -> Res
         .map_err(|e| anyhow::anyhow!("Noise initiator creation failed: {e}"))?;
 
     let mut buf = vec![0u8; 65535];
-    let len = initiator.write_message(&[], &mut buf)
+    let len = initiator
+        .write_message(&[], &mut buf)
         .map_err(|e| anyhow::anyhow!("Noise step 1 write failed: {e}"))?;
 
     let payload_b64 = base64_encode_simple(&buf[..len]);
@@ -3339,7 +3768,9 @@ async fn initiate_noise_handshake(sender: &rockbot_client::GatewaySender) -> Res
         "payload": payload_b64,
         "step": 1
     });
-    sender.send(serde_json::to_string(&msg)?).await
+    sender
+        .send(serde_json::to_string(&msg)?)
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to send Noise step 1: {e}"))?;
 
     // Store the handshake state + key for step 3
@@ -3353,8 +3784,12 @@ async fn initiate_noise_handshake(sender: &rockbot_client::GatewaySender) -> Res
 
 /// In-progress Noise handshake state (client side).
 #[cfg(feature = "remote-exec")]
-static NOISE_HANDSHAKE_STATE: tokio::sync::Mutex<Option<(rockbot_client::remote_exec::HandshakeState, rockbot_client::remote_exec::Keypair)>> =
-    tokio::sync::Mutex::const_new(None);
+static NOISE_HANDSHAKE_STATE: tokio::sync::Mutex<
+    Option<(
+        rockbot_client::remote_exec::HandshakeState,
+        rockbot_client::remote_exec::Keypair,
+    )>,
+> = tokio::sync::Mutex::const_new(None);
 
 /// Whether the Noise session is established (remote exec active).
 #[cfg(feature = "remote-exec")]
@@ -3375,10 +3810,14 @@ fn base64_encode_simple(input: &[u8]) -> String {
         output.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
         if chunk.len() > 1 {
             output.push(ALPHABET[((triple >> 6) & 0x3F) as usize] as char);
-        } else { output.push('='); }
+        } else {
+            output.push('=');
+        }
         if chunk.len() > 2 {
             output.push(ALPHABET[(triple & 0x3F) as usize] as char);
-        } else { output.push('='); }
+        } else {
+            output.push('=');
+        }
     }
     output
 }
@@ -3392,7 +3831,9 @@ fn base64_decode_simple(input: &str) -> Result<Vec<u8>> {
     let mut buf = 0u32;
     let mut bits = 0;
     for c in input.bytes() {
-        let val = ALPHABET.iter().position(|&b| b == c)
+        let val = ALPHABET
+            .iter()
+            .position(|&b| b == c)
             .ok_or_else(|| anyhow::anyhow!("invalid base64 character"))? as u32;
         buf = (buf << 6) | val;
         bits += 6;
@@ -3445,7 +3886,11 @@ async fn handle_noise_step2(sender: &rockbot_client::GatewaySender, payload_b64:
         "payload": payload_b64,
         "step": 3
     });
-    if sender.send(serde_json::to_string(&msg).unwrap_or_default()).await.is_err() {
+    if sender
+        .send(serde_json::to_string(&msg).unwrap_or_default())
+        .await
+        .is_err()
+    {
         tracing::warn!("Failed to send Noise step 3");
         state.take();
         return;
@@ -3463,7 +3908,9 @@ async fn handle_noise_step2(sender: &rockbot_client::GatewaySender, payload_b64:
             "client_type": "tui",
             "working_dir": cwd,
         });
-        let _ = sender.send(serde_json::to_string(&caps_msg).unwrap_or_default()).await;
+        let _ = sender
+            .send(serde_json::to_string(&caps_msg).unwrap_or_default())
+            .await;
         tracing::info!("Sent TUI capabilities (filesystem, shell, network)");
         NOISE_SESSION_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -3493,18 +3940,33 @@ async fn handle_remote_tool_request(
     let registry = match rockbot_tools::ToolRegistry::new(tool_config).await {
         Ok(r) => r,
         Err(e) => {
-            send_tool_response(sender, request_id, false, &format!("Failed to create tool registry: {e}"), start.elapsed()).await;
+            send_tool_response(
+                sender,
+                request_id,
+                false,
+                &format!("Failed to create tool registry: {e}"),
+                start.elapsed(),
+            )
+            .await;
             return;
         }
     };
 
     let workspace_path = std::path::PathBuf::from(workspace);
     let mut capabilities = rockbot_security::Capabilities::new();
-    capabilities.add(rockbot_security::Capability::FilesystemRead(workspace_path.clone()));
-    capabilities.add(rockbot_security::Capability::FilesystemWrite(workspace_path.clone()));
+    capabilities.add(rockbot_security::Capability::FilesystemRead(
+        workspace_path.clone(),
+    ));
+    capabilities.add(rockbot_security::Capability::FilesystemWrite(
+        workspace_path.clone(),
+    ));
     capabilities.add(rockbot_security::Capability::ProcessExecute);
-    capabilities.add(rockbot_security::Capability::FilesystemRead(std::path::PathBuf::from("/")));
-    capabilities.add(rockbot_security::Capability::FilesystemWrite(std::path::PathBuf::from("/")));
+    capabilities.add(rockbot_security::Capability::FilesystemRead(
+        std::path::PathBuf::from("/"),
+    ));
+    capabilities.add(rockbot_security::Capability::FilesystemWrite(
+        std::path::PathBuf::from("/"),
+    ));
 
     let context = rockbot_tools::ToolExecutionContext {
         session_id: session_id.to_string(),
@@ -3529,15 +3991,26 @@ async fn handle_remote_tool_request(
         Ok(result) => {
             let output = match &result.result {
                 rockbot_tools::message::ToolResult::Text { content } => content.clone(),
-                rockbot_tools::message::ToolResult::Json { data } => serde_json::to_string(data).unwrap_or_default(),
+                rockbot_tools::message::ToolResult::Json { data } => {
+                    serde_json::to_string(data).unwrap_or_default()
+                }
                 rockbot_tools::message::ToolResult::Error { message, .. } => message.clone(),
                 rockbot_tools::message::ToolResult::File { path, .. } => format!("[File: {path}]"),
-                rockbot_tools::message::ToolResult::Handoff { .. } => "[Handoff — not applicable for remote exec]".to_string(),
+                rockbot_tools::message::ToolResult::Handoff { .. } => {
+                    "[Handoff — not applicable for remote exec]".to_string()
+                }
             };
             send_tool_response(sender, request_id, result.success, &output, start.elapsed()).await;
         }
         Err(e) => {
-            send_tool_response(sender, request_id, false, &format!("Tool execution error: {e}"), start.elapsed()).await;
+            send_tool_response(
+                sender,
+                request_id,
+                false,
+                &format!("Tool execution error: {e}"),
+                start.elapsed(),
+            )
+            .await;
         }
     }
 }
@@ -3564,7 +4037,10 @@ async fn send_tool_response(
     loop {
         match sender.send(payload.clone()).await {
             Ok(()) => {
-                tracing::info!("Remote tool response sent: request={request_id}, success={success}, time={}ms", elapsed.as_millis());
+                tracing::info!(
+                    "Remote tool response sent: request={request_id}, success={success}, time={}ms",
+                    elapsed.as_millis()
+                );
                 return;
             }
             Err(e) => {
@@ -3592,40 +4068,63 @@ async fn handle_gateway_event(
             let _ = tx.send(Message::ChatStreamChunk(format!("{session_key}:{delta}")));
         }
         GatewayEvent::ToolCall { tool_name } => {
-            let _ = tx.send(Message::SetStatus(format!("Running: {tool_name}..."), false));
-        }
-        GatewayEvent::ToolResult { tool_name, success, duration_ms } => {
-            let status = if *success { "✓" } else { "✗" };
             let _ = tx.send(Message::SetStatus(
-                format!("{status} {tool_name} ({duration_ms}ms)"), !success
+                format!("Running: {tool_name}..."),
+                false,
             ));
         }
-        GatewayEvent::AgentResponse { session_key, content, tool_calls, tokens_used, processing_time_ms } => {
-            let tui_tool_calls: Vec<ToolCallInfo> = tool_calls.iter().map(|tc| {
-                ToolCallInfo {
+        GatewayEvent::ToolResult {
+            tool_name,
+            success,
+            duration_ms,
+        } => {
+            let status = if *success { "✓" } else { "✗" };
+            let _ = tx.send(Message::SetStatus(
+                format!("{status} {tool_name} ({duration_ms}ms)"),
+                !success,
+            ));
+        }
+        GatewayEvent::AgentResponse {
+            session_key,
+            content,
+            tool_calls,
+            tokens_used,
+            processing_time_ms,
+        } => {
+            let tui_tool_calls: Vec<ToolCallInfo> = tool_calls
+                .iter()
+                .map(|tc| ToolCallInfo {
                     tool_name: tc.tool_name.clone(),
                     arguments: String::new(),
                     result: truncate_tool_result(&tc.result, 500),
                     success: tc.success,
                     duration_ms: tc.duration_ms,
                     expanded: false,
-                }
-            }).collect();
+                })
+                .collect();
 
             if tui_tool_calls.is_empty() {
                 let _ = tx.send(Message::ChatResponse(session_key.clone(), content.clone()));
             } else {
-                let _ = tx.send(Message::ChatAgentResponse(session_key.clone(), content.clone(), tui_tool_calls));
+                let _ = tx.send(Message::ChatAgentResponse(
+                    session_key.clone(),
+                    content.clone(),
+                    tui_tool_calls,
+                ));
             }
 
             if let Some(tokens) = tokens_used {
                 if tokens.total_tokens > 0 {
                     let status = if let Some(time_ms) = processing_time_ms {
-                        format!("Tokens: {} ({} prompt + {} completion) | {time_ms}ms",
-                            tokens.total_tokens, tokens.prompt_tokens, tokens.completion_tokens)
+                        format!(
+                            "Tokens: {} ({} prompt + {} completion) | {time_ms}ms",
+                            tokens.total_tokens, tokens.prompt_tokens, tokens.completion_tokens
+                        )
                     } else {
-                        format!("Tokens: {} ({} prompt + {} completion)",
-                            tokens.total_tokens, tokens.prompt_tokens, tokens.completion_tokens)
+                        format!(
+                            "Tokens: {} ({} prompt + {} completion)",
+                            tokens.total_tokens, tokens.prompt_tokens, tokens.completion_tokens
+                        )
                     };
                     let _ = tx.send(Message::SetStatus(status, false));
                 }
@@ -3634,7 +4133,13 @@ async fn handle_gateway_event(
         GatewayEvent::AgentError { session_key, error } => {
             let _ = tx.send(Message::ChatError(session_key.clone(), error.clone()));
         }
-        GatewayEvent::TokenUsage { session_key, prompt_tokens, completion_tokens, total_tokens, cumulative_total } => {
+        GatewayEvent::TokenUsage {
+            session_key,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            cumulative_total,
+        } => {
             let _ = tx.send(Message::ChatTokenUsage {
                 session_key: session_key.clone(),
                 prompt_tokens: *prompt_tokens,
@@ -3643,7 +4148,12 @@ async fn handle_gateway_event(
                 cumulative_total: *cumulative_total,
             });
         }
-        GatewayEvent::ThinkingStatus { session_key, phase, tool_name, iteration } => {
+        GatewayEvent::ThinkingStatus {
+            session_key,
+            phase,
+            tool_name,
+            iteration,
+        } => {
             let _ = tx.send(Message::ChatThinkingStatus {
                 session_key: session_key.clone(),
                 phase: phase.clone(),
@@ -3652,7 +4162,13 @@ async fn handle_gateway_event(
             });
         }
         GatewayEvent::Pong => {}
-        GatewayEvent::HealthStatus { version, uptime_secs, active_sessions, pending_agents, .. } => {
+        GatewayEvent::HealthStatus {
+            version,
+            uptime_secs,
+            active_sessions,
+            pending_agents,
+            ..
+        } => {
             let gateway_status = super::state::GatewayStatus {
                 connected: true,
                 version: version.clone(),
@@ -3667,7 +4183,8 @@ async fn handle_gateway_event(
         }
         GatewayEvent::Disconnected { reason } => {
             let _ = tx.send(Message::SetStatus(
-                format!("WebSocket disconnected: {reason}"), false,
+                format!("WebSocket disconnected: {reason}"),
+                false,
             ));
         }
         GatewayEvent::Error { message } => {
@@ -3691,7 +4208,14 @@ async fn handle_gateway_event(
             }
         }
         #[cfg(feature = "remote-exec")]
-        GatewayEvent::RemoteToolRequest { request_id, tool_name, params, agent_id, session_id, workspace_path } => {
+        GatewayEvent::RemoteToolRequest {
+            request_id,
+            tool_name,
+            params,
+            agent_id,
+            session_id,
+            workspace_path,
+        } => {
             if let Some(c) = client {
                 let sender = c.sender();
                 let request_id = request_id.clone();
@@ -3701,7 +4225,16 @@ async fn handle_gateway_event(
                 let session_id = session_id.clone();
                 let workspace_path = workspace_path.clone();
                 tokio::spawn(async move {
-                    handle_remote_tool_request(&sender, &request_id, &tool_name, &params, &agent_id, &session_id, &workspace_path).await;
+                    handle_remote_tool_request(
+                        &sender,
+                        &request_id,
+                        &tool_name,
+                        &params,
+                        &agent_id,
+                        &session_id,
+                        &workspace_path,
+                    )
+                    .await;
                 });
             }
         }
@@ -3713,7 +4246,10 @@ async fn handle_gateway_event(
     }
 }
 
-use super::state::{AgentInfo, AgentStatus, AuthMethodInfo, CredentialFieldInfo, CredentialSchemaInfo, CronJobInfo, GatewayStatus, ModelProvider, ModelProviderModel, VaultStatus};
+use super::state::{
+    AgentInfo, AgentStatus, AuthMethodInfo, CredentialFieldInfo, CredentialSchemaInfo, CronJobInfo,
+    GatewayStatus, ModelProvider, ModelProviderModel, VaultStatus,
+};
 
 /// Build a reqwest client that accepts self-signed TLS certificates.
 ///
@@ -3729,15 +4265,17 @@ async fn check_gateway_status(gateway_url: &str) -> Result<GatewayStatus> {
     use tokio::time::timeout;
 
     // Try to fetch actual status from the gateway API
-    let client = reqwest::Client::builder().danger_accept_invalid_certs(true)
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
         .connect_timeout(Duration::from_millis(500))
         .timeout(Duration::from_secs(3))
         .build()
         .unwrap_or_else(|_| http_client());
     let status_result = timeout(
         Duration::from_secs(3),
-        client.get(format!("{gateway_url}/api/status")).send()
-    ).await;
+        client.get(format!("{gateway_url}/api/status")).send(),
+    )
+    .await;
 
     match status_result {
         Ok(Ok(response)) if response.status().is_success() => {
@@ -3745,10 +4283,19 @@ async fn check_gateway_status(gateway_url: &str) -> Result<GatewayStatus> {
             if let Ok(json) = response.json::<serde_json::Value>().await {
                 return Ok(GatewayStatus {
                     connected: true,
-                    version: json.get("version").and_then(|v| v.as_str()).map(String::from),
+                    version: json
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                     uptime_secs: json.get("uptime_secs").and_then(serde_json::Value::as_u64),
-                    active_sessions: json.get("active_sessions").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize,
-                    pending_agents: json.get("pending_agents").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize,
+                    active_sessions: json
+                        .get("active_sessions")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0) as usize,
+                    pending_agents: json
+                        .get("pending_agents")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0) as usize,
                 });
             }
             // Connected but couldn't parse response
@@ -3788,11 +4335,15 @@ async fn load_agents(config_path: &PathBuf, gateway_url: &str) -> Result<Vec<Age
 
 /// Load agents from the gateway's /api/agents endpoint
 async fn load_agents_from_gateway(gateway_url: &str) -> Result<Vec<AgentInfo>> {
-    let client = reqwest::Client::builder().danger_accept_invalid_certs(true)
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
         .timeout(std::time::Duration::from_secs(3))
         .build()?;
 
-    let resp = client.get(format!("{gateway_url}/api/agents")).send().await?;
+    let resp = client
+        .get(format!("{gateway_url}/api/agents"))
+        .send()
+        .await?;
     if !resp.status().is_success() {
         anyhow::bail!("Gateway returned {}", resp.status());
     }
@@ -3801,18 +4352,51 @@ async fn load_agents_from_gateway(gateway_url: &str) -> Result<Vec<AgentInfo>> {
     let mut agents = Vec::new();
 
     for entry in &items {
-        let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if id.is_empty() { continue; }
+        let id = entry
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if id.is_empty() {
+            continue;
+        }
 
-        let model = entry.get("model").and_then(|v| v.as_str()).map(String::from);
-        let parent_id = entry.get("parent_id").and_then(|v| v.as_str()).map(String::from);
-        let system_prompt = entry.get("system_prompt").and_then(|v| v.as_str()).map(String::from);
-        let workspace = entry.get("workspace").and_then(|v| v.as_str()).map(String::from);
-        let max_tool_calls = entry.get("max_tool_calls").and_then(serde_json::Value::as_u64).map(|n| n as u32);
-        let temperature = entry.get("temperature").and_then(serde_json::Value::as_f64).map(|n| n as f32);
-        let max_tokens = entry.get("max_tokens").and_then(serde_json::Value::as_u64).map(|n| n as u32);
-        let enabled = entry.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true);
-        let session_count = entry.get("session_count").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+        let model = entry
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let parent_id = entry
+            .get("parent_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let system_prompt = entry
+            .get("system_prompt")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let workspace = entry
+            .get("workspace")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let max_tool_calls = entry
+            .get("max_tool_calls")
+            .and_then(serde_json::Value::as_u64)
+            .map(|n| n as u32);
+        let temperature = entry
+            .get("temperature")
+            .and_then(serde_json::Value::as_f64)
+            .map(|n| n as f32);
+        let max_tokens = entry
+            .get("max_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .map(|n| n as u32);
+        let enabled = entry
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let session_count = entry
+            .get("session_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
 
         let status = match entry.get("status").and_then(|v| v.as_str()) {
             Some("active") => AgentStatus::Active,
@@ -3844,26 +4428,62 @@ async fn load_agents_from_gateway(gateway_url: &str) -> Result<Vec<AgentInfo>> {
 /// Load agents from the TOML config file (fallback when gateway is unavailable)
 async fn load_agents_from_config(config_path: &PathBuf) -> Result<Vec<AgentInfo>> {
     let content = tokio::fs::read_to_string(config_path).await?;
-    let doc: toml::Value = content.parse().unwrap_or(toml::Value::Table(toml::map::Map::new()));
+    let doc: toml::Value = content
+        .parse()
+        .unwrap_or(toml::Value::Table(toml::map::Map::new()));
 
     let mut agents = Vec::new();
 
     if let Some(agents_table) = doc.get("agents") {
         if let Some(list) = agents_table.get("list").and_then(|v| v.as_array()) {
             for entry in list {
-                let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if id.is_empty() { continue; }
+                let id = entry
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if id.is_empty() {
+                    continue;
+                }
 
-                let model = entry.get("model").and_then(|v| v.as_str()).map(String::from);
-                let parent_id = entry.get("parent_id").and_then(|v| v.as_str()).map(String::from);
-                let system_prompt = entry.get("system_prompt").and_then(|v| v.as_str()).map(String::from);
-                let workspace = entry.get("workspace").and_then(|v| v.as_str()).map(String::from);
-                let max_tool_calls = entry.get("max_tool_calls").and_then(toml::Value::as_integer).map(|n| n as u32);
-                let temperature = entry.get("temperature").and_then(toml::Value::as_float).map(|n| n as f32);
-                let max_tokens = entry.get("max_tokens").and_then(toml::Value::as_integer).map(|n| n as u32);
-                let enabled = entry.get("enabled").and_then(toml::Value::as_bool).unwrap_or(true);
+                let model = entry
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let parent_id = entry
+                    .get("parent_id")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let system_prompt = entry
+                    .get("system_prompt")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let workspace = entry
+                    .get("workspace")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let max_tool_calls = entry
+                    .get("max_tool_calls")
+                    .and_then(toml::Value::as_integer)
+                    .map(|n| n as u32);
+                let temperature = entry
+                    .get("temperature")
+                    .and_then(toml::Value::as_float)
+                    .map(|n| n as f32);
+                let max_tokens = entry
+                    .get("max_tokens")
+                    .and_then(toml::Value::as_integer)
+                    .map(|n| n as u32);
+                let enabled = entry
+                    .get("enabled")
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(true);
 
-                let status = if enabled { AgentStatus::Active } else { AgentStatus::Disabled };
+                let status = if enabled {
+                    AgentStatus::Active
+                } else {
+                    AgentStatus::Disabled
+                };
 
                 agents.push(AgentInfo {
                     id,
@@ -3905,14 +4525,22 @@ async fn check_vault_status(vault_path: &PathBuf) -> Result<VaultStatus> {
     use rockbot_credentials::CredentialVault;
 
     // Debug logging
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/rockbot_debug.log") {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/rockbot_debug.log")
+    {
         use std::io::Write;
         let _ = writeln!(f, "check_vault_status: path={vault_path:?}");
     }
 
     let exists = CredentialVault::exists(vault_path);
 
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/rockbot_debug.log") {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/rockbot_debug.log")
+    {
         use std::io::Write;
         let _ = writeln!(f, "check_vault_status: exists={exists}");
     }
@@ -3931,28 +4559,40 @@ async fn check_vault_status(vault_path: &PathBuf) -> Result<VaultStatus> {
     let unlock_method = match CredentialVault::open(vault_path) {
         Ok(vault) => {
             let method = vault.unlock_method();
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/rockbot_debug.log") {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/rockbot_debug.log")
+            {
                 use std::io::Write;
                 let _ = writeln!(f, "check_vault_status: raw unlock_method={method:?}");
             }
             match method {
-                Some(rockbot_credentials::UnlockMethod::Password { .. }) => {
-                    UnlockMethod::Password
-                }
+                Some(rockbot_credentials::UnlockMethod::Password { .. }) => UnlockMethod::Password,
                 Some(rockbot_credentials::UnlockMethod::Keyfile { path_hint }) => {
-                    UnlockMethod::Keyfile { path: path_hint.clone() }
+                    UnlockMethod::Keyfile {
+                        path: path_hint.clone(),
+                    }
                 }
                 Some(rockbot_credentials::UnlockMethod::Age { public_key, .. }) => {
-                    UnlockMethod::Age { public_key: Some(public_key.clone()) }
+                    UnlockMethod::Age {
+                        public_key: Some(public_key.clone()),
+                    }
                 }
-                Some(rockbot_credentials::UnlockMethod::SshKey { public_key_path, .. }) => {
-                    UnlockMethod::SshKey { path: Some(public_key_path.clone()) }
-                }
+                Some(rockbot_credentials::UnlockMethod::SshKey {
+                    public_key_path, ..
+                }) => UnlockMethod::SshKey {
+                    path: Some(public_key_path.clone()),
+                },
                 None => UnlockMethod::Unknown,
             }
         }
         Err(e) => {
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/rockbot_debug.log") {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/rockbot_debug.log")
+            {
                 use std::io::Write;
                 let _ = writeln!(f, "check_vault_status: open error={e:?}");
             }
@@ -3960,9 +4600,16 @@ async fn check_vault_status(vault_path: &PathBuf) -> Result<VaultStatus> {
         }
     };
 
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/rockbot_debug.log") {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/rockbot_debug.log")
+    {
         use std::io::Write;
-        let _ = writeln!(f, "check_vault_status: final unlock_method={unlock_method:?}");
+        let _ = writeln!(
+            f,
+            "check_vault_status: final unlock_method={unlock_method:?}"
+        );
     }
 
     Ok(VaultStatus {
@@ -3978,11 +4625,15 @@ async fn check_vault_status(vault_path: &PathBuf) -> Result<VaultStatus> {
 /// Truncate a tool result string for display
 /// Load cron jobs from the gateway API
 async fn load_cron_jobs_from_gateway(gateway_url: &str) -> Result<Vec<CronJobInfo>> {
-    let client = reqwest::Client::builder().danger_accept_invalid_certs(true)
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
         .timeout(std::time::Duration::from_secs(3))
         .build()?;
 
-    let resp = client.get(format!("{gateway_url}/api/cron/jobs")).send().await?;
+    let resp = client
+        .get(format!("{gateway_url}/api/cron/jobs"))
+        .send()
+        .await?;
     if !resp.status().is_success() {
         anyhow::bail!("Gateway returned {}", resp.status());
     }
@@ -3991,35 +4642,64 @@ async fn load_cron_jobs_from_gateway(gateway_url: &str) -> Result<Vec<CronJobInf
     let mut jobs = Vec::new();
 
     for entry in &items {
-        let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if id.is_empty() { continue; }
+        let id = entry
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if id.is_empty() {
+            continue;
+        }
 
         let schedule_val = entry.get("schedule");
-        let schedule_str = match schedule_val.and_then(|s| s.get("type")).and_then(|t| t.as_str()) {
-            Some("cron") => schedule_val.and_then(|s| s.get("expression")).and_then(|e| e.as_str())
-                .unwrap_or("?").to_string(),
+        let schedule_str = match schedule_val
+            .and_then(|s| s.get("type"))
+            .and_then(|t| t.as_str())
+        {
+            Some("cron") => schedule_val
+                .and_then(|s| s.get("expression"))
+                .and_then(|e| e.as_str())
+                .unwrap_or("?")
+                .to_string(),
             Some("every") => {
-                let ms = schedule_val.and_then(|s| s.get("interval_ms")).and_then(|v| v.as_u64()).unwrap_or(0);
-                if ms >= 3_600_000 { format!("every {}h", ms / 3_600_000) }
-                else if ms >= 60_000 { format!("every {}m", ms / 60_000) }
-                else { format!("every {}s", ms / 1000) }
+                let ms = schedule_val
+                    .and_then(|s| s.get("interval_ms"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                if ms >= 3_600_000 {
+                    format!("every {}h", ms / 3_600_000)
+                } else if ms >= 60_000 {
+                    format!("every {}m", ms / 60_000)
+                } else {
+                    format!("every {}s", ms / 1000)
+                }
             }
             Some("at") => {
-                let at_ms = schedule_val.and_then(|s| s.get("at_ms")).and_then(|v| v.as_u64()).unwrap_or(0);
+                let at_ms = schedule_val
+                    .and_then(|s| s.get("at_ms"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
                 format!("once @{at_ms}")
             }
             _ => "unknown".to_string(),
         };
 
         let state_val = entry.get("state");
-        let last_run = state_val.and_then(|s| s.get("last_run_at_ms")).and_then(|v| v.as_u64())
+        let last_run = state_val
+            .and_then(|s| s.get("last_run_at_ms"))
+            .and_then(|v| v.as_u64())
             .map(|ms| {
                 chrono::DateTime::from_timestamp_millis(ms as i64)
                     .map(|dt| dt.format("%H:%M:%S").to_string())
                     .unwrap_or_else(|| format!("{ms}"))
             });
-        let last_status = state_val.and_then(|s| s.get("last_run_status")).and_then(|v| v.as_str()).map(String::from);
-        let next_run = state_val.and_then(|s| s.get("next_run_at_ms")).and_then(|v| v.as_u64())
+        let last_status = state_val
+            .and_then(|s| s.get("last_run_status"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let next_run = state_val
+            .and_then(|s| s.get("next_run_at_ms"))
+            .and_then(|v| v.as_u64())
             .map(|ms| {
                 chrono::DateTime::from_timestamp_millis(ms as i64)
                     .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
@@ -4028,9 +4708,19 @@ async fn load_cron_jobs_from_gateway(gateway_url: &str) -> Result<Vec<CronJobInf
 
         jobs.push(CronJobInfo {
             id,
-            name: entry.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            enabled: entry.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false),
-            agent_id: entry.get("agent_id").and_then(|v| v.as_str()).map(String::from),
+            name: entry
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            enabled: entry
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            agent_id: entry
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             schedule: schedule_str,
             last_run,
             last_status,
@@ -4042,7 +4732,8 @@ async fn load_cron_jobs_from_gateway(gateway_url: &str) -> Result<Vec<CronJobInf
 }
 
 async fn toggle_cron_job(gateway_url: &str, job_id: &str, enabled: bool) -> Result<()> {
-    let client = reqwest::Client::builder().danger_accept_invalid_certs(true)
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
 
@@ -4058,7 +4749,8 @@ async fn toggle_cron_job(gateway_url: &str, job_id: &str, enabled: bool) -> Resu
 }
 
 async fn delete_cron_job(gateway_url: &str, job_id: &str) -> Result<()> {
-    let client = reqwest::Client::builder().danger_accept_invalid_certs(true)
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
 
@@ -4073,7 +4765,8 @@ async fn delete_cron_job(gateway_url: &str, job_id: &str) -> Result<()> {
 }
 
 async fn trigger_cron_job(gateway_url: &str, job_id: &str) -> Result<()> {
-    let client = reqwest::Client::builder().danger_accept_invalid_certs(true)
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
 
@@ -4152,7 +4845,10 @@ async fn kill_session(gateway_url: &str, session_key: &str) -> Result<()> {
         // 404 means session already gone, which is fine
         Ok(())
     } else {
-        Err(anyhow::anyhow!("Failed to kill session: {}", response.status()))
+        Err(anyhow::anyhow!(
+            "Failed to kill session: {}",
+            response.status()
+        ))
     }
 }
 
@@ -4163,7 +4859,9 @@ async fn load_session_messages(gateway_url: &str, session_key: &str) -> Result<V
     let client = http_client();
     let result = timeout(
         Duration::from_secs(3),
-        client.get(format!("{gateway_url}/api/sessions/{session_key}/messages")).send(),
+        client
+            .get(format!("{gateway_url}/api/sessions/{session_key}/messages"))
+            .send(),
     )
     .await;
 
@@ -4186,7 +4884,8 @@ async fn load_session_messages(gateway_url: &str, session_key: &str) -> Result<V
                             } else {
                                 return None;
                             };
-                            let role_str = content.get("role")
+                            let role_str = content
+                                .get("role")
                                 .or_else(|| msg.get("role"))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("user");
@@ -4195,10 +4894,16 @@ async fn load_session_messages(gateway_url: &str, session_key: &str) -> Result<V
                                 "system" => super::state::ChatRole::System,
                                 _ => super::state::ChatRole::User,
                             };
-                            let timestamp = msg.get("created_at")
+                            let timestamp = msg
+                                .get("created_at")
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string());
-                            Some(ChatMessage { role, content: text, timestamp, tool_calls: Vec::new() })
+                            Some(ChatMessage {
+                                role,
+                                content: text,
+                                timestamp,
+                                tool_calls: Vec::new(),
+                            })
                         })
                         .collect()
                 })
@@ -4259,17 +4964,22 @@ async fn save_provider_via_gateway(
     if !ep_response.status().is_success() {
         let status = ep_response.status();
         let body = ep_response.text().await.unwrap_or_default();
-        return Err(anyhow::anyhow!("Failed to create endpoint ({status}): {body}"));
+        return Err(anyhow::anyhow!(
+            "Failed to create endpoint ({status}): {body}"
+        ));
     }
 
     let ep: serde_json::Value = ep_response.json().await?;
-    let ep_id = ep["id"].as_str()
+    let ep_id = ep["id"]
+        .as_str()
         .ok_or_else(|| anyhow::anyhow!("No endpoint ID in response"))?;
 
     // Step 2: Store credential (base64 encoded)
     let encoded_secret = base64_encode(secret.as_bytes());
     let cred_response = client
-        .post(format!("{gateway_url}/api/credentials/endpoints/{ep_id}/credential"))
+        .post(format!(
+            "{gateway_url}/api/credentials/endpoints/{ep_id}/credential"
+        ))
         .json(&serde_json::json!({
             "credential_type": "bearer_token",
             "secret": encoded_secret,
@@ -4281,7 +4991,9 @@ async fn save_provider_via_gateway(
     if !cred_response.status().is_success() {
         let status = cred_response.status();
         let body = cred_response.text().await.unwrap_or_default();
-        return Err(anyhow::anyhow!("Failed to store credential ({status}): {body}"));
+        return Err(anyhow::anyhow!(
+            "Failed to store credential ({status}): {body}"
+        ));
     }
 
     Ok(())
@@ -4309,11 +5021,27 @@ async fn load_providers_from_gateway(gateway_url: &str) -> Result<Vec<ModelProvi
                         .filter_map(|p| {
                             let id = p.get("id")?.as_str()?.to_string();
                             let name = p.get("name")?.as_str()?.to_string();
-                            let available = p.get("available").and_then(serde_json::Value::as_bool).unwrap_or(false);
-                            let auth_type = p.get("auth_type").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-                            let supports_streaming = p.get("supports_streaming").and_then(serde_json::Value::as_bool).unwrap_or(false);
-                            let supports_tools = p.get("supports_tools").and_then(serde_json::Value::as_bool).unwrap_or(false);
-                            let supports_vision = p.get("supports_vision").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                            let available = p
+                                .get("available")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false);
+                            let auth_type = p
+                                .get("auth_type")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let supports_streaming = p
+                                .get("supports_streaming")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false);
+                            let supports_tools = p
+                                .get("supports_tools")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false);
+                            let supports_vision = p
+                                .get("supports_vision")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false);
 
                             let models = p
                                 .get("models")
@@ -4325,9 +5053,16 @@ async fn load_providers_from_gateway(gateway_url: &str) -> Result<Vec<ModelProvi
                                             Some(ModelProviderModel {
                                                 id: m.get("id")?.as_str()?.to_string(),
                                                 name: m.get("name")?.as_str()?.to_string(),
-                                                description: m.get("description")?.as_str()?.to_string(),
-                                                context_window: m.get("context_window")?.as_u64()? as u32,
-                                                max_output_tokens: m.get("max_output_tokens").and_then(serde_json::Value::as_u64).map(|v| v as u32),
+                                                description: m
+                                                    .get("description")?
+                                                    .as_str()?
+                                                    .to_string(),
+                                                context_window: m.get("context_window")?.as_u64()?
+                                                    as u32,
+                                                max_output_tokens: m
+                                                    .get("max_output_tokens")
+                                                    .and_then(serde_json::Value::as_u64)
+                                                    .map(|v| v as u32),
                                             })
                                         })
                                         .collect()
@@ -4362,7 +5097,9 @@ async fn load_credential_schemas(gateway_url: &str) -> Result<Vec<CredentialSche
     let client = http_client();
     let result = timeout(
         Duration::from_secs(2),
-        client.get(format!("{gateway_url}/api/credentials/schemas")).send(),
+        client
+            .get(format!("{gateway_url}/api/credentials/schemas"))
+            .send(),
     )
     .await;
 
@@ -4454,8 +5191,12 @@ async fn load_sessions_from_gateway(gateway_url: &str) -> Result<Vec<super::stat
                         let id = s.get("id")?.as_str()?.to_string();
                         let agent_id = s.get("agent_id")?.as_str()?.to_string();
                         let session_key = s.get("session_key")?.as_str()?.to_string();
-                        let created_at = s.get("created_at").and_then(|v| v.as_str()).map(String::from);
-                        let model = s.get("metadata")
+                        let created_at = s
+                            .get("created_at")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let model = s
+                            .get("metadata")
                             .and_then(|m| m.get("model"))
                             .and_then(|v| v.as_str())
                             .map(String::from);
@@ -4489,17 +5230,28 @@ async fn load_sessions_from_gateway(gateway_url: &str) -> Result<Vec<super::stat
 }
 
 /// Create a session via the gateway API
-async fn create_session_via_gateway(gateway_url: &str, agent_id: Option<&str>, model: Option<&str>) -> Result<String> {
-    let client = reqwest::Client::builder().danger_accept_invalid_certs(true)
+async fn create_session_via_gateway(
+    gateway_url: &str,
+    agent_id: Option<&str>,
+    model: Option<&str>,
+) -> Result<String> {
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
         .timeout(Duration::from_secs(5))
         .build()?;
 
     let mut body = serde_json::Map::new();
     if let Some(id) = agent_id {
-        body.insert("agent_id".to_string(), serde_json::Value::String(id.to_string()));
+        body.insert(
+            "agent_id".to_string(),
+            serde_json::Value::String(id.to_string()),
+        );
     }
     if let Some(m) = model {
-        body.insert("model".to_string(), serde_json::Value::String(m.to_string()));
+        body.insert(
+            "model".to_string(),
+            serde_json::Value::String(m.to_string()),
+        );
     }
 
     let response = client
@@ -4510,7 +5262,8 @@ async fn create_session_via_gateway(gateway_url: &str, agent_id: Option<&str>, m
 
     if response.status().is_success() {
         let json: serde_json::Value = response.json().await?;
-        let session_id = json.get("id")
+        let session_id = json
+            .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();

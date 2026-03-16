@@ -21,12 +21,14 @@ pub mod trajectory;
 pub use agent::{Agent, AgentResponse, HandoffSignal};
 pub use credential_bridge::VaultCredentialAccessor;
 pub use error::{Error, Result};
-pub use guardrails::{Guardrail, GuardrailResult, GuardrailPipeline, PiiGuardrail, PromptInjectionGuardrail};
-pub use hooks::{Hook, HookEvent, HookResult, HookRegistry};
+pub use guardrails::{
+    Guardrail, GuardrailPipeline, GuardrailResult, PiiGuardrail, PromptInjectionGuardrail,
+};
+pub use hooks::{Hook, HookEvent, HookRegistry, HookResult};
 pub use orchestration::{SwarmBlackboard, WorkflowExecutor};
-pub use skills::{SkillManager, Skill, SkillMetadata, SkillInvocationPolicy, SlashCommandInfo};
-pub use telemetry::{TelemetryConfig, init_telemetry};
-pub use trajectory::{Trajectory, TrajectoryEvent, TrajectoryEntry};
+pub use skills::{Skill, SkillInvocationPolicy, SkillManager, SkillMetadata, SlashCommandInfo};
+pub use telemetry::{init_telemetry, TelemetryConfig};
+pub use trajectory::{Trajectory, TrajectoryEntry, TrajectoryEvent};
 
 /// Create a Message from an LLM message.
 ///
@@ -45,7 +47,9 @@ pub fn from_llm_message(
         rockbot_llm::MessageRole::Tool => MessageRole::Tool,
     };
 
-    let content = MessageContent::Text { text: llm_message.content };
+    let content = MessageContent::Text {
+        text: llm_message.content,
+    };
 
     let mut msg = Message::new(content)
         .with_session_id(session_id)
@@ -61,7 +65,10 @@ pub fn from_llm_message(
     }
 
     if let Some(ref tool_call_id) = llm_message.tool_call_id {
-        msg.metadata.extra.insert("tool_call_id".to_string(), serde_json::Value::String(tool_call_id.clone()));
+        msg.metadata.extra.insert(
+            "tool_call_id".to_string(),
+            serde_json::Value::String(tool_call_id.clone()),
+        );
     }
 
     Ok(msg)

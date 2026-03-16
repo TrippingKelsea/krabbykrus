@@ -90,9 +90,7 @@ impl PermissionEvaluator {
         // Find all matching rules
         let mut matches: Vec<(&Permission, MatchScore)> = perms
             .iter()
-            .filter_map(|perm| {
-                self.matches(perm, method, path).map(|score| (perm, score))
-            })
+            .filter_map(|perm| self.matches(perm, method, path).map(|score| (perm, score)))
             .collect();
 
         if matches.is_empty() {
@@ -114,7 +112,8 @@ impl PermissionEvaluator {
             .collect();
 
         // Among tied matches, pick the most restrictive
-        #[allow(clippy::unwrap_used)] // tied_matches is non-empty (matches.is_empty() checked above)
+        #[allow(clippy::unwrap_used)]
+        // tied_matches is non-empty (matches.is_empty() checked above)
         let (best_perm, _) = tied_matches
             .into_iter()
             .max_by_key(|(perm, _)| restriction_level(perm.permission_level))
@@ -486,7 +485,8 @@ mod tests {
         assert_eq!(result.level, PermissionLevel::Allow);
 
         // Services path -> AllowHIL
-        let result = evaluator.evaluate(endpoint_id, HttpMethod::Post, "/api/services/switch/toggle");
+        let result =
+            evaluator.evaluate(endpoint_id, HttpMethod::Post, "/api/services/switch/toggle");
         assert_eq!(result.level, PermissionLevel::AllowHil);
 
         // Exact path -> AllowHIL2FA
@@ -526,7 +526,12 @@ mod tests {
         let mut evaluator = PermissionEvaluator::new();
 
         let p1 = make_permission(endpoint_id, "/api/states", None, PermissionLevel::Allow);
-        let p2 = make_permission(endpoint_id, "/api/services/**", None, PermissionLevel::AllowHil);
+        let p2 = make_permission(
+            endpoint_id,
+            "/api/services/**",
+            None,
+            PermissionLevel::AllowHil,
+        );
 
         evaluator.add_permission(p1.clone());
         evaluator.add_permission(p2.clone());

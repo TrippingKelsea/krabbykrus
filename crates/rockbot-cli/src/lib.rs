@@ -19,11 +19,11 @@ pub struct Cli {
     /// Configuration file path
     #[arg(short, long, value_name = "FILE")]
     pub config: Option<PathBuf>,
-    
+
     /// Verbose output
     #[arg(short, long, action = clap::ArgAction::Count)]
     pub verbose: u8,
-    
+
     /// Subcommand
     #[command(subcommand)]
     pub command: Commands,
@@ -37,25 +37,25 @@ pub enum Commands {
         #[command(subcommand)]
         command: GatewayCommands,
     },
-    
+
     /// Configuration management
     Config {
         #[command(subcommand)]
         command: ConfigCommands,
     },
-    
+
     /// Session management
     Session {
         #[command(subcommand)]
         command: SessionCommands,
     },
-    
+
     /// Agent management
     Agent {
         #[command(subcommand)]
         command: AgentCommands,
     },
-    
+
     /// Tool management
     Tool {
         #[command(subcommand)]
@@ -67,7 +67,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: CredentialsCommands,
     },
-    
+
     /// TLS certificate management
     Cert {
         #[command(subcommand)]
@@ -76,14 +76,14 @@ pub enum Commands {
 
     /// Health and diagnostics
     Doctor,
-    
+
     /// Interactive TUI dashboard
     Tui {
         /// Gateway address (e.g. 172.30.200.146:18181, https://host:port)
         #[arg(short, long, default_value = "127.0.0.1:18080")]
         gateway: String,
     },
-    
+
     /// Migration from OpenClaw
     Migrate {
         #[command(subcommand)]
@@ -615,11 +615,9 @@ pub async fn run(cli: Cli) -> Result<()> {
             .init();
     } else {
         // CLI mode: write logs to stderr as usual
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .init();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
     }
-    
+
     // Load configuration
     let config_path = cli.config.unwrap_or_else(|| {
         dirs::config_dir()
@@ -627,41 +625,30 @@ pub async fn run(cli: Cli) -> Result<()> {
             .join("rockbot")
             .join("rockbot.toml")
     });
-    
+
     match &cli.command {
-        Commands::Gateway { command } => {
-            commands::gateway::run(command, &config_path).await
-        }
-        Commands::Config { command } => {
-            commands::config::run(command, &config_path).await
-        }
-        Commands::Session { command } => {
-            commands::session::run(command, &config_path).await
-        }
-        Commands::Agent { command } => {
-            commands::agent::run(command, &config_path).await
-        }
-        Commands::Tool { command } => {
-            commands::tool::run(command, &config_path).await
-        }
+        Commands::Gateway { command } => commands::gateway::run(command, &config_path).await,
+        Commands::Config { command } => commands::config::run(command, &config_path).await,
+        Commands::Session { command } => commands::session::run(command, &config_path).await,
+        Commands::Agent { command } => commands::agent::run(command, &config_path).await,
+        Commands::Tool { command } => commands::tool::run(command, &config_path).await,
         Commands::Credentials { command } => {
             commands::credentials::run(command, &config_path).await
         }
-        Commands::Cert { command } => {
-            commands::cert::run(command, &config_path).await
-        }
-        Commands::Doctor => {
-            commands::doctor::run(&config_path).await
-        }
+        Commands::Cert { command } => commands::cert::run(command, &config_path).await,
+        Commands::Doctor => commands::doctor::run(&config_path).await,
         Commands::Tui { gateway } => {
             // Load config to get vault path
             let config = load_config(&config_path).await?;
             let gateway_url = rockbot_client::normalize_gateway_url(gateway);
-            tui::run_app(config_path.clone(), config.credentials.vault_path, gateway_url).await
+            tui::run_app(
+                config_path.clone(),
+                config.credentials.vault_path,
+                gateway_url,
+            )
+            .await
         }
-        Commands::Migrate { command } => {
-            commands::migrate::run(command).await
-        }
+        Commands::Migrate { command } => commands::migrate::run(command).await,
     }
 }
 
@@ -686,8 +673,8 @@ pub async fn load_config(path: &PathBuf) -> Result<Config> {
 
 /// Remove log files older than `max_age_days` from the given directory.
 fn sweep_old_logs(log_dir: &std::path::Path, max_age_days: u64) {
-    let cutoff = std::time::SystemTime::now()
-        - std::time::Duration::from_secs(max_age_days * 86400);
+    let cutoff =
+        std::time::SystemTime::now() - std::time::Duration::from_secs(max_age_days * 86400);
 
     let entries = match std::fs::read_dir(log_dir) {
         Ok(e) => e,

@@ -27,7 +27,7 @@ impl CredentialsTab {
     pub fn titles() -> Vec<&'static str> {
         vec!["Endpoints", "Permissions", "Audit", "Settings"]
     }
-    
+
     pub fn index(&self) -> usize {
         match self {
             Self::Endpoints => 0,
@@ -36,7 +36,7 @@ impl CredentialsTab {
             Self::Settings => 3,
         }
     }
-    
+
     pub fn from_index(idx: usize) -> Self {
         match idx {
             0 => Self::Endpoints,
@@ -54,7 +54,10 @@ pub enum InputMode {
     /// Adding new credential - modal dialog
     AddCredential(AddCredentialState),
     /// Password input (for unlocking)
-    PasswordInput { prompt: String, masked: bool },
+    PasswordInput {
+        prompt: String,
+        masked: bool,
+    },
     /// Confirmation dialog
     Confirm(String),
 }
@@ -89,7 +92,7 @@ impl AddCredentialField {
             Self::Expiration => Self::Name,
         }
     }
-    
+
     fn prev(&self) -> Self {
         match self {
             Self::Name => Self::Expiration,
@@ -168,7 +171,7 @@ impl CredentialsTui {
         let mut endpoint_state = ListState::default();
         endpoint_state.select(Some(0));
         let vault_exists = CredentialVault::exists(&vault_path);
-        
+
         Self {
             vault_path,
             tab: CredentialsTab::Endpoints,
@@ -200,7 +203,7 @@ impl CredentialsTui {
         }
         Ok(())
     }
-    
+
     /// Initialize the vault with a password
     pub fn init_vault_with_password(&mut self, password: &str) -> Result<()> {
         if self.vault_exists {
@@ -209,47 +212,49 @@ impl CredentialsTui {
         if password.len() < 8 {
             anyhow::bail!("Password must be at least 8 characters");
         }
-        
+
         CredentialVault::init_with_password(&self.vault_path, password)?;
         self.vault_exists = true;
         self.load_vault_info()?;
         Ok(())
     }
-    
+
     /// Initialize the vault with a keyfile (auto-generates if needed)
     pub fn init_vault_with_keyfile(&mut self) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
-        
+
         if self.vault_exists {
             anyhow::bail!("Vault already exists");
         }
-        
+
         // Default keyfile path
-        let keyfile_path = self.vault_path.parent()
+        let keyfile_path = self
+            .vault_path
+            .parent()
             .unwrap_or(std::path::Path::new("."))
             .join("vault.key");
-        
+
         // Create parent directory if needed
         if let Some(parent) = keyfile_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        
+
         // Generate keyfile if it doesn't exist
         if !keyfile_path.exists() {
             use rockbot_credentials::crypto::generate_salt;
             let key_bytes = generate_salt();
-            
+
             let mut file = std::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
                 .truncate(true)
                 .mode(0o600)
                 .open(&keyfile_path)?;
-            
+
             use std::io::Write;
             file.write_all(&key_bytes)?;
         }
-        
+
         CredentialVault::init_with_keyfile(&self.vault_path, &keyfile_path)?;
         self.vault_exists = true;
         self.load_vault_info()?;
@@ -298,7 +303,11 @@ impl CredentialsTui {
                 self.tab = CredentialsTab::from_index(next);
             }
             KeyCode::BackTab | KeyCode::Left => {
-                let prev = if self.tab.index() == 0 { 3 } else { self.tab.index() - 1 };
+                let prev = if self.tab.index() == 0 {
+                    3
+                } else {
+                    self.tab.index() - 1
+                };
                 self.tab = CredentialsTab::from_index(prev);
             }
             KeyCode::Char('1') => self.tab = CredentialsTab::Endpoints,
@@ -364,20 +373,20 @@ impl CredentialsTui {
             }
             Some(UnlockMethod::Keyfile { path_hint }) => {
                 // Try auto-unlock with keyfile
-                let kf_path = path_hint.as_ref()
+                let kf_path = path_hint
+                    .as_ref()
                     .map(PathBuf::from)
-                    .or_else(|| {
-                        dirs::config_dir()
-                            .map(|d| d.join("rockbot").join("vault.key"))
-                    });
-                
+                    .or_else(|| dirs::config_dir().map(|d| d.join("rockbot").join("vault.key")));
+
                 if let Some(path) = kf_path {
                     if path.exists() {
-                        self.status = Some((format!("Unlocking with keyfile: {}", path.display()), false));
+                        self.status =
+                            Some((format!("Unlocking with keyfile: {}", path.display()), false));
                         // TODO: Actually unlock
                         self.unlocked = true;
                     } else {
-                        self.status = Some((format!("Keyfile not found: {}", path.display()), true));
+                        self.status =
+                            Some((format!("Keyfile not found: {}", path.display()), true));
                     }
                 } else {
                     self.status = Some(("No keyfile path configured".to_string(), true));
@@ -385,12 +394,17 @@ impl CredentialsTui {
             }
             Some(UnlockMethod::Age { public_key, .. }) => {
                 self.input_mode = InputMode::PasswordInput {
-                    prompt: format!("Enter Age identity (pub: {}...):", &public_key[..20.min(public_key.len())]),
+                    prompt: format!(
+                        "Enter Age identity (pub: {}...):",
+                        &public_key[..20.min(public_key.len())]
+                    ),
                     masked: false,
                 };
                 self.input_buffer.clear();
             }
-            Some(UnlockMethod::SshKey { public_key_path, .. }) => {
+            Some(UnlockMethod::SshKey {
+                public_key_path, ..
+            }) => {
                 self.status = Some((format!("SSH unlock: {public_key_path}"), false));
                 // TODO: SSH unlock flow
             }
@@ -401,7 +415,11 @@ impl CredentialsTui {
         Ok(())
     }
 
-    fn handle_add_credential_mode(&mut self, key: KeyEvent, mut state: AddCredentialState) -> Result<()> {
+    fn handle_add_credential_mode(
+        &mut self,
+        key: KeyEvent,
+        mut state: AddCredentialState,
+    ) -> Result<()> {
         match key.code {
             KeyCode::Esc => {
                 self.input_mode = InputMode::Normal;
@@ -456,10 +474,18 @@ impl CredentialsTui {
             }
             KeyCode::Backspace => {
                 match state.field {
-                    AddCredentialField::Name => { state.name.pop(); }
-                    AddCredentialField::Url => { state.url.pop(); }
-                    AddCredentialField::Secret => { state.secret.pop(); }
-                    AddCredentialField::Expiration => { state.expiration.pop(); }
+                    AddCredentialField::Name => {
+                        state.name.pop();
+                    }
+                    AddCredentialField::Url => {
+                        state.url.pop();
+                    }
+                    AddCredentialField::Secret => {
+                        state.secret.pop();
+                    }
+                    AddCredentialField::Expiration => {
+                        state.expiration.pop();
+                    }
                     AddCredentialField::EndpointType => {}
                 }
                 self.input_mode = InputMode::AddCredential(state);
@@ -474,23 +500,25 @@ impl CredentialsTui {
             KeyCode::Enter => {
                 let password = self.input_buffer.clone();
                 self.input_buffer.clear();
-                
+
                 if masked {
                     if password.is_empty() {
                         self.status = Some(("Password cannot be empty".to_string(), true));
                         self.input_mode = InputMode::Normal;
                         return Ok(());
                     }
-                    
+
                     // Check if we're initializing or unlocking based on vault existence
                     if !self.vault_exists {
                         // Initialize vault with password
                         if password.len() < 8 {
-                            self.status = Some(("Password must be at least 8 characters".to_string(), true));
+                            self.status =
+                                Some(("Password must be at least 8 characters".to_string(), true));
                         } else {
                             match self.init_vault_with_password(&password) {
                                 Ok(()) => {
-                                    self.status = Some(("✅ Vault initialized!".to_string(), false));
+                                    self.status =
+                                        Some(("✅ Vault initialized!".to_string(), false));
                                 }
                                 Err(e) => {
                                     self.status = Some((format!("Init failed: {e}"), true));
@@ -548,7 +576,11 @@ impl CredentialsTui {
         }
         let i = match self.endpoint_state.selected() {
             Some(i) => {
-                if i >= self.endpoints.len() - 1 { 0 } else { i + 1 }
+                if i >= self.endpoints.len() - 1 {
+                    0
+                } else {
+                    i + 1
+                }
             }
             None => 0,
         };
@@ -561,7 +593,11 @@ impl CredentialsTui {
         }
         let i = match self.endpoint_state.selected() {
             Some(i) => {
-                if i == 0 { self.endpoints.len() - 1 } else { i - 1 }
+                if i == 0 {
+                    self.endpoints.len() - 1
+                } else {
+                    i - 1
+                }
             }
             None => 0,
         };
@@ -573,9 +609,9 @@ impl CredentialsTui {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // Tabs
-                Constraint::Min(0),     // Content
-                Constraint::Length(3),  // Status/Help
+                Constraint::Length(3), // Tabs
+                Constraint::Min(0),    // Content
+                Constraint::Length(3), // Status/Help
             ])
             .split(area);
 
@@ -603,7 +639,7 @@ impl CredentialsTui {
             .iter()
             .map(|t| Line::from(*t))
             .collect();
-        
+
         let tabs = Tabs::new(titles)
             .block(Block::default().borders(Borders::ALL).title("Credentials"))
             .select(self.tab.index())
@@ -613,7 +649,7 @@ impl CredentialsTui {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             );
-        
+
         frame.render_widget(tabs, area);
     }
 
@@ -633,7 +669,8 @@ impl CredentialsTui {
             .split(area);
 
         // Endpoint list
-        let items: Vec<ListItem> = self.endpoints
+        let items: Vec<ListItem> = self
+            .endpoints
             .iter()
             .map(|e| {
                 let style = if e.has_credential {
@@ -644,7 +681,10 @@ impl CredentialsTui {
                 ListItem::new(Line::from(vec![
                     Span::styled(&e.name, style),
                     Span::raw(" "),
-                    Span::styled(format!("({})", e.endpoint_type), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("({})", e.endpoint_type),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ]))
             })
             .collect();
@@ -670,9 +710,7 @@ impl CredentialsTui {
         frame.render_stateful_widget(list, chunks[0], &mut self.endpoint_state);
 
         // Endpoint details
-        let detail_block = Block::default()
-            .borders(Borders::ALL)
-            .title("Details");
+        let detail_block = Block::default().borders(Borders::ALL).title("Details");
 
         if let Some(selected) = self.endpoint_state.selected() {
             if let Some(endpoint) = self.endpoints.get(selected) {
@@ -691,7 +729,11 @@ impl CredentialsTui {
                     ]),
                     Line::from(vec![
                         Span::styled("Credential: ", Style::default().fg(Color::Cyan)),
-                        Span::raw(if endpoint.has_credential { "✓ Stored" } else { "✗ Missing" }),
+                        Span::raw(if endpoint.has_credential {
+                            "✓ Stored"
+                        } else {
+                            "✗ Missing"
+                        }),
                     ]),
                     Line::from(vec![
                         Span::styled("Expires: ", Style::default().fg(Color::Cyan)),
@@ -713,29 +755,33 @@ impl CredentialsTui {
         let block = Block::default()
             .borders(Borders::ALL)
             .title("Permission Rules");
-        
+
         let text = vec![
             Line::from("Permission rules control agent access to credentials."),
             Line::from(""),
-            Line::from(Span::styled("Press 'a' to add a rule", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "Press 'a' to add a rule",
+                Style::default().fg(Color::DarkGray),
+            )),
         ];
-        
+
         let paragraph = Paragraph::new(text).block(block);
         frame.render_widget(paragraph, area);
     }
 
     #[allow(clippy::unused_self)]
     fn render_audit(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title("Audit Log");
-        
+        let block = Block::default().borders(Borders::ALL).title("Audit Log");
+
         let text = vec![
             Line::from("Audit log tracks all credential access."),
             Line::from(""),
-            Line::from(Span::styled("Press 'v' to verify integrity", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "Press 'v' to verify integrity",
+                Style::default().fg(Color::DarkGray),
+            )),
         ];
-        
+
         let paragraph = Paragraph::new(text).block(block);
         frame.render_widget(paragraph, area);
     }
@@ -744,13 +790,16 @@ impl CredentialsTui {
         let block = Block::default()
             .borders(Borders::ALL)
             .title("Vault Settings");
-        
+
         if !self.vault_exists {
             // Vault not initialized - show init instructions
             let text = vec![
-                Line::from(vec![
-                    Span::styled("⚠️  Vault not initialized", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                ]),
+                Line::from(vec![Span::styled(
+                    "⚠️  Vault not initialized",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )]),
                 Line::from(""),
                 Line::from(vec![
                     Span::styled("Vault Path: ", Style::default().fg(Color::Cyan)),
@@ -760,27 +809,37 @@ impl CredentialsTui {
                 Line::from("The credential vault needs to be initialized before"),
                 Line::from("you can store API keys and secrets."),
                 Line::from(""),
-                Line::from(Span::styled("Press 'i' to initialize with password", Style::default().fg(Color::Green))),
-                Line::from(Span::styled("Or use CLI: rockbot credentials init", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled(
+                    "Press 'i' to initialize with password",
+                    Style::default().fg(Color::Green),
+                )),
+                Line::from(Span::styled(
+                    "Or use CLI: rockbot credentials init",
+                    Style::default().fg(Color::DarkGray),
+                )),
             ];
-            
+
             let paragraph = Paragraph::new(text).block(block);
             frame.render_widget(paragraph, area);
             return;
         }
-        
+
         let unlock_str = match &self.unlock_method {
             Some(UnlockMethod::Password { .. }) => "Password (Argon2id)",
-            Some(UnlockMethod::Keyfile { path_hint }) => {
-                path_hint.as_ref().map_or("Keyfile", std::string::String::as_str)
-            }
+            Some(UnlockMethod::Keyfile { path_hint }) => path_hint
+                .as_ref()
+                .map_or("Keyfile", std::string::String::as_str),
             Some(UnlockMethod::Age { .. }) => "Age encryption",
             Some(UnlockMethod::SshKey { .. }) => "SSH key",
             None => "Unknown",
         };
-        
-        let status_str = if self.unlocked { "🔓 Unlocked" } else { "🔒 Locked" };
-        
+
+        let status_str = if self.unlocked {
+            "🔓 Unlocked"
+        } else {
+            "🔒 Locked"
+        };
+
         let text = vec![
             Line::from(vec![
                 Span::styled("Initialized: ", Style::default().fg(Color::Cyan)),
@@ -799,9 +858,12 @@ impl CredentialsTui {
                 Span::raw(self.vault_path.display().to_string()),
             ]),
             Line::from(""),
-            Line::from(Span::styled("Press 'u' to unlock, 'l' to lock", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "Press 'u' to unlock, 'l' to lock",
+                Style::default().fg(Color::DarkGray),
+            )),
         ];
-        
+
         let paragraph = Paragraph::new(text).block(block);
         frame.render_widget(paragraph, area);
     }
@@ -823,7 +885,9 @@ impl CredentialsTui {
                         "q:Quit | Tab:Switch | i:Initialize vault"
                     }
                 }
-                InputMode::AddCredential(_) => "Tab/↑↓:Fields | ←→:Select | Enter:Next/Submit | Esc:Cancel",
+                InputMode::AddCredential(_) => {
+                    "Tab/↑↓:Fields | ←→:Select | Enter:Next/Submit | Esc:Cancel"
+                }
                 InputMode::PasswordInput { .. } => "Enter:Submit | Esc:Cancel",
                 InputMode::Confirm(_) => "y:Yes | n:No | Esc:Cancel",
             };
@@ -833,23 +897,28 @@ impl CredentialsTui {
         let status = Paragraph::new(status_text)
             .style(style)
             .block(Block::default().borders(Borders::ALL));
-        
+
         frame.render_widget(status, area);
     }
 
     #[allow(clippy::unused_self)]
-    fn render_add_credential_modal(&self, frame: &mut Frame, area: Rect, state: &AddCredentialState) {
+    fn render_add_credential_modal(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        state: &AddCredentialState,
+    ) {
         let modal_area = centered_rect(60, 70, area);
         frame.render_widget(Clear, modal_area);
-        
+
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
             .title("Add Service Endpoint");
-        
+
         let inner = block.inner(modal_area);
         frame.render_widget(block, modal_area);
-        
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
@@ -864,21 +933,26 @@ impl CredentialsTui {
             .split(inner);
 
         // Helper to create input field
-        let render_field = |frame: &mut Frame, area: Rect, label: &str, value: &str, active: bool, masked: bool| {
+        let render_field = |frame: &mut Frame,
+                            area: Rect,
+                            label: &str,
+                            value: &str,
+                            active: bool,
+                            masked: bool| {
             let style = if active {
                 Style::default().fg(Color::Yellow)
             } else {
                 Style::default().fg(Color::White)
             };
-            
+
             let display_value = if masked && !value.is_empty() {
                 "*".repeat(value.len())
             } else {
                 value.to_string()
             };
-            
+
             let cursor = if active { "█" } else { "" };
-            
+
             let text = format!("{label}: {display_value}{cursor}");
             let paragraph = Paragraph::new(text)
                 .style(style)
@@ -886,38 +960,68 @@ impl CredentialsTui {
             frame.render_widget(paragraph, area);
         };
 
-        render_field(frame, chunks[0], "Endpoint Name", &state.name, state.field == AddCredentialField::Name, false);
-        
+        render_field(
+            frame,
+            chunks[0],
+            "Endpoint Name",
+            &state.name,
+            state.field == AddCredentialField::Name,
+            false,
+        );
+
         // Service Type selector
         let type_style = if state.field == AddCredentialField::EndpointType {
             Style::default().fg(Color::Yellow)
         } else {
             Style::default().fg(Color::White)
         };
-        let type_name = ENDPOINT_TYPES.get(state.endpoint_type).map_or("Unknown", |(_, n)| *n);
+        let type_name = ENDPOINT_TYPES
+            .get(state.endpoint_type)
+            .map_or("Unknown", |(_, n)| *n);
         let type_text = format!("Service Type: ◀ {type_name} ▶");
         let type_para = Paragraph::new(type_text)
             .style(type_style)
             .block(Block::default().borders(Borders::ALL));
         frame.render_widget(type_para, chunks[1]);
-        
-        render_field(frame, chunks[2], "Base URL", &state.url, state.field == AddCredentialField::Url, false);
-        render_field(frame, chunks[3], "Token/Secret", &state.secret, state.field == AddCredentialField::Secret, true);
-        render_field(frame, chunks[4], "Expires (opt)", &state.expiration, state.field == AddCredentialField::Expiration, false);
+
+        render_field(
+            frame,
+            chunks[2],
+            "Base URL",
+            &state.url,
+            state.field == AddCredentialField::Url,
+            false,
+        );
+        render_field(
+            frame,
+            chunks[3],
+            "Token/Secret",
+            &state.secret,
+            state.field == AddCredentialField::Secret,
+            true,
+        );
+        render_field(
+            frame,
+            chunks[4],
+            "Expires (opt)",
+            &state.expiration,
+            state.field == AddCredentialField::Expiration,
+            false,
+        );
     }
 
     fn render_password_modal(&self, frame: &mut Frame, area: Rect, prompt: &str, masked: bool) {
         let modal_area = centered_rect(50, 20, area);
         frame.render_widget(Clear, modal_area);
-        
+
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
             .title("Unlock Vault");
-        
+
         let inner = block.inner(modal_area);
         frame.render_widget(block, modal_area);
-        
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
@@ -927,16 +1031,15 @@ impl CredentialsTui {
             ])
             .split(inner);
 
-        let prompt_para = Paragraph::new(prompt)
-            .style(Style::default().fg(Color::White));
+        let prompt_para = Paragraph::new(prompt).style(Style::default().fg(Color::White));
         frame.render_widget(prompt_para, chunks[0]);
-        
+
         let display_value = if masked {
             "*".repeat(self.input_buffer.len())
         } else {
             self.input_buffer.clone()
         };
-        
+
         let input_para = Paragraph::new(format!("{display_value}█"))
             .style(Style::default().fg(Color::Yellow))
             .block(Block::default().borders(Borders::ALL));
@@ -947,23 +1050,25 @@ impl CredentialsTui {
     fn render_confirm_modal(&self, frame: &mut Frame, area: Rect, message: &str) {
         let modal_area = centered_rect(40, 15, area);
         frame.render_widget(Clear, modal_area);
-        
+
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow))
             .title("Confirm");
-        
+
         let inner = block.inner(modal_area);
         frame.render_widget(block, modal_area);
-        
+
         let text = vec![
             Line::from(message.to_string()),
             Line::from(""),
-            Line::from(Span::styled("[y]es  [n]o", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "[y]es  [n]o",
+                Style::default().fg(Color::DarkGray),
+            )),
         ];
-        
-        let para = Paragraph::new(text)
-            .alignment(ratatui::layout::Alignment::Center);
+
+        let para = Paragraph::new(text).alignment(ratatui::layout::Alignment::Center);
         frame.render_widget(para, inner);
     }
 }

@@ -28,7 +28,13 @@ fn provider_short_code(id: &str) -> &'static str {
 }
 
 /// Render the models page — cards in cards_area, details in detail_area
-pub fn render_models(frame: &mut Frame, cards_area: Rect, detail_area: Rect, state: &AppState, effect_state: &EffectState) {
+pub fn render_models(
+    frame: &mut Frame,
+    cards_area: Rect,
+    detail_area: Rect,
+    state: &AppState,
+    effect_state: &EffectState,
+) {
     if state.providers.is_empty() {
         render_no_providers(frame, detail_area);
         return;
@@ -61,7 +67,12 @@ fn render_no_providers(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, body);
 }
 
-fn render_provider_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
+fn render_provider_cards(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    effect_state: &EffectState,
+) {
     let total = state.providers.len();
     let max_visible = (area.width / CARD_WIDTH) as usize;
     let max_visible = max_visible.max(1);
@@ -131,7 +142,9 @@ fn render_provider_cards(frame: &mut Frame, area: Rect, state: &AppState, effect
         let model_count = format!("{} models", provider.models.len());
 
         let name_style = if is_selected {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
@@ -139,10 +152,18 @@ fn render_provider_cards(frame: &mut Frame, area: Rect, state: &AppState, effect
         let lines = vec![
             Line::from(vec![
                 Span::styled(indicator, Style::default().fg(ind_color)),
-                Span::styled(format!(" {code}"), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!(" {code}"),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]),
             Line::from(Span::styled(name, name_style)),
-            Line::from(Span::styled(model_count, Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                model_count,
+                Style::default().fg(Color::DarkGray),
+            )),
         ];
 
         let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
@@ -163,7 +184,9 @@ fn render_provider_cards(frame: &mut Frame, area: Rect, state: &AppState, effect
 fn render_provider_details(frame: &mut Frame, area: Rect, state: &AppState) {
     let body = super::render_detail_header(frame, area, "Provider Details");
 
-    let idx = state.selected_provider.min(state.providers.len().saturating_sub(1));
+    let idx = state
+        .selected_provider
+        .min(state.providers.len().saturating_sub(1));
     let Some(provider) = state.providers.get(idx) else {
         let paragraph = Paragraph::new("No provider selected");
         frame.render_widget(paragraph, body);
@@ -267,7 +290,10 @@ fn render_provider_details(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(Color::DarkGray),
     )));
     content.push(Line::from(""));
-    let schema = state.credential_schemas.iter().find(|s| s.provider_id == provider.id);
+    let schema = state
+        .credential_schemas
+        .iter()
+        .find(|s| s.provider_id == provider.id);
     render_auth_hints(&provider.auth_type, &mut content, schema);
 
     content.push(Line::from(""));
@@ -276,8 +302,7 @@ fn render_provider_details(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(content)
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(content).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, body);
 }
 
@@ -298,7 +323,9 @@ fn render_auth_hints(
 ) {
     if let Some(schema) = schema {
         if let Some(method) = schema.auth_methods.first() {
-            let env_fields: Vec<_> = method.fields.iter()
+            let env_fields: Vec<_> = method
+                .fields
+                .iter()
                 .filter(|f| f.env_var.is_some())
                 .collect();
 
@@ -307,13 +334,23 @@ fn render_auth_hints(
                     if let Some(env_var) = &field.env_var {
                         let detected = std::env::var(env_var).is_ok();
                         let indicator = if detected { "✓" } else { " " };
-                        let color = if detected { Color::Green } else { Color::DarkGray };
+                        let color = if detected {
+                            Color::Green
+                        } else {
+                            Color::DarkGray
+                        };
                         let value_hint = field.default.as_deref().unwrap_or("\"...\"");
 
                         content.push(Line::from(vec![
-                            Span::styled(format!("  {indicator} export "), Style::default().fg(color)),
+                            Span::styled(
+                                format!("  {indicator} export "),
+                                Style::default().fg(color),
+                            ),
                             Span::styled(env_var.clone(), Style::default().fg(Color::Yellow)),
-                            Span::styled(format!("={value_hint}"), Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("={value_hint}"),
+                                Style::default().fg(Color::DarkGray),
+                            ),
                         ]));
                     }
                 }

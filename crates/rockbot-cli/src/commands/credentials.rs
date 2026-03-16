@@ -3,22 +3,36 @@
 use anyhow::Result;
 use rockbot_core::Config;
 use rockbot_credentials::{
-    AuditLog, CredentialManager, CredentialVault, CredentialType, EndpointType,
-    PathPermission, PermissionLevel,
+    AuditLog, CredentialManager, CredentialType, CredentialVault, EndpointType, PathPermission,
+    PermissionLevel,
 };
 use std::io::{self, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use crate::{CredentialsCommands, PermissionsCommands, load_config};
+use crate::{load_config, CredentialsCommands, PermissionsCommands};
 
 /// Run credentials commands
 pub async fn run(command: &CredentialsCommands, config_path: &PathBuf) -> Result<()> {
     let config = load_config(config_path).await?;
-    
+
     match command {
-        CredentialsCommands::Init { force, password, keyfile, age, ssh_key } => {
-            init_vault(&config, *force, *password, keyfile.as_ref(), age.as_deref(), ssh_key.as_ref()).await
+        CredentialsCommands::Init {
+            force,
+            password,
+            keyfile,
+            age,
+            ssh_key,
+        } => {
+            init_vault(
+                &config,
+                *force,
+                *password,
+                keyfile.as_ref(),
+                age.as_deref(),
+                ssh_key.as_ref(),
+            )
+            .await
         }
         CredentialsCommands::Add {
             name,
@@ -26,18 +40,43 @@ pub async fn run(command: &CredentialsCommands, config_path: &PathBuf) -> Result
             url,
             secret,
             credential_type,
-        } => add_credential(&config, name, endpoint_type, url, secret.as_deref(), credential_type).await,
+        } => {
+            add_credential(
+                &config,
+                name,
+                endpoint_type,
+                url,
+                secret.as_deref(),
+                credential_type,
+            )
+            .await
+        }
         CredentialsCommands::List => list_endpoints(&config).await,
         CredentialsCommands::Remove { endpoint } => remove_endpoint(&config, endpoint).await,
         CredentialsCommands::Permissions { command } => handle_permissions(&config, command).await,
         CredentialsCommands::Audit { verify, limit } => view_audit(&config, *verify, *limit).await,
         CredentialsCommands::Status => show_status(&config).await,
-        CredentialsCommands::Unlock { password, keyfile, age, ssh_key, ssh_passphrase } => {
-            unlock_vault(&config, password.as_deref(), keyfile.as_ref(), age.as_deref(), ssh_key.as_ref(), ssh_passphrase.as_deref()).await
+        CredentialsCommands::Unlock {
+            password,
+            keyfile,
+            age,
+            ssh_key,
+            ssh_passphrase,
+        } => {
+            unlock_vault(
+                &config,
+                password.as_deref(),
+                keyfile.as_ref(),
+                age.as_deref(),
+                ssh_key.as_ref(),
+                ssh_passphrase.as_deref(),
+            )
+            .await
         }
         CredentialsCommands::Lock => lock_vault(&config).await,
         CredentialsCommands::Ui => {
-            crate::tui::credentials::run_credentials_tui(config.credentials.vault_path.clone()).await
+            crate::tui::credentials::run_credentials_tui(config.credentials.vault_path.clone())
+                .await
         }
     }
 }
@@ -52,13 +91,13 @@ async fn init_vault(
     ssh_pubkey: Option<&PathBuf>,
 ) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
-    
+
     if !config.credentials.enabled {
         anyhow::bail!("Credential management is not enabled in configuration");
     }
 
     let vault_path = &config.credentials.vault_path;
-    
+
     // Check if vault already exists
     if CredentialVault::exists(vault_path) {
         if !force {
@@ -67,7 +106,7 @@ async fn init_vault(
                 vault_path.display()
             );
         }
-        
+
         // Confirm destruction
         print!("⚠️  This will DESTROY all existing credentials. Type 'yes' to confirm: ");
         io::stdout().flush()?;
@@ -77,12 +116,15 @@ async fn init_vault(
             println!("Aborted.");
             return Ok(());
         }
-        
+
         // Remove existing vault
         std::fs::remove_dir_all(vault_path)?;
     }
 
-    println!("🔐 Initializing credential vault at {}", vault_path.display());
+    println!(
+        "🔐 Initializing credential vault at {}",
+        vault_path.display()
+    );
     println!();
 
     // Determine unlock method - priority: Age > SSH > password > keyfile (default)
@@ -93,7 +135,6 @@ async fn init_vault(
         println!();
         println!("✅ Vault initialized with Age encryption!");
         println!("   Unlock with: rockbot credentials unlock --age <identity>");
-        
     } else if let Some(pubkey_path) = ssh_pubkey {
         // SSH key encryption
         if !pubkey_path.exists() {
@@ -104,16 +145,15 @@ async fn init_vault(
         println!();
         println!("✅ Vault initialized with SSH key!");
         println!("   Unlock with: rockbot credentials unlock --ssh-key <private_key_path>");
-        
     } else if use_password {
         // Password-based encryption
         let password = prompt_password_hidden("Enter vault password: ")?;
         let confirm = prompt_password_hidden("Confirm password: ")?;
-        
+
         if password != confirm {
             anyhow::bail!("Passwords do not match");
         }
-        
+
         if password.len() < 8 {
             anyhow::bail!("Password must be at least 8 characters");
         }
@@ -121,7 +161,6 @@ async fn init_vault(
         let _vault = CredentialVault::init_with_password(vault_path, &password)?;
         println!();
         println!("✅ Vault initialized with password!");
-        
     } else {
         // Keyfile (default) - generate or use specified
         let kf_path = keyfile.cloned().unwrap_or_else(|| {
@@ -130,45 +169,45 @@ async fn init_vault(
                 .join("rockbot")
                 .join("vault.key")
         });
-        
+
         // Create parent directory if needed
         if let Some(parent) = kf_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        
+
         if kf_path.exists() {
             // Use existing keyfile
             println!("🔑 Using existing key file: {}", kf_path.display());
         } else {
             // Generate new keyfile
             println!("🔑 Generating new key file: {}", kf_path.display());
-            
+
             let mut key_bytes = [0u8; 32];
             getrandom::getrandom(&mut key_bytes)?;
-            
+
             let mut file = std::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
                 .truncate(true)
                 .mode(0o600)
                 .open(&kf_path)?;
-            
+
             use std::io::Write;
             file.write_all(&key_bytes)?;
-            
+
             println!("   ⚠️  Store this file securely! Without it, you cannot access your vault.");
         }
-        
+
         let _vault = CredentialVault::init_with_keyfile(vault_path, &kf_path)?;
         println!();
         println!("✅ Vault initialized with key file!");
     }
-    
+
     println!();
     println!("Next steps:");
     println!("  • Add credentials: rockbot credentials add <name> -t <type> -u <url>");
     println!("  • View status:     rockbot credentials status");
-    
+
     Ok(())
 }
 
@@ -191,7 +230,7 @@ async fn add_credential(
     }
 
     let manager = CredentialManager::new(&config.credentials.vault_path)?;
-    
+
     // Prompt for password to unlock
     let password = prompt_password_hidden("Enter vault password: ")?;
     manager.unlock_with_password(&password).await?;
@@ -207,22 +246,32 @@ async fn add_credential(
     };
 
     // Create endpoint
-    let endpoint = manager.create_endpoint(name.to_string(), ep_type, url.to_string()).await?;
+    let endpoint = manager
+        .create_endpoint(name.to_string(), ep_type, url.to_string())
+        .await?;
     println!("✅ Created endpoint: {} ({})", endpoint.name, endpoint.id);
 
     // Store credential if provided
     if let Some(secret_value) = secret {
         let cred_type = match credential_type {
             "bearer_token" => CredentialType::BearerToken,
-            "basic_auth" => CredentialType::BasicAuth { username: String::new() },
-            "api_key" => CredentialType::ApiKey { header_name: "X-API-Key".to_string() },
+            "basic_auth" => CredentialType::BasicAuth {
+                username: String::new(),
+            },
+            "api_key" => CredentialType::ApiKey {
+                header_name: "X-API-Key".to_string(),
+            },
             _ => anyhow::bail!("Unknown credential type: {credential_type}"),
         };
 
-        manager.store_credential(endpoint.id, cred_type, secret_value.as_bytes()).await?;
+        manager
+            .store_credential(endpoint.id, cred_type, secret_value.as_bytes())
+            .await?;
         println!("✅ Stored credential for endpoint");
     } else {
-        println!("ℹ️  No secret provided. Use 'rockbot credentials add' with --secret to add later.");
+        println!(
+            "ℹ️  No secret provided. Use 'rockbot credentials add' with --secret to add later."
+        );
     }
 
     Ok(())
@@ -267,7 +316,7 @@ async fn remove_endpoint(config: &Config, endpoint: &str) -> Result<()> {
     // TODO: Implement when delete_endpoint is added to CredentialManager
     println!("❌ Remove endpoint not yet implemented");
     println!("   Endpoint to remove: {endpoint}");
-    
+
     Ok(())
 }
 
@@ -280,7 +329,11 @@ async fn handle_permissions(config: &Config, command: &PermissionsCommands) -> R
     let manager = CredentialManager::new(&config.credentials.vault_path)?;
 
     match command {
-        PermissionsCommands::Add { pattern, level, description } => {
+        PermissionsCommands::Add {
+            pattern,
+            level,
+            description,
+        } => {
             let perm_level = match level.as_str() {
                 "allow" => PermissionLevel::Allow,
                 "allow_hil" => PermissionLevel::AllowHil,
@@ -322,12 +375,12 @@ async fn view_audit(config: &Config, verify: bool, _limit: usize) -> Result<()> 
     }
 
     let audit_path = config.credentials.vault_path.join("audit.log");
-    
+
     if verify {
         println!("Verifying audit log integrity...");
         let log = AuditLog::open(&audit_path)?;
         let result = log.verify()?;
-        
+
         if result.valid {
             println!("✅ Audit log is valid");
             println!("   Entries verified: {}", result.entries_checked);
@@ -356,13 +409,16 @@ async fn show_status(config: &Config) -> Result<()> {
     println!("  Enabled: {}", config.credentials.enabled);
     println!("  Vault path: {}", config.credentials.vault_path.display());
     println!("  Unlock method: {}", config.credentials.unlock_method);
-    println!("  Default permission: {}", config.credentials.default_permission);
+    println!(
+        "  Default permission: {}",
+        config.credentials.default_permission
+    );
 
     if config.credentials.enabled {
         let manager = CredentialManager::new(&config.credentials.vault_path)?;
         let locked = manager.is_locked().await;
         let endpoints = manager.list_endpoints().await;
-        
+
         println!("\nVault Status:");
         println!("  Locked: {locked}");
         println!("  Endpoints: {}", endpoints.len());
@@ -381,7 +437,7 @@ async fn unlock_vault(
     ssh_passphrase: Option<&str>,
 ) -> Result<()> {
     use rockbot_credentials::UnlockMethod;
-    
+
     if !config.credentials.enabled {
         anyhow::bail!("Credential management is not enabled in configuration");
     }
@@ -392,12 +448,13 @@ async fn unlock_vault(
     }
 
     let manager = CredentialManager::new(&config.credentials.vault_path)?;
-    
+
     // Get the vault's unlock method
     let vault = CredentialVault::open(&config.credentials.vault_path)?;
-    let unlock_method = vault.unlock_method()
+    let unlock_method = vault
+        .unlock_method()
         .ok_or_else(|| anyhow::anyhow!("Failed to read vault unlock method"))?;
-    
+
     match unlock_method {
         UnlockMethod::Password { .. } => {
             let password = match password {
@@ -407,13 +464,15 @@ async fn unlock_vault(
             manager.unlock_with_password(&password).await?;
         }
         UnlockMethod::Keyfile { path_hint } => {
-            let kf_path = if let Some(p) = keyfile { p.clone() } else {
+            let kf_path = if let Some(p) = keyfile {
+                p.clone()
+            } else {
                 // Try default path first
                 let default_path = dirs::config_dir()
                     .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
                     .join("rockbot")
                     .join("vault.key");
-                
+
                 if default_path.exists() {
                     default_path
                 } else if let Some(hint) = path_hint {
@@ -447,8 +506,12 @@ async fn unlock_vault(
             };
             manager.unlock_with_age(&identity).await?;
         }
-        UnlockMethod::SshKey { public_key_path, .. } => {
-            let privkey_path = if let Some(p) = ssh_privkey { p.clone() } else {
+        UnlockMethod::SshKey {
+            public_key_path, ..
+        } => {
+            let privkey_path = if let Some(p) = ssh_privkey {
+                p.clone()
+            } else {
                 // Try to find corresponding private key
                 let pubkey = PathBuf::from(public_key_path);
                 let privkey = pubkey.with_extension(""); // Remove .pub extension
@@ -462,10 +525,12 @@ async fn unlock_vault(
                     );
                 }
             };
-            manager.unlock_with_ssh(&privkey_path, ssh_passphrase).await?;
+            manager
+                .unlock_with_ssh(&privkey_path, ssh_passphrase)
+                .await?;
         }
     }
-    
+
     println!("✅ Vault unlocked");
     println!("Note: Vault will lock when this process exits.");
 
@@ -480,7 +545,7 @@ async fn lock_vault(config: &Config) -> Result<()> {
 
     let manager = CredentialManager::new(&config.credentials.vault_path)?;
     manager.lock().await?;
-    
+
     println!("🔒 Vault locked");
 
     Ok(())
@@ -490,7 +555,7 @@ async fn lock_vault(config: &Config) -> Result<()> {
 fn prompt_password_hidden(prompt: &str) -> Result<String> {
     print!("{prompt}");
     io::stdout().flush()?;
-    
+
     let password = rpassword::read_password()?;
     Ok(password)
 }

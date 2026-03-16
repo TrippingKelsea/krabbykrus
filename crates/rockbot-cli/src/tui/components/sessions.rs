@@ -8,9 +8,9 @@ use ratatui::{
     Frame,
 };
 
+use super::render_spinner;
 use crate::tui::effects::{self, palette, EffectState};
 use crate::tui::state::{AppState, ChatRole, InputMode};
-use super::render_spinner;
 
 /// Card width: 2 border + 13 content = 15 columns
 const CARD_WIDTH: u16 = 15;
@@ -57,10 +57,7 @@ fn format_model_short(model: &str) -> String {
     let (provider_part, model_part) = model.split_once('/').unwrap_or(("", model));
     let code = provider_short_code(provider_part);
     // Shorten model name: take last segment after '.', then truncate
-    let short_model = model_part
-        .rsplit('.')
-        .next()
-        .unwrap_or(model_part);
+    let short_model = model_part.rsplit('.').next().unwrap_or(model_part);
     // Further shorten: strip common prefixes/suffixes, truncate to 8 chars
     let short = shorten_model_name(short_model);
     format!("{code}:{short}")
@@ -71,9 +68,10 @@ fn shorten_model_name(name: &str) -> String {
     // Remove version suffixes like "-v1:0", "-20250514"
     let s = name.split("-v1").next().unwrap_or(name);
     // Remove date stamps (8+ digit sequences)
-    let parts: Vec<&str> = s.split('-').filter(|p| {
-        !(p.len() >= 8 && p.chars().all(|c| c.is_ascii_digit()))
-    }).collect();
+    let parts: Vec<&str> = s
+        .split('-')
+        .filter(|p| !(p.len() >= 8 && p.chars().all(|c| c.is_ascii_digit())))
+        .collect();
     let joined = parts.join("-");
     if joined.len() > 9 {
         joined[..9].to_string()
@@ -83,13 +81,24 @@ fn shorten_model_name(name: &str) -> String {
 }
 
 /// Render the sessions page — card strip on top, chat below
-pub fn render_sessions(frame: &mut Frame, cards_area: Rect, detail_area: Rect, state: &AppState, effect_state: &EffectState) {
+pub fn render_sessions(
+    frame: &mut Frame,
+    cards_area: Rect,
+    detail_area: Rect,
+    state: &AppState,
+    effect_state: &EffectState,
+) {
     render_session_cards(frame, cards_area, state, effect_state);
     render_chat_area(frame, detail_area, state, effect_state);
 }
 
 /// Render the horizontal session card strip
-fn render_session_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_state: &EffectState) {
+fn render_session_cards(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    effect_state: &EffectState,
+) {
     if state.sessions_loading {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -206,7 +215,9 @@ fn render_session_card(
     };
 
     // Line 3: provider:model short code
-    let model_line = session.model.as_ref()
+    let model_line = session
+        .model
+        .as_ref()
         .map_or_else(|| "no model".to_string(), |m| format_model_short(m));
     let model_display: String = if model_line.len() > max_name {
         model_line[..max_name].to_string()
@@ -215,17 +226,22 @@ fn render_session_card(
     };
 
     // Message count badge
-    let msg_count = state.session_chats
+    let msg_count = state
+        .session_chats
         .get(&session.key)
         .map_or(session.message_count, |c| c.messages.len());
 
     let id_style = if is_selected {
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
     let agent_style = if is_selected {
-        Style::default().fg(palette::ACTIVE_SECONDARY).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(palette::ACTIVE_SECONDARY)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
@@ -238,7 +254,11 @@ fn render_session_card(
     // Render each line, adding msg count to ID line if space allows
     let id_text = if msg_count > 0 {
         let badge = format!("{id_short} {msg_count}");
-        if badge.len() <= max_name { badge } else { id_short.to_string() }
+        if badge.len() <= max_name {
+            badge
+        } else {
+            id_short.to_string()
+        }
     } else {
         id_short.to_string()
     };
@@ -273,11 +293,15 @@ fn render_chat_area(frame: &mut Frame, area: Rect, state: &AppState, _effect_sta
     // Calculate input height accounting for both explicit newlines and visual line wrapping
     // Subtract borders (2) + 1 for preemptive wrap so box grows before text hits the edge
     let inner_width = area.width.saturating_sub(3).max(1) as usize;
-    let visual_lines: usize = state.input_buffer.split('\n').map(|line| {
-        // +1 for the cursor character that is rendered inline
-        let char_count = (line.len() + 1).max(1);
-        (char_count + inner_width - 1) / inner_width // ceiling division
-    }).sum();
+    let visual_lines: usize = state
+        .input_buffer
+        .split('\n')
+        .map(|line| {
+            // +1 for the cursor character that is rendered inline
+            let char_count = (line.len() + 1).max(1);
+            (char_count + inner_width - 1) / inner_width // ceiling division
+        })
+        .sum();
     let input_line_count = visual_lines.clamp(1, 10);
     let input_height = (input_line_count as u16) + 2; // +2 for borders
 
@@ -288,7 +312,15 @@ fn render_chat_area(frame: &mut Frame, area: Rect, state: &AppState, _effect_sta
         .split(area);
 
     if !messages.is_empty() || chat_loading {
-        render_chat_messages(frame, chunks[0], state, messages, chat_loading, chat_scroll, auto_scroll);
+        render_chat_messages(
+            frame,
+            chunks[0],
+            state,
+            messages,
+            chat_loading,
+            chat_scroll,
+            auto_scroll,
+        );
     } else if state.sessions.is_empty() {
         let content = Paragraph::new(vec![
             Line::from(""),
@@ -360,7 +392,9 @@ fn render_chat_messages(
             ChatRole::System => ("sys: ", Style::default().fg(Color::Yellow)),
         };
 
-        let timestamp = msg.timestamp.as_ref()
+        let timestamp = msg
+            .timestamp
+            .as_ref()
             .map(|t| format!("[{t}] "))
             .unwrap_or_default();
 
@@ -380,7 +414,11 @@ fn render_chat_messages(
                 String::new()
             };
             let expand_hint = if !tc.result.is_empty() {
-                if tc.expanded { " [-]" } else { " [+]" }
+                if tc.expanded {
+                    " [-]"
+                } else {
+                    " [+]"
+                }
             } else {
                 ""
             };
@@ -388,11 +426,15 @@ fn render_chat_messages(
                 Span::styled("  ", Style::default()),
                 Span::styled(
                     format!("[{status_icon}]"),
-                    Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(status_color)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!(" {}", tc.tool_name),
-                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(duration, Style::default().fg(Color::DarkGray)),
                 Span::styled(expand_hint, Style::default().fg(Color::DarkGray)),
@@ -415,10 +457,23 @@ fn render_chat_messages(
 
     if loading {
         let thinking = state.active_chat().map(|c| &c.thinking);
-        let thinking_label = thinking_word(state.tick_count, thinking.and_then(|t| t.tool_name.as_deref()));
+        let thinking_label = thinking_word(
+            state.tick_count,
+            thinking.and_then(|t| t.tool_name.as_deref()),
+        );
         let mut indicator_spans = vec![
-            Span::styled("AI: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled(thinking_label, Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+            Span::styled(
+                "AI: ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                thinking_label,
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ),
         ];
 
         // Show token stats if we have any
@@ -443,8 +498,7 @@ fn render_chat_messages(
     let view_width = inner.width.max(1);
     let view_height = inner.height as usize;
 
-    let scratch = Paragraph::new(lines.clone())
-        .wrap(Wrap { trim: false });
+    let scratch = Paragraph::new(lines.clone()).wrap(Wrap { trim: false });
     let total_visual_lines = scratch.line_count(view_width) as usize;
 
     let max_scroll = total_visual_lines.saturating_sub(view_height);

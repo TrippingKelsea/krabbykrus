@@ -206,9 +206,12 @@ impl AcpDispatcher {
         }
     }
 
-    fn handle_initialize(&mut self, params: &serde_json::Value) -> Result<serde_json::Value, JsonRpcError> {
-        let init_params: InitializeParams = serde_json::from_value(params.clone())
-            .unwrap_or(InitializeParams {
+    fn handle_initialize(
+        &mut self,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, JsonRpcError> {
+        let init_params: InitializeParams =
+            serde_json::from_value(params.clone()).unwrap_or(InitializeParams {
                 client_name: String::new(),
                 client_version: String::new(),
                 workspace_root: None,
@@ -241,11 +244,15 @@ impl AcpDispatcher {
     }
 
     fn handle_agent_list(&self) -> Result<serde_json::Value, JsonRpcError> {
-        let agents: Vec<AgentInfo> = self.agent_ids.iter().map(|id| AgentInfo {
-            id: id.clone(),
-            model: None,
-            description: None,
-        }).collect();
+        let agents: Vec<AgentInfo> = self
+            .agent_ids
+            .iter()
+            .map(|id| AgentInfo {
+                id: id.clone(),
+                model: None,
+                description: None,
+            })
+            .collect();
 
         serde_json::to_value(agents).map_err(|e| JsonRpcError {
             code: INTERNAL_ERROR,
@@ -254,8 +261,12 @@ impl AcpDispatcher {
         })
     }
 
-    fn handle_capabilities(&self, params: &serde_json::Value) -> Result<serde_json::Value, JsonRpcError> {
-        let agent_id = params.get("agent_id")
+    fn handle_capabilities(
+        &self,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, JsonRpcError> {
+        let agent_id = params
+            .get("agent_id")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
@@ -283,7 +294,10 @@ impl AcpDispatcher {
         Ok(serde_json::Value::Null)
     }
 
-    fn handle_agent_message_placeholder(&self, params: &serde_json::Value) -> Result<serde_json::Value, JsonRpcError> {
+    fn handle_agent_message_placeholder(
+        &self,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, JsonRpcError> {
         if !self.initialized {
             return Err(JsonRpcError {
                 code: INVALID_REQUEST,
@@ -292,14 +306,17 @@ impl AcpDispatcher {
             });
         }
 
-        let msg_params: AgentMessageParams = serde_json::from_value(params.clone())
-            .map_err(|e| JsonRpcError {
+        let msg_params: AgentMessageParams =
+            serde_json::from_value(params.clone()).map_err(|e| JsonRpcError {
                 code: INVALID_PARAMS,
                 message: e.to_string(),
                 data: None,
             })?;
 
-        debug!("ACP agent/message: agent={}, msg={}", msg_params.agent_id, msg_params.message);
+        debug!(
+            "ACP agent/message: agent={}, msg={}",
+            msg_params.agent_id, msg_params.message
+        );
 
         if !self.agent_ids.contains(&msg_params.agent_id) {
             return Err(JsonRpcError {
@@ -335,7 +352,8 @@ impl AcpDispatcher {
     /// Serialize a response to a JSON string (newline-terminated).
     pub fn serialize_response(response: &JsonRpcResponse) -> String {
         let mut json = serde_json::to_string(response).unwrap_or_else(|_| {
-            r#"{"jsonrpc":"2.0","error":{"code":-32603,"message":"Serialization error"}}"#.to_string()
+            r#"{"jsonrpc":"2.0","error":{"code":-32603,"message":"Serialization error"}}"#
+                .to_string()
         });
         json.push('\n');
         json
@@ -361,7 +379,11 @@ impl AcpDispatcher {
     }
 
     /// Create a tool call notification.
-    pub fn tool_call_notification(agent_id: &str, tool_name: &str, status: &str) -> JsonRpcNotification {
+    pub fn tool_call_notification(
+        agent_id: &str,
+        tool_name: &str,
+        status: &str,
+    ) -> JsonRpcNotification {
         JsonRpcNotification {
             jsonrpc: "2.0".to_string(),
             method: "agent/toolCall".to_string(),
@@ -451,7 +473,8 @@ mod tests {
 
     #[test]
     fn test_parse_valid_request() {
-        let json = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"client_name":"test"}}"#;
+        let json =
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"client_name":"test"}}"#;
         let req = AcpDispatcher::parse_request(json).unwrap();
         assert_eq!(req.method, "initialize");
         assert_eq!(req.id, Some(serde_json::json!(1)));

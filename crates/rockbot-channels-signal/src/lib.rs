@@ -3,15 +3,15 @@
 //! This crate provides a placeholder Signal integration. The actual implementation
 //! requires signal-cli to be configured locally.
 
+use async_trait::async_trait;
+use futures::Stream;
 use rockbot_channels::{
-    Channel, ChannelCapabilities, ChannelError, ChannelEvent, ChannelHealth,
-    ChannelInfo, ChannelMessage, Result, UserInfo,
+    Channel, ChannelCapabilities, ChannelError, ChannelEvent, ChannelHealth, ChannelInfo,
+    ChannelMessage, Result, UserInfo,
 };
 use rockbot_credentials_schema::{
     AuthMethod, CredentialCategory, CredentialField, CredentialSchema,
 };
-use async_trait::async_trait;
-use futures::Stream;
 use std::pin::Pin;
 
 /// Signal channel placeholder
@@ -43,10 +43,7 @@ impl Channel for SignalChannel {
             supports_threads: false,
             supports_media: true,
             max_message_length: 4096,
-            supported_media_types: vec![
-                "image/jpeg".to_string(),
-                "image/png".to_string(),
-            ],
+            supported_media_types: vec!["image/jpeg".to_string(), "image/png".to_string()],
         }
     }
 
@@ -114,17 +111,15 @@ impl Channel for SignalChannel {
             auth_methods: vec![AuthMethod {
                 id: "credentials".to_string(),
                 label: "Signal Credentials".to_string(),
-                fields: vec![
-                    CredentialField {
-                        id: "phone_number".to_string(),
-                        label: "Phone Number".to_string(),
-                        secret: false,
-                        default: None,
-                        placeholder: Some("+1234567890".to_string()),
-                        required: true,
-                        env_var: None,
-                    },
-                ],
+                fields: vec![CredentialField {
+                    id: "phone_number".to_string(),
+                    label: "Phone Number".to_string(),
+                    secret: false,
+                    default: None,
+                    placeholder: Some("+1234567890".to_string()),
+                    required: true,
+                    env_var: None,
+                }],
                 hint: Some("Requires signal-cli configured locally".to_string()),
                 docs_url: None,
             }],

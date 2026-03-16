@@ -8,8 +8,7 @@
 
 #[cfg(feature = "anthropic")]
 use rockbot_llm::{
-    anthropic::AnthropicProvider,
-    ChatCompletionRequest, LlmProvider, Message, MessageRole,
+    anthropic::AnthropicProvider, ChatCompletionRequest, LlmProvider, Message, MessageRole,
 };
 
 #[tokio::main]
@@ -31,7 +30,9 @@ async fn _main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Checking Anthropic credentials...");
 
     if !AnthropicProvider::has_credentials() {
-        eprintln!("No credentials found. Set ANTHROPIC_API_KEY or install Claude Code credentials.");
+        eprintln!(
+            "No credentials found. Set ANTHROPIC_API_KEY or install Claude Code credentials."
+        );
         return Ok(());
     }
 
@@ -39,7 +40,10 @@ async fn _main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Credentials found at: {}", path.display());
     }
 
-    println!("Credentials valid: {}", AnthropicProvider::credentials_valid());
+    println!(
+        "Credentials valid: {}",
+        AnthropicProvider::credentials_valid()
+    );
 
     let provider = AnthropicProvider::new()?;
 

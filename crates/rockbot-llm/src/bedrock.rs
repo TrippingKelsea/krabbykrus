@@ -42,21 +42,20 @@
 
 use crate::{
     AuthMethod, ChatCompletionRequest, ChatCompletionResponse, Choice, CompletionStream,
-    CredentialCategory, CredentialField, CredentialSchema, LlmError, LlmProvider, Message,
-    MessageRole, ModelInfo, ProviderCapabilities, Result, StreamingChunk, StreamingChoice,
-    StreamingDelta, ToolCall, FunctionCall, ToolDefinition, Usage,
+    CredentialCategory, CredentialField, CredentialSchema, FunctionCall, LlmError, LlmProvider,
+    Message, MessageRole, ModelInfo, ProviderCapabilities, Result, StreamingChoice, StreamingChunk,
+    StreamingDelta, ToolCall, ToolDefinition, Usage,
 };
 use async_trait::async_trait;
 use aws_sdk_bedrockruntime::config::ProvideCredentials;
 use aws_sdk_bedrockruntime::{
-    Client,
     types::{
-        ContentBlock, ConversationRole, ConverseOutput,
-        Message as BedrockMessage, SystemContentBlock,
-        Tool, ToolConfiguration, ToolInputSchema, ToolSpecification,
-        ToolResultBlock, ToolResultContentBlock, ToolUseBlock,
-        ContentBlockDelta, ContentBlockStart, ConverseStreamOutput,
+        ContentBlock, ContentBlockDelta, ContentBlockStart, ConversationRole, ConverseOutput,
+        ConverseStreamOutput, Message as BedrockMessage, SystemContentBlock, Tool,
+        ToolConfiguration, ToolInputSchema, ToolResultBlock, ToolResultContentBlock,
+        ToolSpecification, ToolUseBlock,
     },
+    Client,
 };
 
 /// AgentCore OAuth2 auth flow type
@@ -253,7 +252,8 @@ impl BedrockProvider {
             .await;
 
         let region = config
-            .region().map_or_else(|| "us-east-1".to_string(), std::string::ToString::to_string);
+            .region()
+            .map_or_else(|| "us-east-1".to_string(), std::string::ToString::to_string);
 
         let (client, bedrock_client) = Self::build_clients(&config);
 
@@ -343,7 +343,8 @@ impl BedrockProvider {
     async fn list_models_from_api(&self) -> Result<Vec<ModelInfo>> {
         use aws_sdk_bedrock::types::InferenceType;
 
-        let resp = self.bedrock_client
+        let resp = self
+            .bedrock_client
             .list_foundation_models()
             .by_inference_type(InferenceType::OnDemand)
             .send()
@@ -362,7 +363,8 @@ impl BedrockProvider {
             let supports_streaming = summary.response_streaming_supported().unwrap_or(false);
 
             // Extract capabilities from input modalities
-            let supports_vision = summary.input_modalities()
+            let supports_vision = summary
+                .input_modalities()
                 .iter()
                 .any(|m| m.as_str() == "IMAGE");
 
@@ -484,31 +486,34 @@ impl BedrockProvider {
         let mut pending_blocks: Vec<ContentBlock> = Vec::new();
         let mut bedrock_messages = Vec::new();
 
-        let flush = |role: ConversationRole, blocks: Vec<ContentBlock>, out: &mut Vec<BedrockMessage>| {
-            if blocks.is_empty() {
-                return;
-            }
-            #[allow(clippy::expect_used)]
-            let mut builder = BedrockMessage::builder().role(role);
-            for block in blocks {
-                builder = builder.content(block);
-            }
-            out.push(builder.build().expect("valid message"));
-        };
+        let flush =
+            |role: ConversationRole, blocks: Vec<ContentBlock>, out: &mut Vec<BedrockMessage>| {
+                if blocks.is_empty() {
+                    return;
+                }
+                #[allow(clippy::expect_used)]
+                let mut builder = BedrockMessage::builder().role(role);
+                for block in blocks {
+                    builder = builder.content(block);
+                }
+                out.push(builder.build().expect("valid message"));
+            };
 
         for msg in messages {
             match msg.role {
                 MessageRole::System => {
-                    system_blocks.push(
-                        SystemContentBlock::Text(msg.content.clone()),
-                    );
+                    system_blocks.push(SystemContentBlock::Text(msg.content.clone()));
                 }
                 MessageRole::Tool => {
                     // Tool results are sent as User role with ContentBlock::ToolResult
                     let target_role = ConversationRole::User;
                     if pending_role.as_ref() != Some(&target_role) {
                         if let Some(role) = pending_role.take() {
-                            flush(role, std::mem::take(&mut pending_blocks), &mut bedrock_messages);
+                            flush(
+                                role,
+                                std::mem::take(&mut pending_blocks),
+                                &mut bedrock_messages,
+                            );
                         }
                         pending_role = Some(target_role);
                     }
@@ -525,7 +530,11 @@ impl BedrockProvider {
                     let target_role = ConversationRole::User;
                     if pending_role.as_ref() != Some(&target_role) {
                         if let Some(role) = pending_role.take() {
-                            flush(role, std::mem::take(&mut pending_blocks), &mut bedrock_messages);
+                            flush(
+                                role,
+                                std::mem::take(&mut pending_blocks),
+                                &mut bedrock_messages,
+                            );
                         }
                         pending_role = Some(target_role);
                     }
@@ -535,7 +544,11 @@ impl BedrockProvider {
                     let target_role = ConversationRole::Assistant;
                     if pending_role.as_ref() != Some(&target_role) {
                         if let Some(role) = pending_role.take() {
-                            flush(role, std::mem::take(&mut pending_blocks), &mut bedrock_messages);
+                            flush(
+                                role,
+                                std::mem::take(&mut pending_blocks),
+                                &mut bedrock_messages,
+                            );
                         }
                         pending_role = Some(target_role);
                     }
@@ -544,9 +557,12 @@ impl BedrockProvider {
                     }
                     if let Some(ref tool_calls) = msg.tool_calls {
                         for tc in tool_calls {
-                            let input_doc = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
-                                .map(|v| Self::json_to_document(&v))
-                                .unwrap_or_else(|_| aws_smithy_types::Document::Object(Default::default()));
+                            let input_doc =
+                                serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
+                                    .map(|v| Self::json_to_document(&v))
+                                    .unwrap_or_else(|_| {
+                                        aws_smithy_types::Document::Object(Default::default())
+                                    });
                             #[allow(clippy::expect_used)]
                             let tool_use = ToolUseBlock::builder()
                                 .tool_use_id(&tc.id)
@@ -595,11 +611,11 @@ impl BedrockProvider {
             serde_json::Value::Array(arr) => {
                 aws_smithy_types::Document::Array(arr.iter().map(Self::json_to_document).collect())
             }
-            serde_json::Value::Object(obj) => {
-                aws_smithy_types::Document::Object(
-                    obj.iter().map(|(k, v)| (k.clone(), Self::json_to_document(v))).collect(),
-                )
-            }
+            serde_json::Value::Object(obj) => aws_smithy_types::Document::Object(
+                obj.iter()
+                    .map(|(k, v)| (k.clone(), Self::json_to_document(v)))
+                    .collect(),
+            ),
         }
     }
 
@@ -612,7 +628,11 @@ impl BedrockProvider {
                 aws_smithy_types::Number::PosInt(i) => i.to_string(),
                 aws_smithy_types::Number::NegInt(i) => i.to_string(),
                 aws_smithy_types::Number::Float(f) => {
-                    if f.is_finite() { format!("{f}") } else { "null".to_string() }
+                    if f.is_finite() {
+                        format!("{f}")
+                    } else {
+                        "null".to_string()
+                    }
                 }
             },
             aws_smithy_types::Document::String(s) => {
@@ -624,7 +644,8 @@ impl BedrockProvider {
                 format!("[{}]", items.join(","))
             }
             aws_smithy_types::Document::Object(obj) => {
-                let items: Vec<String> = obj.iter()
+                let items: Vec<String> = obj
+                    .iter()
                     .map(|(k, v)| {
                         let key = serde_json::to_string(k).unwrap_or_else(|_| format!("\"{k}\""));
                         format!("{key}:{}", Self::document_to_json_string(v))
@@ -643,7 +664,8 @@ impl BedrockProvider {
             .map(|t| {
                 let doc = Self::json_to_document(&t.parameters);
 
-                #[allow(clippy::expect_used)] // builder is always valid when required fields are set
+                #[allow(clippy::expect_used)]
+                // builder is always valid when required fields are set
                 Tool::ToolSpec(
                     ToolSpecification::builder()
                         .name(&t.name)
@@ -1012,15 +1034,18 @@ impl LlmProvider for BedrockProvider {
             content = format!("<think>{reasoning_text}</think>");
         }
 
-        let usage = response.usage().map_or(Usage {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-        }, |u| Usage {
-            prompt_tokens: u.input_tokens() as u64,
-            completion_tokens: u.output_tokens() as u64,
-            total_tokens: u.total_tokens() as u64,
-        });
+        let usage = response.usage().map_or(
+            Usage {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
+            |u| Usage {
+                prompt_tokens: u.input_tokens() as u64,
+                completion_tokens: u.output_tokens() as u64,
+                total_tokens: u.total_tokens() as u64,
+            },
+        );
 
         let finish_reason = response.stop_reason().as_str().to_string();
 
@@ -1052,10 +1077,7 @@ impl LlmProvider for BedrockProvider {
         })
     }
 
-    async fn stream_completion(
-        &self,
-        request: ChatCompletionRequest,
-    ) -> Result<CompletionStream> {
+    async fn stream_completion(&self, request: ChatCompletionRequest) -> Result<CompletionStream> {
         let model = self.normalize_model(&request.model);
         let (system, messages) = self.convert_messages(&request.messages);
 
@@ -1310,8 +1332,7 @@ impl LlmProvider for BedrockProvider {
 
     async fn generate_embedding(&self, _text: &str) -> Result<Vec<f32>> {
         Err(LlmError::ApiError {
-            message: "Use Bedrock embedding models directly via AWS SDK for embeddings"
-                .to_string(),
+            message: "Use Bedrock embedding models directly via AWS SDK for embeddings".to_string(),
         })
     }
 
@@ -1364,8 +1385,14 @@ mod tests {
 
     #[test]
     fn test_auth_flow_display() {
-        assert_eq!(AgentCoreAuthFlow::UserFederation.to_string(), "USER_FEDERATION");
-        assert_eq!(AgentCoreAuthFlow::ClientCredentials.to_string(), "CLIENT_CREDENTIALS");
+        assert_eq!(
+            AgentCoreAuthFlow::UserFederation.to_string(),
+            "USER_FEDERATION"
+        );
+        assert_eq!(
+            AgentCoreAuthFlow::ClientCredentials.to_string(),
+            "CLIENT_CREDENTIALS"
+        );
     }
 
     #[test]
@@ -1386,7 +1413,10 @@ mod tests {
     fn test_agentcore_config_default() {
         let config = AgentCoreConfig::default();
         assert!(config.credential_provider_name.is_empty());
-        assert!(matches!(config.auth_flow, AgentCoreAuthFlow::UserFederation));
+        assert!(matches!(
+            config.auth_flow,
+            AgentCoreAuthFlow::UserFederation
+        ));
         assert!(config.scopes.is_empty());
         assert!(config.credentials_secret_arn.is_none());
         assert!(config.vendor.is_none());

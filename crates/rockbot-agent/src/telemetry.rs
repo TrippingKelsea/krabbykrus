@@ -52,7 +52,10 @@ pub fn init_telemetry(config: &TelemetryConfig) {
 
     #[cfg(not(feature = "otel"))]
     {
-        let endpoint = config.otlp_endpoint.as_deref().unwrap_or("(not configured)");
+        let endpoint = config
+            .otlp_endpoint
+            .as_deref()
+            .unwrap_or("(not configured)");
         tracing::info!(
             "Telemetry enabled (endpoint={endpoint}). \
              Metrics available via GET /api/metrics. \

@@ -145,9 +145,9 @@ impl ErrorCode {
         match self {
             ErrorCode::GeneralError | ErrorCode::InvalidArguments => "client",
             ErrorCode::EndpointNotFound | ErrorCode::CredentialNotFound => "lookup",
-            ErrorCode::PermissionDenied | ErrorCode::ApprovalTimeout | ErrorCode::ApprovalDenied => {
-                "permission"
-            }
+            ErrorCode::PermissionDenied
+            | ErrorCode::ApprovalTimeout
+            | ErrorCode::ApprovalDenied => "permission",
             ErrorCode::AuditError => "audit",
             ErrorCode::VaultLocked => "vault",
         }

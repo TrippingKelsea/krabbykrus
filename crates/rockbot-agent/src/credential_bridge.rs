@@ -24,7 +24,10 @@ impl VaultCredentialAccessor {
 #[async_trait::async_trait]
 impl CredentialAccessor for VaultCredentialAccessor {
     async fn get_credential(&self, path: &str, agent_id: &str) -> Result<CredentialResult> {
-        debug!("Tool requesting credential for path: {} (agent: {})", path, agent_id);
+        debug!(
+            "Tool requesting credential for path: {} (agent: {})",
+            path, agent_id
+        );
 
         // Check if vault is unlocked
         if self.manager.is_locked().await {
@@ -34,7 +37,11 @@ impl CredentialAccessor for VaultCredentialAccessor {
         }
 
         // Request credential - this handles permission checking and HIL internally
-        match self.manager.request_credential(path, agent_id, &format!("Tool access to {path}")).await {
+        match self
+            .manager
+            .request_credential(path, agent_id, &format!("Tool access to {path}"))
+            .await
+        {
             Ok(result) => {
                 if let Some(credential) = result.credential {
                     // Credential was granted
@@ -67,7 +74,7 @@ impl CredentialAccessor for VaultCredentialAccessor {
         // Path format: saggyclaw://endpoint_name/...
         if let Some(endpoint_name) = path.strip_prefix("saggyclaw://") {
             let endpoint_name = endpoint_name.split('/').next().unwrap_or("");
-            
+
             // Check if endpoint exists
             let endpoints = self.manager.list_endpoints().await;
             Ok(endpoints.iter().any(|e| e.name == endpoint_name))

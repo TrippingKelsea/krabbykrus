@@ -1,20 +1,24 @@
 //! Agent management commands
 
+use crate::{load_config, AgentCommands};
 use anyhow::Result;
 use std::path::PathBuf;
-use crate::{AgentCommands, load_config};
 
 /// Run agent commands
 pub async fn run(command: &AgentCommands, config_path: &PathBuf) -> Result<()> {
     let config = load_config(config_path).await?;
-    
+
     match command {
         AgentCommands::List => {
             println!("🤖 Configured Agents:");
             for agent in &config.agents.list {
-                println!("   • {} (model: {})", 
-                    agent.id, 
-                    agent.model.as_ref().unwrap_or(&config.agents.defaults.model)
+                println!(
+                    "   • {} (model: {})",
+                    agent.id,
+                    agent
+                        .model
+                        .as_ref()
+                        .unwrap_or(&config.agents.defaults.model)
                 );
                 if let Some(workspace) = &agent.workspace {
                     println!("     workspace: {}", workspace.display());
@@ -25,12 +29,20 @@ pub async fn run(command: &AgentCommands, config_path: &PathBuf) -> Result<()> {
             println!("📊 Agent Status: {agent_id}");
             println!("   Agent status coming soon...");
         }
-        AgentCommands::Message { agent_id, session, message } => {
+        AgentCommands::Message {
+            agent_id,
+            session,
+            message,
+        } => {
             println!("💬 Sending message to agent '{agent_id}' (session: {session})");
             println!("   Message: {message}");
             println!("   Agent messaging coming soon...");
         }
-        AgentCommands::Create { agent_id, workspace, model } => {
+        AgentCommands::Create {
+            agent_id,
+            workspace,
+            model,
+        } => {
             println!("➕ Creating agent: {agent_id}");
             if let Some(workspace) = workspace {
                 println!("   Workspace: {}", workspace.display());
@@ -40,7 +52,11 @@ pub async fn run(command: &AgentCommands, config_path: &PathBuf) -> Result<()> {
             }
             println!("   Agent creation coming soon...");
         }
-        AgentCommands::Run { agent_id, gateway, exec } => {
+        AgentCommands::Run {
+            agent_id,
+            gateway,
+            exec,
+        } => {
             run_agent_session(agent_id, gateway, *exec).await?;
         }
     }

@@ -41,7 +41,9 @@ impl From<Error> for AgentError {
     fn from(e: Error) -> Self {
         match e {
             Error::Agent(a) => a,
-            other => AgentError::ExecutionFailed { message: other.to_string() },
+            other => AgentError::ExecutionFailed {
+                message: other.to_string(),
+            },
         }
     }
 }

@@ -23,11 +23,11 @@
 use crate::{
     AuthMethod, ChatCompletionRequest, ChatCompletionResponse, Choice, CompletionStream,
     CredentialCategory, CredentialField, CredentialSchema, LlmError, LlmProvider, Message,
-    MessageRole, ModelInfo, ProviderCapabilities, Result, StreamingChunk, StreamingChoice,
+    MessageRole, ModelInfo, ProviderCapabilities, Result, StreamingChoice, StreamingChunk,
     StreamingDelta, Usage,
 };
 use async_trait::async_trait;
-use claude_agent_sdk::{query, ClaudeAgentOptions, Message as SdkMessage, ContentBlock};
+use claude_agent_sdk::{query, ClaudeAgentOptions, ContentBlock, Message as SdkMessage};
 use futures_util::StreamExt;
 use std::path::PathBuf;
 
@@ -45,73 +45,72 @@ impl AnthropicProvider {
         if !Self::has_credentials() {
             return Err(LlmError::AuthenticationFailed);
         }
-        
+
         Ok(Self {
             default_model: "claude-sonnet-4-20250514".to_string(),
         })
     }
-    
+
     /// Create provider with a specific default model
     pub fn with_model(model: impl Into<String>) -> Result<Self> {
         if !Self::has_credentials() {
             return Err(LlmError::AuthenticationFailed);
         }
-        
+
         Ok(Self {
             default_model: model.into(),
         })
     }
-    
+
     /// Check if Claude Code credentials exist
     pub fn has_credentials() -> bool {
-        Self::credentials_path()
-            .is_some_and(|p| p.exists())
+        Self::credentials_path().is_some_and(|p| p.exists())
     }
-    
+
     /// Get the Claude Code credentials file path
     pub fn credentials_path() -> Option<PathBuf> {
         dirs::home_dir().map(|h| h.join(".claude").join(".credentials.json"))
     }
-    
+
     /// Check if credentials are valid (not expired)
     pub fn credentials_valid() -> bool {
         let Some(path) = Self::credentials_path() else {
             return false;
         };
-        
+
         let Ok(content) = std::fs::read_to_string(&path) else {
             return false;
         };
-        
+
         #[derive(serde::Deserialize)]
         struct Credentials {
             #[serde(rename = "claudeAiOauth")]
             oauth: Option<OAuthData>,
         }
-        
+
         #[derive(serde::Deserialize)]
         struct OAuthData {
             #[serde(rename = "expiresAt")]
             expires_at: u64,
         }
-        
+
         let Ok(creds) = serde_json::from_str::<Credentials>(&content) else {
             return false;
         };
-        
+
         let Some(oauth) = creds.oauth else {
             return false;
         };
-        
+
         // Check expiration with 5 minute buffer
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        
+
         oauth.expires_at > now + 300_000
     }
-    
+
     /// Normalize model ID (strip provider prefix)
     #[allow(clippy::unused_self)]
     fn normalize_model(&self, model_id: &str) -> String {
@@ -182,7 +181,10 @@ impl LlmProvider for AnthropicProvider {
         })
     }
 
-    async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
+    async fn chat_completion(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse> {
         let model = self.normalize_model(&request.model);
 
         // Build the prompt from messages
@@ -244,21 +246,22 @@ impl LlmProvider for AnthropicProvider {
         if let Some(system) = system_prompt {
             options_builder = options_builder.system_prompt(system);
         }
-        
+
         options_builder = options_builder.max_turns(1); // Single turn for completion
-        
+
         let options = options_builder.build();
-        
+
         // Query Claude Code SDK (with connection timeout)
         let stream = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             query(&conversation, Some(options)),
-        ).await.map_err(|_| LlmError::ApiError {
+        )
+        .await
+        .map_err(|_| LlmError::ApiError {
             message: "Timed out connecting to Claude Code SDK".to_string(),
-        })?.map_err(|e| {
-            LlmError::ApiError {
-                message: format!("Claude Code SDK error: {e}"),
-            }
+        })?
+        .map_err(|e| LlmError::ApiError {
+            message: format!("Claude Code SDK error: {e}"),
         })?;
 
         let mut pinned_stream = Box::pin(stream);
@@ -268,10 +271,9 @@ impl LlmProvider for AnthropicProvider {
 
         // Collect all messages from stream (with per-message idle timeout)
         let chunk_timeout = std::time::Duration::from_secs(120);
-        while let Ok(Some(message_result)) = tokio::time::timeout(
-            chunk_timeout,
-            pinned_stream.next(),
-        ).await {
+        while let Ok(Some(message_result)) =
+            tokio::time::timeout(chunk_timeout, pinned_stream.next()).await
+        {
             match message_result {
                 Ok(sdk_message) => {
                     match sdk_message {
@@ -283,12 +285,17 @@ impl LlmProvider for AnthropicProvider {
                                 }
                             }
                         }
-                        SdkMessage::Result { usage: Some(usage_val), .. } => {
+                        SdkMessage::Result {
+                            usage: Some(usage_val),
+                            ..
+                        } => {
                             // Final result with usage stats
-                            input_tokens = usage_val.get("input_tokens")
+                            input_tokens = usage_val
+                                .get("input_tokens")
                                 .and_then(serde_json::Value::as_u64)
                                 .unwrap_or(0);
-                            output_tokens = usage_val.get("output_tokens")
+                            output_tokens = usage_val
+                                .get("output_tokens")
                                 .and_then(serde_json::Value::as_u64)
                                 .unwrap_or(0);
                         }
@@ -339,11 +346,11 @@ impl LlmProvider for AnthropicProvider {
 
     async fn stream_completion(&self, request: ChatCompletionRequest) -> Result<CompletionStream> {
         let model = self.normalize_model(&request.model);
-        
+
         // Build the prompt from messages
         let mut system_prompt = None;
         let mut conversation = String::new();
-        
+
         for msg in &request.messages {
             match msg.role {
                 MessageRole::System => {
@@ -369,18 +376,18 @@ impl LlmProvider for AnthropicProvider {
                 }
             }
         }
-        
+
         // Build options
         let mut options_builder = ClaudeAgentOptions::builder();
-        
+
         if let Some(system) = system_prompt {
             options_builder = options_builder.system_prompt(system);
         }
-        
+
         let options = options_builder.build();
         let model_clone = model.clone();
         let conversation_owned = conversation.clone();
-        
+
         // Convert to stream that owns its data
         let stream = async_stream::stream! {
             // Query Claude Code SDK inside the stream
@@ -393,9 +400,9 @@ impl LlmProvider for AnthropicProvider {
                     return;
                 }
             };
-            
+
             let mut pinned = Box::pin(sdk_stream);
-            
+
             while let Some(message_result) = pinned.next().await {
                 match message_result {
                     Ok(sdk_message) => {
@@ -465,7 +472,7 @@ impl LlmProvider for AnthropicProvider {
                 }
             }
         };
-        
+
         Ok(Box::pin(stream))
     }
 
@@ -530,14 +537,14 @@ mod tests {
         let provider = AnthropicProvider {
             default_model: "test".to_string(),
         };
-        
+
         assert_eq!(
             provider.normalize_model("anthropic/claude-3-opus"),
             "claude-3-opus"
         );
         assert_eq!(provider.normalize_model("claude-3-opus"), "claude-3-opus");
     }
-    
+
     #[test]
     fn test_credentials_path() {
         let path = AnthropicProvider::credentials_path();

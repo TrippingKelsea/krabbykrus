@@ -178,9 +178,7 @@ impl Overseer {
         // Load model on a blocking thread (CPU-intensive)
         let engine = tokio::task::spawn_blocking(move || InferenceEngine::load(inference_config))
             .await
-            .map_err(|e| {
-                inference::InferenceError::Tokenizer(format!("Task join error: {e}"))
-            })??;
+            .map_err(|e| inference::InferenceError::Tokenizer(format!("Task join error: {e}")))??;
 
         info!("Overseer initialized successfully");
         Ok(Self {
@@ -198,8 +196,7 @@ impl Overseer {
         tool_name: &str,
         params_summary: &str,
     ) -> OverseerVerdict {
-        let prompt =
-            judgments::prompts::tool_call_prompt(tool_name, params_summary, agent_id);
+        let prompt = judgments::prompts::tool_call_prompt(tool_name, params_summary, agent_id);
 
         let (verdict, reasoning, stats) = self.run_judgment(&prompt).await;
 
@@ -221,11 +218,7 @@ impl Overseer {
     }
 
     /// Judge whether an agent response is complete.
-    pub async fn judge_completeness(
-        &self,
-        agent_id: &str,
-        response: &str,
-    ) -> OverseerVerdict {
+    pub async fn judge_completeness(&self, agent_id: &str, response: &str) -> OverseerVerdict {
         let preview = truncate(response, 500);
         let prompt = judgments::prompts::completeness_prompt(preview, agent_id);
 
@@ -277,11 +270,7 @@ impl Overseer {
     }
 
     /// Judge input content for safety (semantic check beyond regex).
-    pub async fn judge_input(
-        &self,
-        agent_id: &str,
-        message: &str,
-    ) -> OverseerVerdict {
+    pub async fn judge_input(&self, agent_id: &str, message: &str) -> OverseerVerdict {
         let preview = truncate(message, 500);
         let prompt = judgments::prompts::safety_prompt(preview, "input");
 
@@ -304,11 +293,7 @@ impl Overseer {
     }
 
     /// Judge output content for safety.
-    pub async fn judge_output(
-        &self,
-        agent_id: &str,
-        response: &str,
-    ) -> OverseerVerdict {
+    pub async fn judge_output(&self, agent_id: &str, response: &str) -> OverseerVerdict {
         let preview = truncate(response, 500);
         let prompt = judgments::prompts::safety_prompt(preview, "output");
 

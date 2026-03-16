@@ -8,15 +8,21 @@ use ratatui::{
     Frame,
 };
 
+use super::render_spinner;
 use crate::tui::effects::{self, palette, EffectState};
 use crate::tui::state::{AgentStatus, AppState};
-use super::render_spinner;
 
 /// Card width for agent cards
 const CARD_WIDTH: u16 = 16;
 
 /// Render the agents page — cards in cards_area, details in detail_area
-pub fn render_agents(frame: &mut Frame, cards_area: Rect, detail_area: Rect, state: &AppState, effect_state: &EffectState) {
+pub fn render_agents(
+    frame: &mut Frame,
+    cards_area: Rect,
+    detail_area: Rect,
+    state: &AppState,
+    effect_state: &EffectState,
+) {
     render_agent_cards(frame, cards_area, state, effect_state);
     render_agent_details(frame, detail_area, state);
 }
@@ -112,10 +118,16 @@ fn render_agent_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_st
         };
 
         // Line 2: model short
-        let model_short: String = agent.model.as_ref()
+        let model_short: String = agent
+            .model
+            .as_ref()
             .map(|m| {
                 let s = m.split('/').last().unwrap_or(m);
-                if s.len() > max_w { s[..max_w].to_string() } else { s.to_string() }
+                if s.len() > max_w {
+                    s[..max_w].to_string()
+                } else {
+                    s.to_string()
+                }
             })
             .unwrap_or_else(|| "no model".to_string());
 
@@ -123,7 +135,9 @@ fn render_agent_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_st
         let sessions_text = format!("{} sess", agent.session_count);
 
         let id_style = if is_selected {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
@@ -139,7 +153,10 @@ fn render_agent_cards(frame: &mut Frame, area: Rect, state: &AppState, effect_st
                 Span::styled(format!(" {id_trunc}"), id_style),
             ]),
             Line::from(Span::styled(model_short, model_style)),
-            Line::from(Span::styled(sessions_text, Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                sessions_text,
+                Style::default().fg(Color::DarkGray),
+            )),
         ];
 
         let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
@@ -193,7 +210,9 @@ fn render_agent_details(frame: &mut Frame, area: Rect, state: &AppState) {
             ]));
         }
 
-        let subagents: Vec<&str> = state.agents.iter()
+        let subagents: Vec<&str> = state
+            .agents
+            .iter()
             .filter(|a| a.parent_id.as_deref() == Some(&agent.id))
             .map(|a| a.id.as_str())
             .collect();
@@ -213,7 +232,11 @@ fn render_agent_details(frame: &mut Frame, area: Rect, state: &AppState) {
 
         content.push(Line::from(vec![
             Span::styled("Max Calls: ", Style::default().fg(Color::Cyan)),
-            Span::raw(agent.max_tool_calls.map_or("-".to_string(), |n| n.to_string())),
+            Span::raw(
+                agent
+                    .max_tool_calls
+                    .map_or("-".to_string(), |n| n.to_string()),
+            ),
         ]));
 
         content.push(Line::from(vec![
@@ -223,7 +246,10 @@ fn render_agent_details(frame: &mut Frame, area: Rect, state: &AppState) {
 
         if let Some(ref prompt) = agent.system_prompt {
             content.push(Line::from(""));
-            content.push(Line::from(Span::styled("System Prompt:", Style::default().fg(Color::Cyan))));
+            content.push(Line::from(Span::styled(
+                "System Prompt:",
+                Style::default().fg(Color::Cyan),
+            )));
             for line in prompt.lines().take(6) {
                 content.push(Line::from(Span::styled(
                     format!("  {line}"),
@@ -244,8 +270,7 @@ fn render_agent_details(frame: &mut Frame, area: Rect, state: &AppState) {
             Style::default().fg(Color::DarkGray),
         )));
 
-        let paragraph = Paragraph::new(content)
-            .wrap(Wrap { trim: false });
+        let paragraph = Paragraph::new(content).wrap(Wrap { trim: false });
         frame.render_widget(paragraph, body);
     } else if let Some(err) = &state.agents_error {
         let content = Paragraph::new(Span::styled(

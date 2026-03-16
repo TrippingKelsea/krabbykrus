@@ -67,8 +67,9 @@ impl AuditLog {
                 continue;
             }
 
-            let entry: AuditEntry = serde_json::from_str(&line)
-                .map_err(|e| CredentialError::AuditReadFailed(format!("failed to parse entry: {e}")))?;
+            let entry: AuditEntry = serde_json::from_str(&line).map_err(|e| {
+                CredentialError::AuditReadFailed(format!("failed to parse entry: {e}"))
+            })?;
 
             last_hash = entry
                 .entry_hash_bytes()
@@ -102,9 +103,9 @@ impl AuditLog {
     pub fn append(&mut self, entry: &AuditEntry) -> Result<()> {
         // Verify chain integrity
         let expected_prev = self.last_hash;
-        let actual_prev = entry
-            .previous_hash_bytes()
-            .map_err(|e| CredentialError::AuditWriteFailed(format!("invalid previous hash: {e}")))?;
+        let actual_prev = entry.previous_hash_bytes().map_err(|e| {
+            CredentialError::AuditWriteFailed(format!("invalid previous hash: {e}"))
+        })?;
 
         if actual_prev != expected_prev {
             return Err(CredentialError::AuditChainBroken(entry.sequence));
@@ -195,7 +196,11 @@ impl AuditLog {
                         valid: false,
                         entries_checked,
                         last_sequence,
-                        error: Some(format!("line {}: invalid previous hash: {}", line_num + 1, e)),
+                        error: Some(format!(
+                            "line {}: invalid previous hash: {}",
+                            line_num + 1,
+                            e
+                        )),
                     });
                 }
             };

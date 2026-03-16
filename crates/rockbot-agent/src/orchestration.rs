@@ -9,7 +9,7 @@
 //!   edges encode data flow and conditional routing. Supports parallel fan-out
 //!   for independent nodes in the same topological layer.
 
-use rockbot_config::{WorkflowDefinition, WorkflowNode, WorkflowEdge, EdgeCondition};
+use rockbot_config::{EdgeCondition, WorkflowDefinition, WorkflowEdge, WorkflowNode};
 use rockbot_tools::{AgentInvoker, BlackboardAccessor};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -74,7 +74,10 @@ pub enum WorkflowProgressEvent {
     /// A workflow node is about to execute
     NodeStarted { node_id: String, agent_id: String },
     /// A workflow node completed successfully
-    NodeCompleted { node_id: String, output_preview: String },
+    NodeCompleted {
+        node_id: String,
+        output_preview: String,
+    },
     /// A workflow node failed
     NodeFailed { node_id: String, error: String },
 }
@@ -138,7 +141,9 @@ impl WorkflowExecutor {
             let mut join_set = tokio::task::JoinSet::new();
 
             for node_id in ready.drain(..) {
-                let node = workflow.nodes.iter()
+                let node = workflow
+                    .nodes
+                    .iter()
                     .find(|n| n.id == node_id)
                     .ok_or_else(|| format!("Workflow node '{node_id}' not found"))?
                     .clone();
@@ -161,17 +166,27 @@ impl WorkflowExecutor {
                     // Build the message from template
                     let message = Self::build_node_message(&node, &input, &outputs).await;
 
-                    debug!("Workflow node '{}' invoking agent '{}' with message: {}",
-                           node.id, node.agent_id,
-                           if message.len() > 100 { &message[..100] } else { &message });
+                    debug!(
+                        "Workflow node '{}' invoking agent '{}' with message: {}",
+                        node.id,
+                        node.agent_id,
+                        if message.len() > 100 {
+                            &message[..100]
+                        } else {
+                            &message
+                        }
+                    );
 
                     // Invoke the agent
-                    match invoker.invoke_agent(
-                        &node.agent_id,
-                        &message,
-                        &session_id,
-                        1, // depth=1 for workflow nodes
-                    ).await {
+                    match invoker
+                        .invoke_agent(
+                            &node.agent_id,
+                            &message,
+                            &session_id,
+                            1, // depth=1 for workflow nodes
+                        )
+                        .await
+                    {
                         Ok(output) => {
                             if let Some(ref tx) = ptx {
                                 let preview = if output.len() > 200 {
@@ -212,10 +227,10 @@ impl WorkflowExecutor {
                     Ok(Err((node_id, error))) => {
                         warn!("Workflow node '{}' failed: {}", node_id, error);
                         // Store error as output so downstream nodes can see it
-                        node_outputs.write().await.insert(
-                            node_id.clone(),
-                            format!("[ERROR: {error}]"),
-                        );
+                        node_outputs
+                            .write()
+                            .await
+                            .insert(node_id.clone(), format!("[ERROR: {error}]"));
                         completed.write().await.insert(node_id);
                         executed_count += 1;
                     }
@@ -237,13 +252,17 @@ impl WorkflowExecutor {
                 }
 
                 // Check if all incoming edges have their source completed AND condition met
-                let incoming = in_edges.get(&node.id).map_or(&[] as &[&WorkflowEdge], |v| v.as_slice());
+                let incoming = in_edges
+                    .get(&node.id)
+                    .map_or(&[] as &[&WorkflowEdge], |v| v.as_slice());
                 if incoming.is_empty() {
                     // Entry node with no incoming edges — should have been in initial ready set
                     continue;
                 }
 
-                let all_sources_done = incoming.iter().all(|edge| completed_set.contains(&edge.from));
+                let all_sources_done = incoming
+                    .iter()
+                    .all(|edge| completed_set.contains(&edge.from));
                 if !all_sources_done {
                     continue;
                 }
@@ -262,8 +281,10 @@ impl WorkflowExecutor {
             // Safety: prevent infinite loop if no progress is made
             if ready.is_empty() && executed_count < total_nodes {
                 // Some nodes may be unreachable due to unmet conditions — that's OK
-                debug!("Workflow: {} of {} nodes executed, remaining nodes have unmet conditions",
-                       executed_count, total_nodes);
+                debug!(
+                    "Workflow: {} of {} nodes executed, remaining nodes have unmet conditions",
+                    executed_count, total_nodes
+                );
                 break;
             }
         }
@@ -272,7 +293,9 @@ impl WorkflowExecutor {
         let outputs = node_outputs.read().await;
         let exit_nodes = if workflow.exit_nodes.is_empty() {
             // If no exit nodes specified, use all leaf nodes (no outgoing edges)
-            workflow.nodes.iter()
+            workflow
+                .nodes
+                .iter()
                 .filter(|n| out_edges.get(&n.id).is_none_or(|e| e.is_empty()))
                 .map(|n| n.id.clone())
                 .collect::<Vec<_>>()
@@ -280,7 +303,8 @@ impl WorkflowExecutor {
             workflow.exit_nodes.clone()
         };
 
-        let final_output: Vec<String> = exit_nodes.iter()
+        let final_output: Vec<String> = exit_nodes
+            .iter()
             .filter_map(|id| outputs.get(id).cloned())
             .collect();
 
@@ -317,10 +341,16 @@ impl WorkflowExecutor {
         }
         for edge in &workflow.edges {
             if !node_ids.contains(edge.from.as_str()) {
-                return Err(format!("Edge source '{}' not found in workflow nodes", edge.from));
+                return Err(format!(
+                    "Edge source '{}' not found in workflow nodes",
+                    edge.from
+                ));
             }
             if !node_ids.contains(edge.to.as_str()) {
-                return Err(format!("Edge target '{}' not found in workflow nodes", edge.to));
+                return Err(format!(
+                    "Edge target '{}' not found in workflow nodes",
+                    edge.to
+                ));
             }
         }
 
@@ -333,7 +363,8 @@ impl WorkflowExecutor {
             *in_degree.entry(&edge.to).or_insert(0) += 1;
         }
 
-        let mut queue: Vec<&str> = in_degree.iter()
+        let mut queue: Vec<&str> = in_degree
+            .iter()
             .filter(|(_, &deg)| deg == 0)
             .map(|(&id, _)| id)
             .collect();
@@ -380,8 +411,7 @@ impl WorkflowExecutor {
                     let after = &remaining[start + 8..]; // skip "{output:"
                     if let Some(end) = after.find('}') {
                         let ref_id = &after[..end];
-                        let replacement = outputs.get(ref_id)
-                            .map_or("[no output]", String::as_str);
+                        let replacement = outputs.get(ref_id).map_or("[no output]", String::as_str);
                         result.push_str(replacement);
                         remaining = &after[end + 1..];
                     } else {
@@ -404,15 +434,13 @@ impl WorkflowExecutor {
             EdgeCondition::Contains { keyword } => {
                 output.to_lowercase().contains(&keyword.to_lowercase())
             }
-            EdgeCondition::Pattern { regex } => {
-                match regex::Regex::new(regex) {
-                    Ok(re) => re.is_match(output),
-                    Err(e) => {
-                        warn!("Invalid edge condition regex '{}': {}", regex, e);
-                        false
-                    }
+            EdgeCondition::Pattern { regex } => match regex::Regex::new(regex) {
+                Ok(re) => re.is_match(output),
+                Err(e) => {
+                    warn!("Invalid edge condition regex '{}': {}", regex, e);
+                    false
                 }
-            }
+            },
         }
     }
 }
@@ -425,8 +453,10 @@ mod tests {
     #[tokio::test]
     async fn test_blackboard_read_write() {
         let bb = SwarmBlackboard::new();
-        bb.write("swarm1", "task", serde_json::json!("research")).await;
-        bb.write("swarm1", "status", serde_json::json!("in_progress")).await;
+        bb.write("swarm1", "task", serde_json::json!("research"))
+            .await;
+        bb.write("swarm1", "status", serde_json::json!("in_progress"))
+            .await;
 
         assert_eq!(
             bb.read("swarm1", "task").await,
@@ -456,12 +486,28 @@ mod tests {
         let executor = WorkflowExecutor::new(Arc::new(MockInvoker));
         let wf = WorkflowDefinition {
             nodes: vec![
-                WorkflowNode { id: "a".into(), agent_id: "a1".into(), message_template: None },
-                WorkflowNode { id: "b".into(), agent_id: "b1".into(), message_template: None },
+                WorkflowNode {
+                    id: "a".into(),
+                    agent_id: "a1".into(),
+                    message_template: None,
+                },
+                WorkflowNode {
+                    id: "b".into(),
+                    agent_id: "b1".into(),
+                    message_template: None,
+                },
             ],
             edges: vec![
-                WorkflowEdge { from: "a".into(), to: "b".into(), condition: EdgeCondition::Always },
-                WorkflowEdge { from: "b".into(), to: "a".into(), condition: EdgeCondition::Always },
+                WorkflowEdge {
+                    from: "a".into(),
+                    to: "b".into(),
+                    condition: EdgeCondition::Always,
+                },
+                WorkflowEdge {
+                    from: "b".into(),
+                    to: "a".into(),
+                    condition: EdgeCondition::Always,
+                },
             ],
             entry_nodes: vec!["a".into()],
             exit_nodes: vec!["b".into()],
@@ -476,13 +522,33 @@ mod tests {
         let executor = WorkflowExecutor::new(Arc::new(MockInvoker));
         let wf = WorkflowDefinition {
             nodes: vec![
-                WorkflowNode { id: "a".into(), agent_id: "a1".into(), message_template: None },
-                WorkflowNode { id: "b".into(), agent_id: "b1".into(), message_template: None },
-                WorkflowNode { id: "c".into(), agent_id: "c1".into(), message_template: None },
+                WorkflowNode {
+                    id: "a".into(),
+                    agent_id: "a1".into(),
+                    message_template: None,
+                },
+                WorkflowNode {
+                    id: "b".into(),
+                    agent_id: "b1".into(),
+                    message_template: None,
+                },
+                WorkflowNode {
+                    id: "c".into(),
+                    agent_id: "c1".into(),
+                    message_template: None,
+                },
             ],
             edges: vec![
-                WorkflowEdge { from: "a".into(), to: "c".into(), condition: EdgeCondition::Always },
-                WorkflowEdge { from: "b".into(), to: "c".into(), condition: EdgeCondition::Always },
+                WorkflowEdge {
+                    from: "a".into(),
+                    to: "c".into(),
+                    condition: EdgeCondition::Always,
+                },
+                WorkflowEdge {
+                    from: "b".into(),
+                    to: "c".into(),
+                    condition: EdgeCondition::Always,
+                },
             ],
             entry_nodes: vec!["a".into(), "b".into()],
             exit_nodes: vec!["c".into()],
@@ -493,11 +559,15 @@ mod tests {
     #[test]
     fn test_edge_condition_contains() {
         assert!(WorkflowExecutor::check_condition(
-            &EdgeCondition::Contains { keyword: "error".into() },
+            &EdgeCondition::Contains {
+                keyword: "error".into()
+            },
             "There was an Error in processing"
         ));
         assert!(!WorkflowExecutor::check_condition(
-            &EdgeCondition::Contains { keyword: "error".into() },
+            &EdgeCondition::Contains {
+                keyword: "error".into()
+            },
             "All good"
         ));
     }
@@ -505,11 +575,15 @@ mod tests {
     #[test]
     fn test_edge_condition_pattern() {
         assert!(WorkflowExecutor::check_condition(
-            &EdgeCondition::Pattern { regex: r"\d{3}".into() },
+            &EdgeCondition::Pattern {
+                regex: r"\d{3}".into()
+            },
             "Status code 404 returned"
         ));
         assert!(!WorkflowExecutor::check_condition(
-            &EdgeCondition::Pattern { regex: r"\d{3}".into() },
+            &EdgeCondition::Pattern {
+                regex: r"\d{3}".into()
+            },
             "No numbers here"
         ));
     }
@@ -530,9 +604,11 @@ mod tests {
                     message_template: Some("Step2: {output:step1}".into()),
                 },
             ],
-            edges: vec![
-                WorkflowEdge { from: "step1".into(), to: "step2".into(), condition: EdgeCondition::Always },
-            ],
+            edges: vec![WorkflowEdge {
+                from: "step1".into(),
+                to: "step2".into(),
+                condition: EdgeCondition::Always,
+            }],
             entry_nodes: vec!["step1".into()],
             exit_nodes: vec!["step2".into()],
         };

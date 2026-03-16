@@ -7,7 +7,13 @@ use metrics::{counter, gauge, histogram};
 use std::time::Instant;
 
 /// Record an LLM request completion.
-pub fn record_llm_request(provider: &str, model: &str, duration: std::time::Duration, input_tokens: u64, output_tokens: u64) {
+pub fn record_llm_request(
+    provider: &str,
+    model: &str,
+    duration: std::time::Duration,
+    input_tokens: u64,
+    output_tokens: u64,
+) {
     histogram!("llm_request_duration_seconds", "provider" => provider.to_string(), "model" => model.to_string())
         .record(duration.as_secs_f64());
     counter!("llm_tokens_total", "direction" => "input", "provider" => provider.to_string(), "model" => model.to_string())
@@ -21,16 +27,14 @@ pub fn record_llm_request(provider: &str, model: &str, duration: std::time::Dura
 /// Record a tool call.
 pub fn record_tool_call(tool_name: &str, success: bool, duration: std::time::Duration) {
     let status = if success { "success" } else { "error" };
-    counter!("tool_calls_total", "tool" => tool_name.to_string(), "status" => status)
-        .increment(1);
+    counter!("tool_calls_total", "tool" => tool_name.to_string(), "status" => status).increment(1);
     histogram!("tool_call_duration_seconds", "tool" => tool_name.to_string())
         .record(duration.as_secs_f64());
 }
 
 /// Record an agent message processed.
 pub fn record_agent_message(agent_id: &str) {
-    counter!("agent_messages_total", "agent_id" => agent_id.to_string())
-        .increment(1);
+    counter!("agent_messages_total", "agent_id" => agent_id.to_string()).increment(1);
 }
 
 /// Update active session count.
@@ -65,7 +69,8 @@ impl Drop for TimingGuard {
     fn drop(&mut self) {
         let duration = self.start.elapsed();
         // Build label pairs as owned tuples
-        let labels: Vec<(String, String)> = self.labels
+        let labels: Vec<(String, String)> = self
+            .labels
             .iter()
             .map(|(k, v)| ((*k).to_string(), v.clone()))
             .collect();
@@ -83,7 +88,13 @@ mod tests {
     #[test]
     fn test_record_llm_request() {
         // Just verify the function doesn't panic (no recorder installed = no-op)
-        record_llm_request("anthropic", "claude-3", std::time::Duration::from_millis(500), 100, 50);
+        record_llm_request(
+            "anthropic",
+            "claude-3",
+            std::time::Duration::from_millis(500),
+            100,
+            50,
+        );
     }
 
     #[test]

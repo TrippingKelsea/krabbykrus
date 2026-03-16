@@ -25,10 +25,7 @@ pub struct ToolCallSummary {
 #[derive(Debug, Clone)]
 pub enum GatewayEvent {
     /// Incremental streaming text from an agent.
-    StreamChunk {
-        session_key: String,
-        delta: String,
-    },
+    StreamChunk { session_key: String, delta: String },
     /// Complete agent response (final message after streaming).
     AgentResponse {
         session_key: String,
@@ -38,14 +35,9 @@ pub enum GatewayEvent {
         processing_time_ms: Option<u64>,
     },
     /// Agent processing error.
-    AgentError {
-        session_key: String,
-        error: String,
-    },
+    AgentError { session_key: String, error: String },
     /// A tool call has started.
-    ToolCall {
-        tool_name: String,
-    },
+    ToolCall { tool_name: String },
     /// A tool call has completed.
     ToolResult {
         tool_name: String,
@@ -80,23 +72,13 @@ pub enum GatewayEvent {
     /// WebSocket connection established.
     Connected,
     /// WebSocket disconnected.
-    Disconnected {
-        reason: String,
-    },
+    Disconnected { reason: String },
     /// Gateway-level error message.
-    Error {
-        message: String,
-    },
+    Error { message: String },
     /// Noise Protocol handshake step (remote-exec).
-    NoiseHandshakeStep {
-        step: u8,
-        payload: String,
-    },
+    NoiseHandshakeStep { step: u8, payload: String },
     /// Server acknowledged remote capabilities (remote-exec).
-    RemoteCapabilitiesAck {
-        accepted: bool,
-        message: String,
-    },
+    RemoteCapabilitiesAck { accepted: bool, message: String },
     /// Tool execution request from the gateway (remote-exec).
     RemoteToolRequest {
         request_id: String,
@@ -189,7 +171,8 @@ impl GatewayClient {
 
     /// Send a health check request.
     pub async fn send_health_check(&self) -> Result<(), ClientError> {
-        self.send_raw(r#"{"type":"health_check"}"#.to_string()).await
+        self.send_raw(r#"{"type":"health_check"}"#.to_string())
+            .await
     }
 
     /// Send a ping keepalive.
@@ -227,7 +210,8 @@ impl GatewayClient {
                 _message: &[u8],
                 _cert: &rustls::pki_types::CertificateDer<'_>,
                 _dss: &rustls::DigitallySignedStruct,
-            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
                 Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
             }
 
@@ -236,7 +220,8 @@ impl GatewayClient {
                 _message: &[u8],
                 _cert: &rustls::pki_types::CertificateDer<'_>,
                 _dss: &rustls::DigitallySignedStruct,
-            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
                 Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
             }
 
@@ -252,7 +237,9 @@ impl GatewayClient {
             .with_custom_certificate_verifier(std::sync::Arc::new(AcceptAnyCert))
             .with_no_client_auth();
 
-        Some(tokio_tungstenite::Connector::Rustls(std::sync::Arc::new(config)))
+        Some(tokio_tungstenite::Connector::Rustls(std::sync::Arc::new(
+            config,
+        )))
     }
 
     /// Try connecting to a single WebSocket URL with retries.
@@ -261,13 +248,20 @@ impl GatewayClient {
     async fn try_connect_url(
         url: &str,
         max_attempts: u32,
-    ) -> Option<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>> {
+    ) -> Option<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    > {
         let connector = Self::tls_connector();
         for attempt in 1..=max_attempts {
             match tokio::time::timeout(
                 std::time::Duration::from_secs(5),
                 tokio_tungstenite::connect_async_tls_with_config(
-                    url, None, false, connector.clone(),
+                    url,
+                    None,
+                    false,
+                    connector.clone(),
                 ),
             )
             .await
@@ -427,8 +421,14 @@ impl GatewayClient {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown")
                     .to_string();
-                let success = json.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
-                let duration_ms = json.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                let success = json
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let duration_ms = json
+                    .get("duration_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
                 GatewayEvent::ToolResult {
                     tool_name,
                     success,
@@ -480,9 +480,7 @@ impl GatewayClient {
                         total_tokens: tokens.get("total_tokens")?.as_u64()?,
                     })
                 });
-                let processing_time_ms = json
-                    .get("processing_time_ms")
-                    .and_then(|v| v.as_u64());
+                let processing_time_ms = json.get("processing_time_ms").and_then(|v| v.as_u64());
 
                 GatewayEvent::AgentResponse {
                     session_key,
@@ -694,9 +692,7 @@ pub enum ClientError {
 /// `wss://host:port/ws` → `https://host:port`
 /// `ws://host:port/ws`  → `http://host:port`
 pub fn ws_url_to_http(ws_url: &str) -> String {
-    let base = ws_url
-        .trim_end_matches("/ws")
-        .trim_end_matches('/');
+    let base = ws_url.trim_end_matches("/ws").trim_end_matches('/');
     if base.starts_with("wss://") {
         format!("https://{}", &base[6..])
     } else if base.starts_with("ws://") {
@@ -820,27 +816,42 @@ mod tests {
 
     #[test]
     fn test_normalize_bare_host_port() {
-        assert_eq!(normalize_gateway_url("172.30.200.146:18181"), "wss://172.30.200.146:18181/ws");
+        assert_eq!(
+            normalize_gateway_url("172.30.200.146:18181"),
+            "wss://172.30.200.146:18181/ws"
+        );
     }
 
     #[test]
     fn test_normalize_https() {
-        assert_eq!(normalize_gateway_url("https://example.com:8080"), "wss://example.com:8080/ws");
+        assert_eq!(
+            normalize_gateway_url("https://example.com:8080"),
+            "wss://example.com:8080/ws"
+        );
     }
 
     #[test]
     fn test_normalize_wss_passthrough() {
-        assert_eq!(normalize_gateway_url("wss://host:1234/ws"), "wss://host:1234/ws");
+        assert_eq!(
+            normalize_gateway_url("wss://host:1234/ws"),
+            "wss://host:1234/ws"
+        );
     }
 
     #[test]
     fn test_normalize_wss_appends_path() {
-        assert_eq!(normalize_gateway_url("wss://host:1234"), "wss://host:1234/ws");
+        assert_eq!(
+            normalize_gateway_url("wss://host:1234"),
+            "wss://host:1234/ws"
+        );
     }
 
     #[test]
     fn test_normalize_trailing_slash() {
-        assert_eq!(normalize_gateway_url("172.30.200.146:18181/"), "wss://172.30.200.146:18181/ws");
+        assert_eq!(
+            normalize_gateway_url("172.30.200.146:18181/"),
+            "wss://172.30.200.146:18181/ws"
+        );
     }
 
     #[test]

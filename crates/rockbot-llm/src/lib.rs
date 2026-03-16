@@ -69,12 +69,12 @@
 //! ```
 
 use async_trait::async_trait;
+use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
-use futures_util::Stream;
-use std::pin::Pin;
 
 // Re-export credential schema types from the shared crate
 pub use rockbot_credentials_schema::{
@@ -83,21 +83,21 @@ pub use rockbot_credentials_schema::{
 
 #[cfg(feature = "anthropic")]
 pub mod anthropic;
-#[cfg(feature = "openai")]
-pub mod openai;
-#[cfg(feature = "ollama")]
-pub mod ollama;
 #[cfg(feature = "bedrock")]
 pub mod bedrock;
+#[cfg(feature = "ollama")]
+pub mod ollama;
+#[cfg(feature = "openai")]
+pub mod openai;
 
 #[cfg(feature = "anthropic")]
 pub use anthropic::AnthropicProvider;
-#[cfg(feature = "openai")]
-pub use openai::OpenAiProvider;
-#[cfg(feature = "ollama")]
-pub use ollama::OllamaProvider;
 #[cfg(feature = "bedrock")]
 pub use bedrock::BedrockProvider;
+#[cfg(feature = "ollama")]
+pub use ollama::OllamaProvider;
+#[cfg(feature = "openai")]
+pub use openai::OpenAiProvider;
 
 /// LLM provider errors
 #[derive(Debug, Error)]
@@ -134,7 +134,10 @@ pub trait LlmProvider: Send + Sync {
     fn capabilities(&self) -> ProviderCapabilities;
 
     /// Chat completion
-    async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse>;
+    async fn chat_completion(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse>;
 
     /// Streaming chat completion
     async fn stream_completion(&self, request: ChatCompletionRequest) -> Result<CompletionStream>;
@@ -430,19 +433,19 @@ impl LlmProviderRegistry {
             }
         };
 
-        self.providers.get(provider_id)
-            .cloned()
-            .ok_or_else(|| {
-                let hint = match provider_id {
-                    "bedrock" => " (configure AWS credentials)",
-                    "anthropic" => " (run 'claude' to authenticate, requires feature 'anthropic')",
-                    "openai" => " (set OPENAI_API_KEY, requires feature 'openai')",
-                    _ => "",
-                };
-                LlmError::ApiError {
-                    message: format!("Provider '{provider_id}' not available for model '{model_id}'{hint}"),
-                }
-            })
+        self.providers.get(provider_id).cloned().ok_or_else(|| {
+            let hint = match provider_id {
+                "bedrock" => " (configure AWS credentials)",
+                "anthropic" => " (run 'claude' to authenticate, requires feature 'anthropic')",
+                "openai" => " (set OPENAI_API_KEY, requires feature 'openai')",
+                _ => "",
+            };
+            LlmError::ApiError {
+                message: format!(
+                    "Provider '{provider_id}' not available for model '{model_id}'{hint}"
+                ),
+            }
+        })
     }
 
     /// Get a provider by its ID directly
@@ -507,10 +510,15 @@ impl LlmProvider for MockLlmProvider {
         }
     }
 
-    async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
+    async fn chat_completion(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse> {
         let response_content = format!(
             "Mock response to: {}",
-            request.messages.last()
+            request
+                .messages
+                .last()
                 .map(|m| m.content.chars().take(50).collect::<String>())
                 .unwrap_or_default()
         );
@@ -546,7 +554,9 @@ impl LlmProvider for MockLlmProvider {
     async fn stream_completion(&self, request: ChatCompletionRequest) -> Result<CompletionStream> {
         let response_content = format!(
             "Mock streamed response to: {}",
-            request.messages.last()
+            request
+                .messages
+                .last()
                 .map(|m| m.content.chars().take(50).collect::<String>())
                 .unwrap_or_default()
         );
@@ -588,17 +598,15 @@ impl LlmProvider for MockLlmProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>> {
-        Ok(vec![
-            ModelInfo {
-                id: "mock-model".to_string(),
-                name: "Mock Model".to_string(),
-                description: "A mock model for development".to_string(),
-                context_window: 128000,
-                max_output_tokens: Some(4000),
-                supports_tools: true,
-                supports_vision: false,
-            },
-        ])
+        Ok(vec![ModelInfo {
+            id: "mock-model".to_string(),
+            name: "Mock Model".to_string(),
+            description: "A mock model for development".to_string(),
+            context_window: 128000,
+            max_output_tokens: Some(4000),
+            supports_tools: true,
+            supports_vision: false,
+        }])
     }
 
     async fn get_model_info(&self, model_id: &str) -> Result<ModelInfo> {

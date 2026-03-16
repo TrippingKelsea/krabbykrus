@@ -57,10 +57,7 @@ pub async fn execute_in_container(
     command: &str,
     timeout: Duration,
 ) -> Result<SandboxResult, SandboxError> {
-    let image = config
-        .image
-        .as_deref()
-        .unwrap_or("ubuntu:22.04");
+    let image = config.image.as_deref().unwrap_or("ubuntu:22.04");
 
     let workspace_str = workspace
         .to_str()
@@ -70,25 +67,32 @@ pub async fn execute_in_container(
     docker_cmd.args([
         "run",
         "--rm",
-        "--network", "none",
-        "--memory", "512m",
-        "--cpus", "1.0",
-        "--pids-limit", "256",
+        "--network",
+        "none",
+        "--memory",
+        "512m",
+        "--cpus",
+        "1.0",
+        "--pids-limit",
+        "256",
         "--read-only",
-        "--tmpfs", "/tmp:rw,size=64m",
-        "-v", &format!("{workspace_str}:/workspace:rw"),
-        "-w", "/workspace",
+        "--tmpfs",
+        "/tmp:rw,size=64m",
+        "-v",
+        &format!("{workspace_str}:/workspace:rw"),
+        "-w",
+        "/workspace",
         image,
-        "sh", "-c", command,
+        "sh",
+        "-c",
+        command,
     ]);
 
     docker_cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    debug!(
-        "Executing in container (image={image}): {command}",
-    );
+    debug!("Executing in container (image={image}): {command}",);
 
     let child = docker_cmd
         .spawn()
@@ -121,8 +125,8 @@ pub async fn execute_sandboxed(
     command: &str,
     timeout: Duration,
 ) -> Result<SandboxResult, SandboxError> {
-    let use_container = matches!(config.mode.as_str(), "docker" | "container")
-        && config.image.is_some();
+    let use_container =
+        matches!(config.mode.as_str(), "docker" | "container") && config.image.is_some();
 
     if use_container {
         if is_docker_available().await {

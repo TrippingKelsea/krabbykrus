@@ -4,7 +4,7 @@
 //! interval-based, and cron-expression schedules. Jobs are persisted to SQLite
 //! and executed via a background tokio task.
 
-use crate::error::{RockBotError, Result};
+use crate::error::{Result, RockBotError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use cron::Schedule as CronExpression;
@@ -79,7 +79,6 @@ pub enum SessionTarget {
     Persistent,
 }
 
-
 /// How to wake/invoke the agent
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -91,7 +90,6 @@ pub enum WakeMode {
     /// Fire a system event that the agent can observe
     Event,
 }
-
 
 /// Where to deliver results after job execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,8 +132,7 @@ pub enum CronPayload {
 }
 
 /// Runtime state tracked per job
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CronJobState {
     pub next_run_at_ms: Option<u64>,
     pub last_run_at_ms: Option<u64>,
@@ -143,7 +140,6 @@ pub struct CronJobState {
     pub last_error: Option<String>,
     pub consecutive_errors: u32,
 }
-
 
 /// A scheduled cron job
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,11 +184,7 @@ pub struct CronJob {
 
 impl CronJob {
     /// Create a new cron job with the given parameters
-    pub fn new(
-        name: impl Into<String>,
-        schedule: CronSchedule,
-        payload: CronPayload,
-    ) -> Self {
+    pub fn new(name: impl Into<String>, schedule: CronSchedule, payload: CronPayload) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4().to_string(),
@@ -229,10 +221,7 @@ impl CronJob {
                 }
             }
             CronSchedule::Every { interval_ms } => {
-                let base = self
-                    .state
-                    .last_run_at_ms
-                    .unwrap_or(now_ms);
+                let base = self.state.last_run_at_ms.unwrap_or(now_ms);
                 let next = base + interval_ms;
                 if next <= now_ms {
                     Some(now_ms)
@@ -338,9 +327,7 @@ impl CronScheduler {
         )?;
 
         // Best-effort migration for existing databases (ignore errors if column exists)
-        let _ = db.execute_batch(
-            "ALTER TABLE cron_jobs ADD COLUMN target_client TEXT;",
-        );
+        let _ = db.execute_batch("ALTER TABLE cron_jobs ADD COLUMN target_client TEXT;");
 
         info!("Cron scheduler initialized with database at {:?}", path);
 
@@ -444,7 +431,9 @@ impl CronScheduler {
     ) {
         let job = {
             let jobs_read = jobs.read().await;
-            if let Some(j) = jobs_read.get(job_id) { j.clone() } else {
+            if let Some(j) = jobs_read.get(job_id) {
+                j.clone()
+            } else {
                 warn!("Cron job {} not found for execution", job_id);
                 return;
             }
@@ -765,10 +754,10 @@ impl CronScheduler {
             let target_client: Option<String> = row.get(11)?;
             let last_run_status_str: Option<String> = row.get(14)?;
 
-            let created_at = DateTime::from_timestamp(row.get::<_, i64>(17)?, 0)
-                .unwrap_or_else(Utc::now);
-            let updated_at = DateTime::from_timestamp(row.get::<_, i64>(18)?, 0)
-                .unwrap_or_else(Utc::now);
+            let created_at =
+                DateTime::from_timestamp(row.get::<_, i64>(17)?, 0).unwrap_or_else(Utc::now);
+            let updated_at =
+                DateTime::from_timestamp(row.get::<_, i64>(18)?, 0).unwrap_or_else(Utc::now);
 
             Ok(CronJob {
                 id: row.get(0)?,
@@ -780,25 +769,17 @@ impl CronScheduler {
                 schedule: serde_json::from_str(&schedule_str).unwrap_or(CronSchedule::Every {
                     interval_ms: 60_000,
                 }),
-                payload: serde_json::from_str(&payload_str).unwrap_or(
-                    CronPayload::SystemEvent {
-                        event: "unknown".into(),
-                        data: None,
-                    },
-                ),
-                session_target: serde_json::from_str(&session_target_str)
-                    .unwrap_or_default(),
+                payload: serde_json::from_str(&payload_str).unwrap_or(CronPayload::SystemEvent {
+                    event: "unknown".into(),
+                    data: None,
+                }),
+                session_target: serde_json::from_str(&session_target_str).unwrap_or_default(),
                 wake_mode: serde_json::from_str(&wake_mode_str).unwrap_or_default(),
-                delivery: delivery_str
-                    .and_then(|s| serde_json::from_str(&s).ok()),
+                delivery: delivery_str.and_then(|s| serde_json::from_str(&s).ok()),
                 target_client,
                 state: CronJobState {
-                    next_run_at_ms: row
-                        .get::<_, Option<i64>>(12)?
-                        .map(|v| v as u64),
-                    last_run_at_ms: row
-                        .get::<_, Option<i64>>(13)?
-                        .map(|v| v as u64),
+                    next_run_at_ms: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
+                    last_run_at_ms: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
                     last_run_status: last_run_status_str
                         .and_then(|s| serde_json::from_str(&s).ok()),
                     last_error: row.get(15)?,
@@ -922,7 +903,9 @@ mod tests {
         // Add
         let job = CronJob::new(
             "test-job",
-            CronSchedule::Every { interval_ms: 60_000 },
+            CronSchedule::Every {
+                interval_ms: 60_000,
+            },
             CronPayload::AgentTurn {
                 message: "Hello".into(),
                 extra_system_prompt: None,
@@ -963,7 +946,9 @@ mod tests {
             let scheduler = CronScheduler::new(&path).await.unwrap();
             let job = CronJob::new(
                 "persist-test",
-                CronSchedule::Every { interval_ms: 30_000 },
+                CronSchedule::Every {
+                    interval_ms: 30_000,
+                },
                 CronPayload::SystemEvent {
                     event: "heartbeat".into(),
                     data: None,

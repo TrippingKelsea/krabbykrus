@@ -133,7 +133,8 @@ fn extract_rust_symbols(content: &str) -> Vec<Symbol> {
     let struct_re = Regex::new(r"^\s*(?:pub\s+)?struct\s+(\w+)").expect("valid regex");
     let enum_re = Regex::new(r"^\s*(?:pub\s+)?enum\s+(\w+)").expect("valid regex");
     let trait_re = Regex::new(r"^\s*(?:pub\s+)?trait\s+(\w+)").expect("valid regex");
-    let impl_re = Regex::new(r"^\s*impl(?:<[^>]*>)?\s+(?:(\w+)\s+for\s+)?(\w+)").expect("valid regex");
+    let impl_re =
+        Regex::new(r"^\s*impl(?:<[^>]*>)?\s+(?:(\w+)\s+for\s+)?(\w+)").expect("valid regex");
     let mod_re = Regex::new(r"^\s*(?:pub\s+)?mod\s+(\w+)").expect("valid regex");
     let type_re = Regex::new(r"^\s*(?:pub\s+)?type\s+(\w+)").expect("valid regex");
     let const_re = Regex::new(r"^\s*(?:pub\s+)?const\s+(\w+)").expect("valid regex");
@@ -151,25 +152,59 @@ fn extract_rust_symbols(content: &str) -> Vec<Symbol> {
             let name = cap[1].to_string();
             symbols.push(Symbol {
                 name,
-                kind: if current_impl.is_some() { SymbolKind::Method } else { SymbolKind::Function },
+                kind: if current_impl.is_some() {
+                    SymbolKind::Method
+                } else {
+                    SymbolKind::Function
+                },
                 line: line_num,
                 parent: current_impl.clone(),
             });
         } else if let Some(cap) = struct_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Struct, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Struct,
+                line: line_num,
+                parent: None,
+            });
             current_impl = None;
         } else if let Some(cap) = enum_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Enum, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Enum,
+                line: line_num,
+                parent: None,
+            });
             current_impl = None;
         } else if let Some(cap) = trait_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Trait, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Trait,
+                line: line_num,
+                parent: None,
+            });
             current_impl = None;
         } else if let Some(cap) = mod_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Module, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Module,
+                line: line_num,
+                parent: None,
+            });
         } else if let Some(cap) = type_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Type, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Type,
+                line: line_num,
+                parent: None,
+            });
         } else if let Some(cap) = const_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Constant, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Constant,
+                line: line_num,
+                parent: None,
+            });
         }
 
         // Reset impl context when we see a closing brace at column 0
@@ -193,15 +228,30 @@ fn extract_python_symbols(content: &str) -> Vec<Symbol> {
         if let Some(cap) = class_re.captures(line) {
             let name = cap[1].to_string();
             current_class = Some(name.clone());
-            symbols.push(Symbol { name, kind: SymbolKind::Class, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name,
+                kind: SymbolKind::Class,
+                line: line_num,
+                parent: None,
+            });
         } else if let Some(cap) = def_re.captures(line) {
             let indent = cap[1].len();
             let name = cap[2].to_string();
             if indent > 0 && current_class.is_some() {
-                symbols.push(Symbol { name, kind: SymbolKind::Method, line: line_num, parent: current_class.clone() });
+                symbols.push(Symbol {
+                    name,
+                    kind: SymbolKind::Method,
+                    line: line_num,
+                    parent: current_class.clone(),
+                });
             } else {
                 current_class = None;
-                symbols.push(Symbol { name, kind: SymbolKind::Function, line: line_num, parent: None });
+                symbols.push(Symbol {
+                    name,
+                    kind: SymbolKind::Function,
+                    line: line_num,
+                    parent: None,
+                });
             }
         }
     }
@@ -221,15 +271,40 @@ fn extract_js_ts_symbols(content: &str) -> Vec<Symbol> {
         let line_num = i + 1;
         let trimmed = line.trim_start();
         if let Some(cap) = fn_re.captures(trimmed) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Function, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Function,
+                line: line_num,
+                parent: None,
+            });
         } else if let Some(cap) = class_re.captures(trimmed) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Class, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Class,
+                line: line_num,
+                parent: None,
+            });
         } else if let Some(cap) = interface_re.captures(trimmed) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Interface, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Interface,
+                line: line_num,
+                parent: None,
+            });
         } else if let Some(cap) = type_re.captures(trimmed) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Type, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Type,
+                line: line_num,
+                parent: None,
+            });
         } else if let Some(cap) = const_re.captures(trimmed) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Constant, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Constant,
+                line: line_num,
+                parent: None,
+            });
         }
     }
 
@@ -244,10 +319,24 @@ fn extract_go_symbols(content: &str) -> Vec<Symbol> {
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
         if let Some(cap) = fn_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Function, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Function,
+                line: line_num,
+                parent: None,
+            });
         } else if let Some(cap) = type_re.captures(line) {
-            let kind = if &cap[2] == "struct" { SymbolKind::Struct } else { SymbolKind::Interface };
-            symbols.push(Symbol { name: cap[1].to_string(), kind, line: line_num, parent: None });
+            let kind = if &cap[2] == "struct" {
+                SymbolKind::Struct
+            } else {
+                SymbolKind::Interface
+            };
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind,
+                line: line_num,
+                parent: None,
+            });
         }
     }
 
@@ -256,18 +345,38 @@ fn extract_go_symbols(content: &str) -> Vec<Symbol> {
 
 fn extract_java_like_symbols(content: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();
-    let class_re = Regex::new(r"(?:public|private|protected)?\s*(?:static\s+)?(?:abstract\s+)?class\s+(\w+)").expect("valid regex");
+    let class_re =
+        Regex::new(r"(?:public|private|protected)?\s*(?:static\s+)?(?:abstract\s+)?class\s+(\w+)")
+            .expect("valid regex");
     let interface_re = Regex::new(r"(?:public\s+)?interface\s+(\w+)").expect("valid regex");
-    let method_re = Regex::new(r"^\s+(?:public|private|protected)\s+(?:static\s+)?(?:\w+(?:<[^>]+>)?)\s+(\w+)\s*\(").expect("valid regex");
+    let method_re = Regex::new(
+        r"^\s+(?:public|private|protected)\s+(?:static\s+)?(?:\w+(?:<[^>]+>)?)\s+(\w+)\s*\(",
+    )
+    .expect("valid regex");
 
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
         if let Some(cap) = class_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Class, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Class,
+                line: line_num,
+                parent: None,
+            });
         } else if let Some(cap) = interface_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Interface, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Interface,
+                line: line_num,
+                parent: None,
+            });
         } else if let Some(cap) = method_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Method, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Method,
+                line: line_num,
+                parent: None,
+            });
         }
     }
 
@@ -283,11 +392,26 @@ fn extract_ruby_symbols(content: &str) -> Vec<Symbol> {
     for (i, line) in content.lines().enumerate() {
         let line_num = i + 1;
         if let Some(cap) = class_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Class, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Class,
+                line: line_num,
+                parent: None,
+            });
         } else if let Some(cap) = module_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Module, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Module,
+                line: line_num,
+                parent: None,
+            });
         } else if let Some(cap) = def_re.captures(line) {
-            symbols.push(Symbol { name: cap[1].to_string(), kind: SymbolKind::Method, line: line_num, parent: None });
+            symbols.push(Symbol {
+                name: cap[1].to_string(),
+                kind: SymbolKind::Method,
+                line: line_num,
+                parent: None,
+            });
         }
     }
 
@@ -296,14 +420,22 @@ fn extract_ruby_symbols(content: &str) -> Vec<Symbol> {
 
 /// Default extensions to index.
 const INDEXABLE_EXTENSIONS: &[&str] = &[
-    "rs", "py", "js", "jsx", "ts", "tsx", "go", "java", "cs", "rb",
-    "mjs", "cjs", "mts",
+    "rs", "py", "js", "jsx", "ts", "tsx", "go", "java", "cs", "rb", "mjs", "cjs", "mts",
 ];
 
 /// Default directories to skip.
 const SKIP_DIRS: &[&str] = &[
-    "target", "node_modules", ".git", "vendor", "dist", "build",
-    "__pycache__", ".venv", "venv", ".next", ".nuxt",
+    "target",
+    "node_modules",
+    ".git",
+    "vendor",
+    "dist",
+    "build",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".next",
+    ".nuxt",
 ];
 
 /// Index a workspace directory and return all indexed files.
@@ -386,7 +518,9 @@ pub fn generate_repo_map(files: &[IndexedFile], max_chars: usize) -> String {
 
         for sym in &file.symbols {
             let line = match &sym.parent {
-                Some(parent) => format!("  {} {}::{} (L{})\n", sym.kind, parent, sym.name, sym.line),
+                Some(parent) => {
+                    format!("  {} {}::{} (L{})\n", sym.kind, parent, sym.name, sym.line)
+                }
                 None => format!("  {} {} (L{})\n", sym.kind, sym.name, sym.line),
             };
             file_section.push_str(&line);
@@ -408,11 +542,9 @@ pub fn generate_repo_map(files: &[IndexedFile], max_chars: usize) -> String {
 /// Compute TF-IDF relevance scores for files relative to a query.
 ///
 /// Returns files sorted by relevance score (highest first).
-pub fn rank_files_by_relevance(
-    files: &[IndexedFile],
-    query: &str,
-) -> Vec<(usize, f64)> {
-    let query_terms: Vec<&str> = query.split_whitespace()
+pub fn rank_files_by_relevance(files: &[IndexedFile], query: &str) -> Vec<(usize, f64)> {
+    let query_terms: Vec<&str> = query
+        .split_whitespace()
         .map(|t| t.trim_matches(|c: char| !c.is_alphanumeric() && c != '_'))
         .filter(|t| t.len() > 1)
         .collect();
@@ -427,10 +559,17 @@ pub fn rank_files_by_relevance(
     // Compute IDF for each query term
     let mut idf: HashMap<&str, f64> = HashMap::new();
     for term in &query_terms {
-        let doc_freq = files.iter().filter(|f| {
-            f.symbols.iter().any(|s| s.name.to_lowercase().contains(&term.to_lowercase()))
-                || f.path.to_str().is_some_and(|p| p.to_lowercase().contains(&term.to_lowercase()))
-        }).count() as f64;
+        let doc_freq = files
+            .iter()
+            .filter(|f| {
+                f.symbols
+                    .iter()
+                    .any(|s| s.name.to_lowercase().contains(&term.to_lowercase()))
+                    || f.path
+                        .to_str()
+                        .is_some_and(|p| p.to_lowercase().contains(&term.to_lowercase()))
+            })
+            .count() as f64;
 
         let idf_val = if doc_freq > 0.0 {
             (n_docs / doc_freq).ln() + 1.0
@@ -448,12 +587,18 @@ pub fn rank_files_by_relevance(
             let idf_val = idf.get(term).copied().unwrap_or(0.0);
 
             // Term frequency in symbol names
-            let sym_tf = file.symbols.iter()
+            let sym_tf = file
+                .symbols
+                .iter()
                 .filter(|s| s.name.to_lowercase().contains(&term_lower))
                 .count() as f64;
 
             // Term frequency in path
-            let path_tf = if file.path.to_str().is_some_and(|p| p.to_lowercase().contains(&term_lower)) {
+            let path_tf = if file
+                .path
+                .to_str()
+                .is_some_and(|p| p.to_lowercase().contains(&term_lower))
+            {
                 2.0 // Boost for path matches
             } else {
                 0.0
@@ -535,9 +680,15 @@ def standalone():
     pass
 "#;
         let symbols = extract_python_symbols(code);
-        assert!(symbols.iter().any(|s| s.name == "MyClass" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "__init__" && s.kind == SymbolKind::Method));
-        assert!(symbols.iter().any(|s| s.name == "standalone" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "MyClass" && s.kind == SymbolKind::Class));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "__init__" && s.kind == SymbolKind::Method));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "standalone" && s.kind == SymbolKind::Function));
     }
 
     #[test]
@@ -567,10 +718,18 @@ type Config struct {}
 type Handler interface {}
 "#;
         let symbols = extract_go_symbols(code);
-        assert!(symbols.iter().any(|s| s.name == "main" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "Start" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "Config" && s.kind == SymbolKind::Struct));
-        assert!(symbols.iter().any(|s| s.name == "Handler" && s.kind == SymbolKind::Interface));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "main" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Start" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Config" && s.kind == SymbolKind::Struct));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Handler" && s.kind == SymbolKind::Interface));
     }
 
     #[test]
@@ -590,17 +749,30 @@ type Handler interface {}
                 path: PathBuf::from("src/main.rs"),
                 language: Language::Rust,
                 symbols: vec![
-                    Symbol { name: "main".to_string(), kind: SymbolKind::Function, line: 1, parent: None },
-                    Symbol { name: "Config".to_string(), kind: SymbolKind::Struct, line: 10, parent: None },
+                    Symbol {
+                        name: "main".to_string(),
+                        kind: SymbolKind::Function,
+                        line: 1,
+                        parent: None,
+                    },
+                    Symbol {
+                        name: "Config".to_string(),
+                        kind: SymbolKind::Struct,
+                        line: 10,
+                        parent: None,
+                    },
                 ],
                 size: 500,
             },
             IndexedFile {
                 path: PathBuf::from("src/lib.rs"),
                 language: Language::Rust,
-                symbols: vec![
-                    Symbol { name: "process".to_string(), kind: SymbolKind::Function, line: 5, parent: None },
-                ],
+                symbols: vec![Symbol {
+                    name: "process".to_string(),
+                    kind: SymbolKind::Function,
+                    line: 5,
+                    parent: None,
+                }],
                 size: 300,
             },
         ];
@@ -615,19 +787,19 @@ type Handler interface {}
 
     #[test]
     fn test_generate_repo_map_truncation() {
-        let files = vec![
-            IndexedFile {
-                path: PathBuf::from("src/very_long_file.rs"),
-                language: Language::Rust,
-                symbols: (0..100).map(|i| Symbol {
+        let files = vec![IndexedFile {
+            path: PathBuf::from("src/very_long_file.rs"),
+            language: Language::Rust,
+            symbols: (0..100)
+                .map(|i| Symbol {
                     name: format!("function_{i}"),
                     kind: SymbolKind::Function,
                     line: i + 1,
                     parent: None,
-                }).collect(),
-                size: 5000,
-            },
-        ];
+                })
+                .collect(),
+            size: 5000,
+        }];
 
         let map = generate_repo_map(&files, 200);
         assert!(map.len() <= 300); // Some flexibility for header
@@ -640,8 +812,18 @@ type Handler interface {}
                 path: PathBuf::from("src/config.rs"),
                 language: Language::Rust,
                 symbols: vec![
-                    Symbol { name: "Config".to_string(), kind: SymbolKind::Struct, line: 1, parent: None },
-                    Symbol { name: "load_config".to_string(), kind: SymbolKind::Function, line: 10, parent: None },
+                    Symbol {
+                        name: "Config".to_string(),
+                        kind: SymbolKind::Struct,
+                        line: 1,
+                        parent: None,
+                    },
+                    Symbol {
+                        name: "load_config".to_string(),
+                        kind: SymbolKind::Function,
+                        line: 10,
+                        parent: None,
+                    },
                 ],
                 size: 500,
             },
@@ -649,8 +831,18 @@ type Handler interface {}
                 path: PathBuf::from("src/server.rs"),
                 language: Language::Rust,
                 symbols: vec![
-                    Symbol { name: "Server".to_string(), kind: SymbolKind::Struct, line: 1, parent: None },
-                    Symbol { name: "start".to_string(), kind: SymbolKind::Method, line: 20, parent: Some("Server".to_string()) },
+                    Symbol {
+                        name: "Server".to_string(),
+                        kind: SymbolKind::Struct,
+                        line: 1,
+                        parent: None,
+                    },
+                    Symbol {
+                        name: "start".to_string(),
+                        kind: SymbolKind::Method,
+                        line: 20,
+                        parent: Some("Server".to_string()),
+                    },
                 ],
                 size: 800,
             },
@@ -664,14 +856,12 @@ type Handler interface {}
 
     #[test]
     fn test_rank_empty_query() {
-        let files = vec![
-            IndexedFile {
-                path: PathBuf::from("src/main.rs"),
-                language: Language::Rust,
-                symbols: vec![],
-                size: 100,
-            },
-        ];
+        let files = vec![IndexedFile {
+            path: PathBuf::from("src/main.rs"),
+            language: Language::Rust,
+            symbols: vec![],
+            size: 100,
+        }];
         let ranked = rank_files_by_relevance(&files, "");
         assert!(ranked.is_empty());
     }
@@ -682,31 +872,37 @@ type Handler interface {}
         let src_dir = dir.path().join("src");
         tokio::fs::create_dir_all(&src_dir).await.unwrap();
 
-        tokio::fs::write(
-            src_dir.join("main.rs"),
-            "fn main() {}\nstruct App;\n",
-        ).await.unwrap();
+        tokio::fs::write(src_dir.join("main.rs"), "fn main() {}\nstruct App;\n")
+            .await
+            .unwrap();
 
         tokio::fs::write(
             src_dir.join("lib.py"),
             "class Helper:\n    def run(self):\n        pass\n",
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         // Non-indexable file
-        tokio::fs::write(
-            src_dir.join("readme.txt"),
-            "This should be skipped",
-        ).await.unwrap();
+        tokio::fs::write(src_dir.join("readme.txt"), "This should be skipped")
+            .await
+            .unwrap();
 
         let files = index_workspace(dir.path()).await;
         assert_eq!(files.len(), 2); // .rs and .py, not .txt
 
-        let rs_file = files.iter().find(|f| f.path.to_str().unwrap().ends_with(".rs")).unwrap();
+        let rs_file = files
+            .iter()
+            .find(|f| f.path.to_str().unwrap().ends_with(".rs"))
+            .unwrap();
         assert_eq!(rs_file.language, Language::Rust);
         assert!(rs_file.symbols.iter().any(|s| s.name == "main"));
         assert!(rs_file.symbols.iter().any(|s| s.name == "App"));
 
-        let py_file = files.iter().find(|f| f.path.to_str().unwrap().ends_with(".py")).unwrap();
+        let py_file = files
+            .iter()
+            .find(|f| f.path.to_str().unwrap().ends_with(".py"))
+            .unwrap();
         assert_eq!(py_file.language, Language::Python);
         assert!(py_file.symbols.iter().any(|s| s.name == "Helper"));
     }
@@ -716,7 +912,9 @@ type Handler interface {}
         let dir = tempfile::tempdir().unwrap();
         let hidden = dir.path().join(".hidden");
         tokio::fs::create_dir_all(&hidden).await.unwrap();
-        tokio::fs::write(hidden.join("secret.rs"), "fn secret() {}").await.unwrap();
+        tokio::fs::write(hidden.join("secret.rs"), "fn secret() {}")
+            .await
+            .unwrap();
 
         let files = index_workspace(dir.path()).await;
         assert!(files.is_empty());

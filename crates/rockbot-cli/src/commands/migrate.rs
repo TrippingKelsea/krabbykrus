@@ -1,7 +1,7 @@
 //! Migration commands for moving from OpenClaw to RockBot
 
-use anyhow::Result;
 use crate::MigrateCommands;
+use anyhow::Result;
 
 /// Run migration commands
 pub async fn run(command: &MigrateCommands) -> Result<()> {
@@ -18,7 +18,10 @@ pub async fn run(command: &MigrateCommands) -> Result<()> {
             println!("   To: {}", to.display());
             println!("   Session migration coming soon...");
         }
-        MigrateCommands::Verify { openclaw_config, rockbot_config } => {
+        MigrateCommands::Verify {
+            openclaw_config,
+            rockbot_config,
+        } => {
             println!("🔍 Verifying migration");
             println!("   OpenClaw config: {}", openclaw_config.display());
             if let Some(rockbot_config) = rockbot_config {
@@ -27,6 +30,6 @@ pub async fn run(command: &MigrateCommands) -> Result<()> {
             println!("   Migration verification coming soon...");
         }
     }
-    
+
     Ok(())
 }

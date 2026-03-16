@@ -84,7 +84,8 @@ pub async fn unlock_vault_for_gateway(
         UnlockMethod::Keyfile { path_hint } => {
             // Auto-unlock with keyfile
             let keyfile_path = path_hint
-                .as_ref().map_or_else(|| vault_path.join("keyfile"), std::path::PathBuf::from);
+                .as_ref()
+                .map_or_else(|| vault_path.join("keyfile"), std::path::PathBuf::from);
 
             if keyfile_path.exists() {
                 info!("Unlocking vault with keyfile: {:?}", keyfile_path);
@@ -120,12 +121,13 @@ pub async fn unlock_vault_for_gateway(
             }
         }
 
-        UnlockMethod::SshKey { public_key_path, .. } => {
+        UnlockMethod::SshKey {
+            public_key_path, ..
+        } => {
             // For SSH unlock, we need the private key (not the public key in the vault)
             // The public_key_path tells us which key pair to use
-            let private_key_path = std::path::PathBuf::from(&public_key_path)
-                .with_extension(""); // Remove .pub extension
-            
+            let private_key_path = std::path::PathBuf::from(&public_key_path).with_extension(""); // Remove .pub extension
+
             let key_path = if private_key_path.exists() {
                 private_key_path
             } else {
@@ -139,10 +141,10 @@ pub async fn unlock_vault_for_gateway(
             // Check if key requires passphrase
             let passphrase = if interactive {
                 // Try without passphrase first, prompt if needed
-                if manager.unlock_with_ssh(&key_path, None).await.is_ok() { None } else {
-                    let pass = prompt_password(&format!(
-                        "Enter passphrase for {key_path:?}: "
-                    ))?;
+                if manager.unlock_with_ssh(&key_path, None).await.is_ok() {
+                    None
+                } else {
+                    let pass = prompt_password(&format!("Enter passphrase for {key_path:?}: "))?;
                     Some(pass)
                 }
             } else {
@@ -203,21 +205,23 @@ async fn retrieve_llm_credentials(
     for (provider_name, env_var_name) in LLM_PROVIDERS {
         // Look for endpoint with matching name
         if let Some(_endpoint) = endpoints.iter().find(|e| {
-            e.name.to_lowercase() == *provider_name
-                || e.name.to_lowercase().contains(provider_name)
+            e.name.to_lowercase() == *provider_name || e.name.to_lowercase().contains(provider_name)
         }) {
             // Try to decrypt the credential
-            match manager.request_credential(
-                &format!("saggyclaw://{provider_name}/api_key"),
-                "gateway",
-                "Gateway startup credential retrieval",
-            ).await {
+            match manager
+                .request_credential(
+                    &format!("saggyclaw://{provider_name}/api_key"),
+                    "gateway",
+                    "Gateway startup credential retrieval",
+                )
+                .await
+            {
                 Ok(result) => {
                     if let Some(secret) = result.credential {
                         if let Ok(api_key) = String::from_utf8(secret) {
                             debug!("Retrieved {} API key from vault", provider_name);
                             credentials.insert(provider_name.to_string(), api_key.clone());
-                            
+
                             // Also set environment variable for providers that use it
                             std::env::set_var(env_var_name, &api_key);
                         }

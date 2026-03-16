@@ -1,20 +1,20 @@
 //! Gateway server command implementation
 
 use anyhow::Result;
-use rockbot_core::{Config, Gateway, Agent, VaultCredentialAccessor};
 use rockbot_core::config::AgentInstance;
 use rockbot_core::session::SessionManager;
-use rockbot_tools::ToolRegistry;
+use rockbot_core::{Agent, Config, Gateway, VaultCredentialAccessor};
+use rockbot_llm::LlmProviderRegistry;
 use rockbot_memory::MemoryManager;
 use rockbot_security::SecurityManager;
-use rockbot_llm::LlmProviderRegistry;
+use rockbot_tools::ToolRegistry;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::process::Command;
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-use crate::GatewayCommands;
 use crate::commands::vault_unlock::unlock_vault_for_gateway;
+use crate::GatewayCommands;
 
 /// Run gateway commands
 pub async fn run(command: &GatewayCommands, config_path: &PathBuf) -> Result<()> {
@@ -24,7 +24,9 @@ pub async fn run(command: &GatewayCommands, config_path: &PathBuf) -> Result<()>
         GatewayCommands::Stop => stop_service().await,
         GatewayCommands::Restart => restart_service().await,
         GatewayCommands::Status => show_status().await,
-        GatewayCommands::Install { system, name } => install_service(*system, name, config_path).await,
+        GatewayCommands::Install { system, name } => {
+            install_service(*system, name, config_path).await
+        }
         GatewayCommands::Remove { system, name } => remove_service(*system, name).await,
         GatewayCommands::Logs { lines, follow } => show_logs(*lines, *follow).await,
     }
@@ -34,23 +36,25 @@ pub async fn run(command: &GatewayCommands, config_path: &PathBuf) -> Result<()>
 async fn run_server(config_path: &PathBuf) -> Result<()> {
     // Load configuration
     let config = Config::from_file(config_path).await?;
-    
+
     // Initialize core components
     info!("Initializing RockBot gateway...");
-    
+
     // Determine vault path from config
     let vault_path = config.credentials.vault_path.clone();
-    
+
     // Check if we're running interactively (TTY)
     let interactive = atty::is(atty::Stream::Stdin);
-    
+
     // Only unlock vault if credentials are enabled
     let vault_result = if config.credentials.enabled {
         match unlock_vault_for_gateway(
             &vault_path,
             interactive,
             Some(config.credentials.password_env_var.as_str()),
-        ).await {
+        )
+        .await
+        {
             Ok(result) => {
                 info!("Credential vault ready");
                 Some(result)
@@ -64,34 +68,44 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
         debug!("Credential management disabled in config");
         None
     };
-    
+
     // Create credential accessor if vault is available
-    let credential_accessor: Option<Arc<dyn rockbot_tools::CredentialAccessor>> = 
+    let credential_accessor: Option<Arc<dyn rockbot_tools::CredentialAccessor>> =
         vault_result.as_ref().map(|r| {
-            Arc::new(VaultCredentialAccessor::new(r.manager.clone())) 
+            Arc::new(VaultCredentialAccessor::new(r.manager.clone()))
                 as Arc<dyn rockbot_tools::CredentialAccessor>
         });
-    
+
     // Create session manager
     let db_path = dirs::config_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
         .join("rockbot")
         .join("data")
         .join("sessions.db");
-    
+
     tokio::fs::create_dir_all(db_path.parent().unwrap()).await?;
     let session_manager = Arc::new(SessionManager::new(&db_path, 1000).await?);
-    
+
     // Create gateway
     let mut gateway = Gateway::new(config.clone(), session_manager.clone()).await?;
     gateway.set_config_path(config_path.clone());
-    
+
     // Initialize other components
-    let tool_registry = Arc::new(ToolRegistry::new(rockbot_core::gateway::convert_tool_config(config.tools.clone())).await?);
-    let security_manager = Arc::new(SecurityManager::new(rockbot_core::gateway::convert_security_config(config.security.clone())).await?);
+    let tool_registry = Arc::new(
+        ToolRegistry::new(rockbot_core::gateway::convert_tool_config(
+            config.tools.clone(),
+        ))
+        .await?,
+    );
+    let security_manager = Arc::new(
+        SecurityManager::new(rockbot_core::gateway::convert_security_config(
+            config.security.clone(),
+        ))
+        .await?,
+    );
     // Create LLM registry (Anthropic uses Claude Code OAuth automatically)
     let llm_registry = Arc::new(LlmProviderRegistry::new().await?);
-    
+
     // Create agent factory for hot reload
     let defaults = config.agents.defaults.clone();
     let tr = tool_registry.clone();
@@ -99,61 +113,72 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
     let sess = session_manager.clone();
     let llm = llm_registry.clone();
     let cred_accessor = credential_accessor.clone();
-    
-    let agent_factory: rockbot_core::gateway::AgentFactory = Arc::new(move |agent_config: AgentInstance| {
-        let defaults = defaults.clone();
-        let tr = tr.clone();
-        let sm = sm.clone();
-        let sess = sess.clone();
-        let llm = llm.clone();
-        let cred_accessor = cred_accessor.clone();
-        
-        Box::pin(async move {
-            let model = agent_config.model.as_ref()
-                .unwrap_or(&defaults.model);
-            
-            let llm_provider = llm.get_provider_for_model(model).await
-                .map_err(|e| rockbot_core::error::GatewayError::InvalidRequest {
-                    message: e.to_string(),
+
+    let agent_factory: rockbot_core::gateway::AgentFactory =
+        Arc::new(move |agent_config: AgentInstance| {
+            let defaults = defaults.clone();
+            let tr = tr.clone();
+            let sm = sm.clone();
+            let sess = sess.clone();
+            let llm = llm.clone();
+            let cred_accessor = cred_accessor.clone();
+
+            Box::pin(async move {
+                let model = agent_config.model.as_ref().unwrap_or(&defaults.model);
+
+                let llm_provider = llm.get_provider_for_model(model).await.map_err(|e| {
+                    rockbot_core::error::GatewayError::InvalidRequest {
+                        message: e.to_string(),
+                    }
                 })?;
-            
-            let workspace = agent_config.workspace.as_ref()
-                .unwrap_or(&defaults.workspace);
-            let memory_manager = Arc::new(MemoryManager::new(workspace.clone()).await
-                .map_err(|e| rockbot_core::error::GatewayError::InvalidRequest {
-                    message: e.to_string(),
-                })?);
-            
-            let agent = Agent::new(
-                agent_config,
-                llm_provider,
-                tr,
-                memory_manager,
-                sm,
-                sess,
-                cred_accessor,
-                None,
-                None,
-            ).await.map_err(|e| rockbot_core::error::GatewayError::InvalidRequest {
-                message: e.to_string(),
-            })?;
-            
-            Ok(Arc::new(agent))
-        })
-    });
-    
+
+                let workspace = agent_config
+                    .workspace
+                    .as_ref()
+                    .unwrap_or(&defaults.workspace);
+                let memory_manager =
+                    Arc::new(MemoryManager::new(workspace.clone()).await.map_err(|e| {
+                        rockbot_core::error::GatewayError::InvalidRequest {
+                            message: e.to_string(),
+                        }
+                    })?);
+
+                let agent = Agent::new(
+                    agent_config,
+                    llm_provider,
+                    tr,
+                    memory_manager,
+                    sm,
+                    sess,
+                    cred_accessor,
+                    None,
+                    None,
+                )
+                .await
+                .map_err(|e| {
+                    rockbot_core::error::GatewayError::InvalidRequest {
+                        message: e.to_string(),
+                    }
+                })?;
+
+                Ok(Arc::new(agent))
+            })
+        });
+
     gateway.set_agent_factory(agent_factory);
     gateway.set_llm_registry(llm_registry.clone()).await;
 
     // Create agents (gracefully handle missing API keys)
     let mut agents_created = 0;
     let mut agents_pending = 0;
-    
+
     for agent_config in &config.agents.list {
         let agent_id = &agent_config.id;
-        let model = agent_config.model.as_ref()
+        let model = agent_config
+            .model
+            .as_ref()
             .unwrap_or(&config.agents.defaults.model);
-        
+
         // Try to get LLM provider - mark as pending if API key missing
         let llm_provider = match llm_registry.get_provider_for_model(model).await {
             Ok(provider) => provider,
@@ -163,38 +188,45 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
                     "Agent '{}' pending: {} (use POST /api/gateway/reload after adding credentials)",
                     agent_id, reason
                 );
-                gateway.add_pending_agent(agent_config.clone(), reason).await;
+                gateway
+                    .add_pending_agent(agent_config.clone(), reason)
+                    .await;
                 agents_pending += 1;
                 continue;
             }
         };
-        
+
         info!("Creating agent: {}", agent_id);
-        
+
         // Create memory manager for this agent
-        let workspace = agent_config.workspace.as_ref()
+        let workspace = agent_config
+            .workspace
+            .as_ref()
             .unwrap_or(&config.agents.defaults.workspace);
         let memory_manager = Arc::new(MemoryManager::new(workspace.clone()).await?);
-        
+
         // Create agent
         let invoker = gateway.agent_invoker();
-        let agent = Arc::new(Agent::new(
-            agent_config.clone(),
-            llm_provider,
-            tool_registry.clone(),
-            memory_manager,
-            security_manager.clone(),
-            session_manager.clone(),
-            credential_accessor.clone(),
-            None,
-            Some(invoker),
-        ).await?);
+        let agent = Arc::new(
+            Agent::new(
+                agent_config.clone(),
+                llm_provider,
+                tool_registry.clone(),
+                memory_manager,
+                security_manager.clone(),
+                session_manager.clone(),
+                credential_accessor.clone(),
+                None,
+                Some(invoker),
+            )
+            .await?,
+        );
 
         // Register with gateway
         gateway.register_agent(agent).await;
         agents_created += 1;
     }
-    
+
     if agents_pending > 0 {
         info!(
             "Gateway initialized: {} agent(s) active, {} pending (missing API keys)",
@@ -226,10 +258,10 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
             }
         }
     });
-    
+
     // Start the gateway
     gateway.start().await?;
-    
+
     Ok(())
 }
 
@@ -245,7 +277,7 @@ async fn start_service() -> Result<()> {
     let status = Command::new("systemctl")
         .args(["--user", "start", "rockbot-gateway"])
         .status();
-    
+
     match status {
         Ok(s) if s.success() => {
             println!("✅ Gateway service started (user)");
@@ -256,7 +288,7 @@ async fn start_service() -> Result<()> {
             let status = Command::new("systemctl")
                 .args(["start", "rockbot-gateway"])
                 .status()?;
-            
+
             if status.success() {
                 println!("✅ Gateway service started (system)");
                 Ok(())
@@ -273,7 +305,7 @@ async fn stop_service() -> Result<()> {
     let status = Command::new("systemctl")
         .args(["--user", "stop", "rockbot-gateway"])
         .status();
-    
+
     match status {
         Ok(s) if s.success() => {
             println!("✅ Gateway service stopped (user)");
@@ -284,7 +316,7 @@ async fn stop_service() -> Result<()> {
             let status = Command::new("systemctl")
                 .args(["stop", "rockbot-gateway"])
                 .status()?;
-            
+
             if status.success() {
                 println!("✅ Gateway service stopped (system)");
                 Ok(())
@@ -301,7 +333,7 @@ async fn restart_service() -> Result<()> {
     let status = Command::new("systemctl")
         .args(["--user", "restart", "rockbot-gateway"])
         .status();
-    
+
     match status {
         Ok(s) if s.success() => {
             println!("✅ Gateway service restarted (user)");
@@ -312,7 +344,7 @@ async fn restart_service() -> Result<()> {
             let status = Command::new("systemctl")
                 .args(["restart", "rockbot-gateway"])
                 .status()?;
-            
+
             if status.success() {
                 println!("✅ Gateway service restarted (system)");
                 Ok(())
@@ -326,18 +358,18 @@ async fn restart_service() -> Result<()> {
 /// Show gateway service status
 async fn show_status() -> Result<()> {
     println!("Checking gateway service status...\n");
-    
+
     // Check user service
     println!("=== User Service ===");
     let _ = Command::new("systemctl")
         .args(["--user", "status", "rockbot-gateway", "--no-pager"])
         .status();
-    
+
     println!("\n=== System Service ===");
     let _ = Command::new("systemctl")
         .args(["status", "rockbot-gateway", "--no-pager"])
         .status();
-    
+
     // Also try to hit the health endpoint
     println!("\n=== Gateway Health ===");
     match reqwest::Client::new()
@@ -349,9 +381,27 @@ async fn show_status() -> Result<()> {
         Ok(resp) if resp.status().is_success() => {
             let health: serde_json::Value = resp.json().await?;
             println!("Gateway is running:");
-            println!("  Version: {}", health.get("version").and_then(|v| v.as_str()).unwrap_or("unknown"));
-            println!("  Agents: {}", health.get("agents").and_then(|v| v.as_array()).map_or(0, std::vec::Vec::len));
-            println!("  Active sessions: {}", health.get("active_sessions").and_then(serde_json::Value::as_u64).unwrap_or(0));
+            println!(
+                "  Version: {}",
+                health
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+            );
+            println!(
+                "  Agents: {}",
+                health
+                    .get("agents")
+                    .and_then(|v| v.as_array())
+                    .map_or(0, std::vec::Vec::len)
+            );
+            println!(
+                "  Active sessions: {}",
+                health
+                    .get("active_sessions")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+            );
         }
         Ok(resp) => {
             println!("Gateway responded with status: {}", resp.status());
@@ -360,18 +410,21 @@ async fn show_status() -> Result<()> {
             println!("Gateway is not responding on http://127.0.0.1:18080");
         }
     }
-    
+
     Ok(())
 }
 
 /// Install the gateway as a systemd service
 async fn install_service(system: bool, name: &str, config_path: &Path) -> Result<()> {
     let exe_path = std::env::current_exe()?;
-    let config_path = config_path.canonicalize().unwrap_or_else(|_| config_path.to_path_buf());
-    
+    let config_path = config_path
+        .canonicalize()
+        .unwrap_or_else(|_| config_path.to_path_buf());
+
     let service_content = if system {
         // System service
-        format!(r#"[Unit]
+        format!(
+            r#"[Unit]
 Description=RockBot Gateway Server
 After=network.target
 
@@ -397,7 +450,8 @@ WantedBy=multi-user.target
         )
     } else {
         // User service
-        format!(r#"[Unit]
+        format!(
+            r#"[Unit]
 Description=RockBot Gateway Server
 After=default.target
 
@@ -437,9 +491,7 @@ WantedBy=default.target
 
     // Reload systemd
     if system {
-        let status = Command::new("systemctl")
-            .args(["daemon-reload"])
-            .status()?;
+        let status = Command::new("systemctl").args(["daemon-reload"]).status()?;
         if !status.success() {
             anyhow::bail!("Failed to reload systemd (are you root?)");
         }
@@ -454,9 +506,7 @@ WantedBy=default.target
 
     // Enable the service
     if system {
-        let status = Command::new("systemctl")
-            .args(["enable", name])
-            .status()?;
+        let status = Command::new("systemctl").args(["enable", name]).status()?;
         if status.success() {
             println!("✅ Enabled system service: {name}");
         }
@@ -467,7 +517,7 @@ WantedBy=default.target
         if status.success() {
             println!("✅ Enabled user service: {name}");
         }
-        
+
         // Enable lingering so service runs without login
         let username = std::env::var("USER").unwrap_or_default();
         if !username.is_empty() {
@@ -503,12 +553,8 @@ WantedBy=default.target
 async fn remove_service(system: bool, name: &str) -> Result<()> {
     // Stop the service first
     if system {
-        let _ = Command::new("systemctl")
-            .args(["stop", name])
-            .status();
-        let _ = Command::new("systemctl")
-            .args(["disable", name])
-            .status();
+        let _ = Command::new("systemctl").args(["stop", name]).status();
+        let _ = Command::new("systemctl").args(["disable", name]).status();
     } else {
         let _ = Command::new("systemctl")
             .args(["--user", "stop", name])
@@ -537,9 +583,7 @@ async fn remove_service(system: bool, name: &str) -> Result<()> {
 
     // Reload systemd
     if system {
-        let _ = Command::new("systemctl")
-            .args(["daemon-reload"])
-            .status();
+        let _ = Command::new("systemctl").args(["daemon-reload"]).status();
     } else {
         let _ = Command::new("systemctl")
             .args(["--user", "daemon-reload"])
@@ -559,25 +603,21 @@ async fn show_logs(lines: usize, follow: bool) -> Result<()> {
         "-n".to_string(),
         lines.to_string(),
     ];
-    
+
     if follow {
         args.push("-f".to_string());
     }
 
     // Try user logs first
-    let status = Command::new("journalctl")
-        .args(&args)
-        .status();
-    
+    let status = Command::new("journalctl").args(&args).status();
+
     match status {
         Ok(s) if s.success() => Ok(()),
         _ => {
             // Try system logs
             args.remove(0); // Remove --user
-            let status = Command::new("journalctl")
-                .args(&args)
-                .status()?;
-            
+            let status = Command::new("journalctl").args(&args).status()?;
+
             if !status.success() {
                 anyhow::bail!("Failed to retrieve logs");
             }

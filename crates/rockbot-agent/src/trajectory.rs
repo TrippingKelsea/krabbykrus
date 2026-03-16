@@ -26,14 +26,10 @@ pub struct TrajectoryEntry {
 pub enum TrajectoryEvent {
     /// User message received.
     #[serde(rename = "user_message")]
-    UserMessage {
-        content_preview: String,
-    },
+    UserMessage { content_preview: String },
     /// System prompt assembled.
     #[serde(rename = "system_prompt")]
-    SystemPrompt {
-        length_chars: usize,
-    },
+    SystemPrompt { length_chars: usize },
     /// LLM request sent.
     #[serde(rename = "llm_request")]
     LlmRequest {
@@ -84,19 +80,13 @@ pub enum TrajectoryEvent {
     },
     /// Loop detector verdict.
     #[serde(rename = "loop_verdict")]
-    LoopVerdict {
-        verdict: String,
-    },
+    LoopVerdict { verdict: String },
     /// Reflection pass.
     #[serde(rename = "reflection")]
-    Reflection {
-        action: String,
-    },
+    Reflection { action: String },
     /// Error during processing.
     #[serde(rename = "error")]
-    Error {
-        message: String,
-    },
+    Error { message: String },
     /// Agent processing complete.
     #[serde(rename = "complete")]
     Complete {
@@ -163,7 +153,8 @@ impl Trajectory {
 
     /// Serialize to JSON lines (one JSON object per line).
     pub fn to_jsonl(&self) -> String {
-        self.entries.iter()
+        self.entries
+            .iter()
             .filter_map(|e| serde_json::to_string(e).ok())
             .collect::<Vec<_>>()
             .join("\n")
@@ -195,21 +186,33 @@ mod tests {
     #[test]
     fn test_trajectory_record() {
         let mut t = Trajectory::new("s", "a");
-        t.record(TrajectoryEvent::UserMessage {
-            content_preview: "hello".to_string(),
-        }, 0, 0);
+        t.record(
+            TrajectoryEvent::UserMessage {
+                content_preview: "hello".to_string(),
+            },
+            0,
+            0,
+        );
         assert_eq!(t.len(), 1);
     }
 
     #[test]
     fn test_trajectory_to_jsonl() {
         let mut t = Trajectory::new("s", "a");
-        t.record(TrajectoryEvent::UserMessage {
-            content_preview: "hello".to_string(),
-        }, 0, 0);
-        t.record(TrajectoryEvent::Error {
-            message: "oops".to_string(),
-        }, 1, 100);
+        t.record(
+            TrajectoryEvent::UserMessage {
+                content_preview: "hello".to_string(),
+            },
+            0,
+            0,
+        );
+        t.record(
+            TrajectoryEvent::Error {
+                message: "oops".to_string(),
+            },
+            1,
+            100,
+        );
         let jsonl = t.to_jsonl();
         assert_eq!(jsonl.lines().count(), 2);
     }

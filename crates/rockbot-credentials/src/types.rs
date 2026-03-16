@@ -235,7 +235,10 @@ impl PermissionLevel {
 
     /// Returns whether this permission level requires human approval.
     pub fn requires_approval(&self) -> bool {
-        matches!(self, PermissionLevel::AllowHil | PermissionLevel::AllowHil2fa)
+        matches!(
+            self,
+            PermissionLevel::AllowHil | PermissionLevel::AllowHil2fa
+        )
     }
 
     /// Returns whether this permission level requires YubiKey 2FA.

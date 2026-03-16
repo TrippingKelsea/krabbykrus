@@ -1,5 +1,5 @@
 //! Plugin system for RockBot
-//! 
+//!
 //! This module provides the plugin loading and management system.
 //! In the full implementation, this would support WebAssembly plugins.
 
@@ -12,16 +12,16 @@ use thiserror::Error;
 pub enum PluginError {
     #[error("Plugin not found: {name}")]
     NotFound { name: String },
-    
+
     #[error("Plugin loading failed: {message}")]
     LoadingFailed { message: String },
-    
+
     #[error("Plugin execution failed: {message}")]
     ExecutionFailed { message: String },
-    
+
     #[error("Invalid plugin manifest: {message}")]
     InvalidManifest { message: String },
-    
+
     #[error("Security error: {message}")]
     SecurityError { message: String },
 }
@@ -95,22 +95,22 @@ impl PluginManager {
             plugins: HashMap::new(),
         }
     }
-    
+
     /// Load a plugin from a manifest
     pub async fn load_plugin(&mut self, manifest: PluginManifest) -> Result<()> {
         tracing::info!("Loading plugin: {} v{}", manifest.name, manifest.version);
-        
+
         let plugin = LoadedPlugin {
             id: manifest.id.clone(),
             manifest,
             state: PluginState::Loaded,
         };
-        
+
         self.plugins.insert(plugin.id.clone(), plugin);
-        
+
         Ok(())
     }
-    
+
     /// Unload a plugin
     pub async fn unload_plugin(&mut self, plugin_id: &str) -> Result<()> {
         if let Some(plugin) = self.plugins.remove(plugin_id) {
@@ -122,17 +122,17 @@ impl PluginManager {
             })
         }
     }
-    
+
     /// Get plugin by ID
     pub fn get_plugin(&self, plugin_id: &str) -> Option<&LoadedPlugin> {
         self.plugins.get(plugin_id)
     }
-    
+
     /// List all loaded plugins
     pub fn list_plugins(&self) -> Vec<&LoadedPlugin> {
         self.plugins.values().collect()
     }
-    
+
     /// Get tools provided by all plugins
     pub fn get_plugin_tools(&self) -> Vec<PluginToolDefinition> {
         let mut tools = Vec::new();
@@ -141,7 +141,7 @@ impl PluginManager {
         }
         tools
     }
-    
+
     /// Get channels provided by all plugins
     pub fn get_plugin_channels(&self) -> Vec<PluginChannelDefinition> {
         let mut channels = Vec::new();
@@ -162,11 +162,11 @@ impl Default for PluginManager {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
-    
+
     #[tokio::test]
     async fn test_plugin_loading() {
         let mut manager = PluginManager::new();
-        
+
         let manifest = PluginManifest {
             id: "test-plugin".to_string(),
             name: "Test Plugin".to_string(),
@@ -177,9 +177,9 @@ mod tests {
             tools: vec![],
             channels: vec![],
         };
-        
+
         manager.load_plugin(manifest).await.unwrap();
-        
+
         assert!(manager.get_plugin("test-plugin").is_some());
         assert_eq!(manager.list_plugins().len(), 1);
     }

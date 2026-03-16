@@ -122,8 +122,7 @@ fn default_true() -> bool {
 }
 
 /// Source from which a skill was discovered.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum SkillSource {
     /// Bundled with the package
     #[default]
@@ -200,7 +199,9 @@ impl SkillManager {
 
         // 2. Workspace skills
         for path in self.workspace_paths.clone() {
-            count += self.load_skills_from_dir(&path, SkillSource::Workspace).await?;
+            count += self
+                .load_skills_from_dir(&path, SkillSource::Workspace)
+                .await?;
         }
 
         // 3. Agent-specific skills
@@ -306,7 +307,10 @@ impl SkillManager {
             .and_then(|v| v.as_str())
             .map(String::from)
             .unwrap_or_else(|| {
-                let fname = path.file_stem().and_then(|f| f.to_str()).unwrap_or("unnamed");
+                let fname = path
+                    .file_stem()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or("unnamed");
                 // "commit.skill" -> "commit", "SKILL" -> derive from parent dir
                 let base = fname.strip_suffix(".skill").unwrap_or(fname);
                 if base == "SKILL" {
@@ -385,7 +389,11 @@ impl SkillManager {
     /// `/<skill-name>` and the skill exists and is user-invocable.
     /// The remainder of the message (after the slash command) is appended to
     /// the skill's content as the user's input.
-    pub fn dispatch_slash_command(&self, message: &str, agent_id: &str) -> Option<(String, String)> {
+    pub fn dispatch_slash_command(
+        &self,
+        message: &str,
+        agent_id: &str,
+    ) -> Option<(String, String)> {
         let trimmed = message.trim();
         if !trimmed.starts_with('/') {
             return None;
@@ -403,9 +411,7 @@ impl SkillManager {
         }
 
         // Look up skill by name or skill_key
-        let loaded = self
-            .get_skill(cmd)
-            .or_else(|| self.get_skill_by_key(cmd))?;
+        let loaded = self.get_skill(cmd).or_else(|| self.get_skill_by_key(cmd))?;
 
         // Check if user-invocable
         if !loaded.policy.user_invocable {
@@ -450,7 +456,12 @@ impl SkillManager {
     }
 
     /// Load a skill directly from a Skill struct (useful for programmatic registration).
-    pub fn register_skill(&mut self, skill: Skill, source: SkillSource, policy: SkillInvocationPolicy) {
+    pub fn register_skill(
+        &mut self,
+        skill: Skill,
+        source: SkillSource,
+        policy: SkillInvocationPolicy,
+    ) {
         let name = skill.name.clone();
         let mut loaded = LoadedSkill {
             skill,
@@ -510,12 +521,7 @@ impl SkillManager {
     pub fn always_on_skills(&self, agent_id: &str, current_os: &str) -> Vec<&LoadedSkill> {
         self.available_skills(agent_id, current_os)
             .into_iter()
-            .filter(|ls| {
-                ls.skill
-                    .metadata
-                    .as_ref()
-                    .is_some_and(|m| m.always)
-            })
+            .filter(|ls| ls.skill.metadata.as_ref().is_some_and(|m| m.always))
             .collect()
     }
 
@@ -554,7 +560,8 @@ impl SkillManager {
         }
 
         // Collect explicitly requested skills (avoid duplicates with always-on)
-        let always_on_names: Vec<&str> = always_on.iter().map(|ls| ls.skill.name.as_str()).collect();
+        let always_on_names: Vec<&str> =
+            always_on.iter().map(|ls| ls.skill.name.as_str()).collect();
         for name in additional_skill_names {
             if always_on_names.contains(&name.as_str()) {
                 continue;
@@ -589,16 +596,8 @@ impl SkillManager {
                 description: ls.skill.description.clone(),
                 source: ls.source.clone(),
                 requirements_met: ls.requirements_met,
-                always_on: ls
-                    .skill
-                    .metadata
-                    .as_ref()
-                    .is_some_and(|m| m.always),
-                emoji: ls
-                    .skill
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.emoji.clone()),
+                always_on: ls.skill.metadata.as_ref().is_some_and(|m| m.always),
+                emoji: ls.skill.metadata.as_ref().and_then(|m| m.emoji.clone()),
             })
             .collect()
     }
@@ -626,7 +625,6 @@ pub struct SkillSummary {
     pub always_on: bool,
     pub emoji: Option<String>,
 }
-
 
 /// Check whether a skill's requirements are satisfied on the current system.
 fn check_skill_requirements(skill: &Skill, config_keys: &[String]) -> bool {
@@ -902,7 +900,11 @@ mod tests {
     fn test_register_and_retrieve_skill() {
         let mut manager = SkillManager::new(None, vec![]);
         let skill = make_skill("my-skill", false);
-        manager.register_skill(skill, SkillSource::Bundled, SkillInvocationPolicy::default());
+        manager.register_skill(
+            skill,
+            SkillSource::Bundled,
+            SkillInvocationPolicy::default(),
+        );
 
         assert!(manager.get_skill("my-skill").is_some());
         assert!(manager.get_skill("nonexistent").is_none());
@@ -912,7 +914,11 @@ mod tests {
     fn test_get_skill_by_key() {
         let mut manager = SkillManager::new(None, vec![]);
         let skill = make_skill("My-Skill", false);
-        manager.register_skill(skill, SkillSource::Bundled, SkillInvocationPolicy::default());
+        manager.register_skill(
+            skill,
+            SkillSource::Bundled,
+            SkillInvocationPolicy::default(),
+        );
 
         assert!(manager.get_skill_by_key("my-skill").is_some());
         assert!(manager.get_skill_by_key("nope").is_none());
@@ -992,11 +998,8 @@ mod tests {
             SkillInvocationPolicy::default(),
         );
 
-        let context = manager.assemble_skill_context(
-            "agent-1",
-            "linux",
-            &["extra-skill".to_string()],
-        );
+        let context =
+            manager.assemble_skill_context("agent-1", "linux", &["extra-skill".to_string()]);
 
         assert!(context.contains("# Skills"));
         assert!(context.contains("always-skill"));
@@ -1073,7 +1076,10 @@ content = "Say hello to the user"
         let content = "---\nname: my-skill\ndescription: Does stuff\nalways: true\n---\n# Instructions\nDo the thing.";
         let (fm, body) = parse_md_frontmatter(content);
         assert_eq!(fm.get("name").unwrap().as_str().unwrap(), "my-skill");
-        assert_eq!(fm.get("description").unwrap().as_str().unwrap(), "Does stuff");
+        assert_eq!(
+            fm.get("description").unwrap().as_str().unwrap(),
+            "Does stuff"
+        );
         assert!(fm.get("always").unwrap().as_bool().unwrap());
         assert!(body.contains("# Instructions"));
         assert!(body.contains("Do the thing."));
@@ -1160,13 +1166,17 @@ content = "Say hello to the user"
     #[test]
     fn test_slash_command_not_found() {
         let manager = SkillManager::new(None, vec![]);
-        assert!(manager.dispatch_slash_command("/nonexistent", "agent-1").is_none());
+        assert!(manager
+            .dispatch_slash_command("/nonexistent", "agent-1")
+            .is_none());
     }
 
     #[test]
     fn test_slash_command_not_a_command() {
         let manager = SkillManager::new(None, vec![]);
-        assert!(manager.dispatch_slash_command("not a slash command", "agent-1").is_none());
+        assert!(manager
+            .dispatch_slash_command("not a slash command", "agent-1")
+            .is_none());
     }
 
     #[test]
@@ -1180,7 +1190,9 @@ content = "Say hello to the user"
                 disable_model_invocation: false,
             },
         );
-        assert!(manager.dispatch_slash_command("/internal", "agent-1").is_none());
+        assert!(manager
+            .dispatch_slash_command("/internal", "agent-1")
+            .is_none());
     }
 
     #[test]
@@ -1194,7 +1206,10 @@ content = "Say hello to the user"
         manager.register_skill(
             make_skill("deploy", false),
             SkillSource::Bundled,
-            SkillInvocationPolicy { user_invocable: false, disable_model_invocation: false },
+            SkillInvocationPolicy {
+                user_invocable: false,
+                disable_model_invocation: false,
+            },
         );
 
         let commands = manager.list_slash_commands("agent-1", "linux");

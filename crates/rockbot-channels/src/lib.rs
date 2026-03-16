@@ -21,22 +21,22 @@ use thiserror::Error;
 pub enum ChannelError {
     #[error("Channel not found: {name}")]
     NotFound { name: String },
-    
+
     #[error("Connection failed: {message}")]
     ConnectionFailed { message: String },
-    
+
     #[error("Authentication failed")]
     AuthenticationFailed,
-    
+
     #[error("Message send failed: {message}")]
     MessageSendFailed { message: String },
-    
+
     #[error("Invalid message format: {message}")]
     InvalidMessageFormat { message: String },
-    
+
     #[error("Rate limit exceeded")]
     RateLimitExceeded,
-    
+
     #[error("Channel configuration error: {message}")]
     ConfigurationError { message: String },
 }
@@ -49,34 +49,34 @@ pub type Result<T> = std::result::Result<T, ChannelError>;
 pub trait Channel: Send + Sync {
     /// Channel identifier
     fn id(&self) -> &str;
-    
+
     /// Channel capabilities
     fn capabilities(&self) -> ChannelCapabilities;
-    
+
     /// Connect to the channel
     async fn connect(&mut self) -> Result<()>;
-    
+
     /// Disconnect from the channel
     async fn disconnect(&mut self) -> Result<()>;
-    
+
     /// Check channel health
     async fn health_check(&self) -> Result<ChannelHealth>;
-    
+
     /// Send a message
     async fn send_message(&self, target: &str, message: ChannelMessage) -> Result<String>;
-    
+
     /// Edit a message
     async fn edit_message(&self, message_id: &str, new_content: &str) -> Result<()>;
-    
+
     /// Delete a message
     async fn delete_message(&self, message_id: &str) -> Result<()>;
-    
+
     /// Get event stream
     async fn event_stream(&self) -> Result<Pin<Box<dyn Stream<Item = ChannelEvent> + Send>>>;
-    
+
     /// Get user information
     async fn get_user_info(&self, user_id: &str) -> Result<UserInfo>;
-    
+
     /// Get channel information
     async fn get_channel_info(&self, channel_id: &str) -> Result<ChannelInfo>;
 
@@ -120,14 +120,16 @@ pub struct ChannelMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum MessageContent {
-    Text { text: String },
-    Rich { 
-        text: String, 
+    Text {
+        text: String,
+    },
+    Rich {
+        text: String,
         embeds: Vec<Embed>,
         components: Option<Vec<Component>>,
     },
-    Media { 
-        url: String, 
+    Media {
+        url: String,
         media_type: String,
         caption: Option<String>,
     },
@@ -266,7 +268,6 @@ impl ChannelRegistry {
             .filter_map(|c| c.credential_schema())
             .collect()
     }
-
 }
 
 impl Default for ChannelRegistry {
@@ -301,7 +302,10 @@ impl ChannelManager {
 
     /// List all channels
     pub fn list_channels(&self) -> Vec<&str> {
-        self.channels.keys().map(std::string::String::as_str).collect()
+        self.channels
+            .keys()
+            .map(std::string::String::as_str)
+            .collect()
     }
 
     /// Get health status of all channels
@@ -349,7 +353,7 @@ impl Channel for MockChannel {
     fn id(&self) -> &str {
         &self.id
     }
-    
+
     fn capabilities(&self) -> ChannelCapabilities {
         ChannelCapabilities {
             supports_edit: true,
@@ -361,17 +365,17 @@ impl Channel for MockChannel {
             supported_media_types: vec!["image/png".to_string(), "image/jpeg".to_string()],
         }
     }
-    
+
     async fn connect(&mut self) -> Result<()> {
         self.connected = true;
         Ok(())
     }
-    
+
     async fn disconnect(&mut self) -> Result<()> {
         self.connected = false;
         Ok(())
     }
-    
+
     async fn health_check(&self) -> Result<ChannelHealth> {
         Ok(ChannelHealth {
             channel_id: self.id.clone(),
@@ -381,28 +385,37 @@ impl Channel for MockChannel {
             error_count: 0,
         })
     }
-    
+
     async fn send_message(&self, _target: &str, message: ChannelMessage) -> Result<String> {
-        tracing::debug!("Mock channel {} sending message: {:?}", self.id, message.content);
+        tracing::debug!(
+            "Mock channel {} sending message: {:?}",
+            self.id,
+            message.content
+        );
         Ok(format!("mock-message-{}", uuid::Uuid::new_v4()))
     }
-    
+
     async fn edit_message(&self, message_id: &str, new_content: &str) -> Result<()> {
-        tracing::debug!("Mock channel {} editing message {}: {}", self.id, message_id, new_content);
+        tracing::debug!(
+            "Mock channel {} editing message {}: {}",
+            self.id,
+            message_id,
+            new_content
+        );
         Ok(())
     }
-    
+
     async fn delete_message(&self, message_id: &str) -> Result<()> {
         tracing::debug!("Mock channel {} deleting message {}", self.id, message_id);
         Ok(())
     }
-    
+
     async fn event_stream(&self) -> Result<Pin<Box<dyn Stream<Item = ChannelEvent> + Send>>> {
         // Return an empty stream for mock
         use futures::stream;
         Ok(Box::pin(stream::empty()))
     }
-    
+
     async fn get_user_info(&self, user_id: &str) -> Result<UserInfo> {
         Ok(UserInfo {
             id: user_id.to_string(),
@@ -413,7 +426,7 @@ impl Channel for MockChannel {
             is_verified: false,
         })
     }
-    
+
     async fn get_channel_info(&self, channel_id: &str) -> Result<ChannelInfo> {
         Ok(ChannelInfo {
             id: channel_id.to_string(),
@@ -430,21 +443,21 @@ impl Channel for MockChannel {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
-    
+
     #[tokio::test]
     async fn test_mock_channel() {
         let mut channel = MockChannel::new("test".to_string());
-        
+
         assert_eq!(channel.id(), "test");
         assert!(!channel.connected);
-        
+
         channel.connect().await.unwrap();
         assert!(channel.connected);
-        
+
         let health = channel.health_check().await.unwrap();
         assert!(health.connected);
     }
-    
+
     #[tokio::test]
     async fn test_channel_manager() {
         let mut manager = ChannelManager::new();

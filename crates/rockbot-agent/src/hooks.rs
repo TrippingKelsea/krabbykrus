@@ -145,19 +145,38 @@ impl Hook for LoggingHook {
 
     async fn on_event(&self, event: &HookEvent) -> HookResult {
         match event {
-            HookEvent::PreMessage { agent_id, session_id, .. } => {
+            HookEvent::PreMessage {
+                agent_id,
+                session_id,
+                ..
+            } => {
                 tracing::debug!("[hook:logging] PreMessage agent={agent_id} session={session_id}");
             }
-            HookEvent::PostMessage { agent_id, session_id, .. } => {
+            HookEvent::PostMessage {
+                agent_id,
+                session_id,
+                ..
+            } => {
                 tracing::debug!("[hook:logging] PostMessage agent={agent_id} session={session_id}");
             }
-            HookEvent::PreToolCall { agent_id, tool_name, .. } => {
+            HookEvent::PreToolCall {
+                agent_id,
+                tool_name,
+                ..
+            } => {
                 tracing::debug!("[hook:logging] PreToolCall agent={agent_id} tool={tool_name}");
             }
-            HookEvent::PostToolCall { agent_id, tool_name, success, .. } => {
+            HookEvent::PostToolCall {
+                agent_id,
+                tool_name,
+                success,
+                ..
+            } => {
                 tracing::debug!("[hook:logging] PostToolCall agent={agent_id} tool={tool_name} success={success}");
             }
-            HookEvent::OnError { agent_id, error, .. } => {
+            HookEvent::OnError {
+                agent_id, error, ..
+            } => {
                 tracing::warn!("[hook:logging] OnError agent={agent_id}: {error}");
             }
         }
@@ -179,7 +198,9 @@ impl Hook for MetricsHook {
             HookEvent::PreMessage { agent_id, .. } => {
                 crate::metrics::record_agent_message(agent_id);
             }
-            HookEvent::PostToolCall { tool_name, success, .. } => {
+            HookEvent::PostToolCall {
+                tool_name, success, ..
+            } => {
                 crate::metrics::record_tool_call(
                     tool_name,
                     *success,
@@ -205,7 +226,10 @@ mod tests {
 
     impl CountingHook {
         fn new(result: HookResult) -> Self {
-            Self { count: AtomicUsize::new(0), result }
+            Self {
+                count: AtomicUsize::new(0),
+                result,
+            }
         }
 
         fn call_count(&self) -> usize {

@@ -75,7 +75,7 @@ pub use types::{
 pub use types::{hex_decode, hex_decode_hash, hex_encode, hex_encode_hash};
 
 // Re-export storage types
-pub use storage::{CredentialVault, VaultMeta, UnlockMethod};
+pub use storage::{CredentialVault, UnlockMethod, VaultMeta};
 
 // Re-export crypto types and functions
 pub use crypto::{generate_salt, MasterKey};
@@ -88,6 +88,6 @@ pub use audit::{AuditEntryBuilder, AuditLog, VerificationResult};
 
 // Re-export manager types
 pub use manager::{
-    CredentialManager, CredentialRequestResult, PathPermission, PathPermissionResult,
-    HilApprovalRequest, HilApprovalResponse, HilNotificationReceiver, HilNotificationSender,
+    CredentialManager, CredentialRequestResult, HilApprovalRequest, HilApprovalResponse,
+    HilNotificationReceiver, HilNotificationSender, PathPermission, PathPermissionResult,
 };

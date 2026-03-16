@@ -6,7 +6,9 @@
 use crate::crypto::MasterKey;
 use crate::error::{CredentialError, Result};
 use crate::storage::CredentialVault;
-use crate::types::{ApprovalStatus, AuditEntry, CredentialType, Endpoint, EndpointType, PermissionLevel};
+use crate::types::{
+    ApprovalStatus, AuditEntry, CredentialType, Endpoint, EndpointType, PermissionLevel,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -95,7 +97,9 @@ struct PathPermissionEvaluator {
 
 impl PathPermissionEvaluator {
     fn new() -> Self {
-        Self { permissions: Vec::new() }
+        Self {
+            permissions: Vec::new(),
+        }
     }
 
     fn add_permission(&mut self, perm: PathPermission) {
@@ -128,10 +132,12 @@ impl PathPermissionEvaluator {
                     Some((_, best_specificity)) => {
                         // Prefer longer (more specific) patterns
                         // If tied, prefer more restrictive
-                        #[allow(clippy::unwrap_used)] // best_match is Some(_) - we're in the Some arm
+                        #[allow(clippy::unwrap_used)]
+                        // best_match is Some(_) - we're in the Some arm
                         if specificity > *best_specificity
                             || (specificity == *best_specificity
-                                && self.restriction_level(perm.level) > self.restriction_level(best_match.as_ref().unwrap().0.level))
+                                && self.restriction_level(perm.level)
+                                    > self.restriction_level(best_match.as_ref().unwrap().0.level))
                         {
                             best_match = Some((perm, specificity));
                         }
@@ -244,9 +250,13 @@ impl PathPermissionEvaluator {
             } else if let Some(sp) = star_pi {
                 pi = sp + 1;
                 #[allow(clippy::unwrap_used)] // star_ti is always set together with star_pi
-                { star_ti = Some(star_ti.unwrap() + 1); }
+                {
+                    star_ti = Some(star_ti.unwrap() + 1);
+                }
                 #[allow(clippy::unwrap_used)] // star_ti was just assigned Some(...) above
-                { ti = star_ti.unwrap(); }
+                {
+                    ti = star_ti.unwrap();
+                }
             } else {
                 return false;
             }
@@ -296,7 +306,7 @@ impl CredentialManager {
     pub fn new<P: AsRef<Path>>(vault_path: P) -> Result<Self> {
         let vault_path_buf = vault_path.as_ref().to_path_buf();
         let vault = CredentialVault::open(&vault_path_buf)?;
-        
+
         Ok(Self {
             vault: Arc::new(RwLock::new(vault)),
             permissions: Arc::new(RwLock::new(PathPermissionEvaluator::new())),
@@ -329,16 +339,13 @@ impl CredentialManager {
     /// Get list of pending HIL approval requests
     pub async fn list_pending_approvals(&self) -> Vec<HilApprovalRequest> {
         let approvals = self.pending_approvals.read().await;
-        approvals
-            .values()
-            .map(|p| p.request.clone())
-            .collect()
+        approvals.values().map(|p| p.request.clone()).collect()
     }
 
     /// Respond to an HIL approval request
     pub async fn respond_to_approval(&self, response: HilApprovalResponse) -> Result<()> {
         let mut approvals = self.pending_approvals.write().await;
-        
+
         if let Some(pending) = approvals.remove(&response.request_id) {
             // Send response (ignore if receiver dropped)
             let _ = pending.response_tx.send(response);
@@ -361,7 +368,7 @@ impl CredentialManager {
     ) -> Result<bool> {
         let now = Utc::now();
         let expires_at = now + chrono::Duration::seconds(self.hil_timeout_secs as i64);
-        
+
         let request = HilApprovalRequest {
             id: Uuid::new_v4(),
             path: path.to_string(),
@@ -374,18 +381,21 @@ impl CredentialManager {
             resolved_by: None,
             resolved_at: None,
         };
-        
+
         let (response_tx, response_rx) = oneshot::channel();
-        
+
         // Store pending approval
         {
             let mut approvals = self.pending_approvals.write().await;
-            approvals.insert(request.id, PendingApproval {
-                request: request.clone(),
-                response_tx,
-            });
+            approvals.insert(
+                request.id,
+                PendingApproval {
+                    request: request.clone(),
+                    response_tx,
+                },
+            );
         }
-        
+
         // Notify subscribers
         {
             let notifier = self.hil_notification_tx.read().await;
@@ -393,7 +403,7 @@ impl CredentialManager {
                 let _ = tx.send(request.clone());
             }
         }
-        
+
         // Wait for response with timeout
         let timeout = tokio::time::Duration::from_secs(self.hil_timeout_secs);
         match tokio::time::timeout(timeout, response_rx).await {
@@ -422,10 +432,10 @@ impl CredentialManager {
     pub async fn unlock_with_password(&self, password: &str) -> Result<()> {
         let mut vault = self.vault.write().await;
         vault.unlock_with_password(password)?;
-        
+
         let mut locked = self.locked.write().await;
         *locked = false;
-        
+
         Ok(())
     }
 
@@ -434,10 +444,10 @@ impl CredentialManager {
     pub async fn unlock_with_keyfile(&self, keyfile_path: &std::path::Path) -> Result<()> {
         let mut vault = self.vault.write().await;
         vault.unlock_with_keyfile(keyfile_path)?;
-        
+
         let mut locked = self.locked.write().await;
         *locked = false;
-        
+
         Ok(())
     }
 
@@ -446,22 +456,26 @@ impl CredentialManager {
     pub async fn unlock_with_age(&self, age_identity: &str) -> Result<()> {
         let mut vault = self.vault.write().await;
         vault.unlock_with_age(age_identity)?;
-        
+
         let mut locked = self.locked.write().await;
         *locked = false;
-        
+
         Ok(())
     }
 
     /// Unlock the vault with an SSH private key.
     /// Only works if the vault was initialized with SSH key encryption.
-    pub async fn unlock_with_ssh(&self, private_key_path: &std::path::Path, passphrase: Option<&str>) -> Result<()> {
+    pub async fn unlock_with_ssh(
+        &self,
+        private_key_path: &std::path::Path,
+        passphrase: Option<&str>,
+    ) -> Result<()> {
         let mut vault = self.vault.write().await;
         vault.unlock_with_ssh(private_key_path, passphrase)?;
-        
+
         let mut locked = self.locked.write().await;
         *locked = false;
-        
+
         Ok(())
     }
 
@@ -470,10 +484,10 @@ impl CredentialManager {
     pub async fn unlock(&self, master_key: MasterKey) -> Result<()> {
         let mut vault = self.vault.write().await;
         vault.unlock(master_key);
-        
+
         let mut locked = self.locked.write().await;
         *locked = false;
-        
+
         Ok(())
     }
 
@@ -481,10 +495,10 @@ impl CredentialManager {
     pub async fn lock(&self) -> Result<()> {
         let mut vault = self.vault.write().await;
         vault.lock();
-        
+
         let mut locked = self.locked.write().await;
         *locked = true;
-        
+
         Ok(())
     }
 
@@ -535,16 +549,17 @@ impl CredentialManager {
         drop(perms); // Release lock before potentially blocking on HIL
 
         match permission_result.level {
-            PermissionLevel::Deny => {
-                Ok(CredentialRequestResult {
-                    permission: permission_result,
-                    credential: None,
-                    reason: Some(format!("Access denied by policy: {path}")),
-                })
-            }
+            PermissionLevel::Deny => Ok(CredentialRequestResult {
+                permission: permission_result,
+                credential: None,
+                reason: Some(format!("Access denied by policy: {path}")),
+            }),
             PermissionLevel::AllowHil => {
                 // Request human approval
-                match self.request_hil_approval(path, agent_id, reason, PermissionLevel::AllowHil).await {
+                match self
+                    .request_hil_approval(path, agent_id, reason, PermissionLevel::AllowHil)
+                    .await
+                {
                     Ok(true) => {
                         // Approved - retrieve credential
                         self.retrieve_credential(path, permission_result).await
@@ -557,37 +572,32 @@ impl CredentialManager {
                             reason: Some("Request denied by human operator".to_string()),
                         })
                     }
-                    Err(CredentialError::ApprovalTimeout) => {
-                        Ok(CredentialRequestResult {
-                            permission: permission_result,
-                            credential: None,
-                            reason: Some("Approval request timed out".to_string()),
-                        })
-                    }
+                    Err(CredentialError::ApprovalTimeout) => Ok(CredentialRequestResult {
+                        permission: permission_result,
+                        credential: None,
+                        reason: Some("Approval request timed out".to_string()),
+                    }),
                     Err(e) => Err(e),
                 }
             }
             PermissionLevel::AllowHil2fa => {
                 // For now, treat same as AllowHil (2FA stubbed)
                 // In future: require YubiKey touch before approval
-                match self.request_hil_approval(path, agent_id, reason, PermissionLevel::AllowHil2fa).await {
-                    Ok(true) => {
-                        self.retrieve_credential(path, permission_result).await
-                    }
-                    Ok(false) => {
-                        Ok(CredentialRequestResult {
-                            permission: permission_result,
-                            credential: None,
-                            reason: Some("Request denied by human operator".to_string()),
-                        })
-                    }
-                    Err(CredentialError::ApprovalTimeout) => {
-                        Ok(CredentialRequestResult {
-                            permission: permission_result,
-                            credential: None,
-                            reason: Some("Approval request timed out".to_string()),
-                        })
-                    }
+                match self
+                    .request_hil_approval(path, agent_id, reason, PermissionLevel::AllowHil2fa)
+                    .await
+                {
+                    Ok(true) => self.retrieve_credential(path, permission_result).await,
+                    Ok(false) => Ok(CredentialRequestResult {
+                        permission: permission_result,
+                        credential: None,
+                        reason: Some("Request denied by human operator".to_string()),
+                    }),
+                    Err(CredentialError::ApprovalTimeout) => Ok(CredentialRequestResult {
+                        permission: permission_result,
+                        credential: None,
+                        reason: Some("Approval request timed out".to_string()),
+                    }),
                     Err(e) => Err(e),
                 }
             }
@@ -609,11 +619,11 @@ impl CredentialManager {
         }
 
         let vault = self.vault.read().await;
-        
+
         // Parse the path to find endpoint and credential
         // Expected format: "service://path" or just endpoint ID
         let credential = self.resolve_credential_from_path(&vault, path)?;
-        
+
         Ok(CredentialRequestResult {
             permission: permission_result,
             credential: Some(credential),
@@ -631,7 +641,7 @@ impl CredentialManager {
         if self.is_locked().await {
             return Err(CredentialError::VaultLocked);
         }
-        
+
         let mut vault = self.vault.write().await;
         vault.create_endpoint(name, endpoint_type, base_url)
     }
@@ -646,7 +656,7 @@ impl CredentialManager {
         if self.is_locked().await {
             return Err(CredentialError::VaultLocked);
         }
-        
+
         let mut vault = self.vault.write().await;
         vault.store_credential(endpoint_id, credential_type, secret)?;
         Ok(())
@@ -660,26 +670,24 @@ impl CredentialManager {
 
     /// Resolve a credential from a path string
     #[allow(clippy::unused_self)]
-    fn resolve_credential_from_path(
-        &self,
-        vault: &CredentialVault,
-        path: &str,
-    ) -> Result<Vec<u8>> {
+    fn resolve_credential_from_path(&self, vault: &CredentialVault, path: &str) -> Result<Vec<u8>> {
         // Try to parse as "service://..." URI
         if let Some(rest) = path.strip_prefix("saggyclaw://") {
             // saggyclaw://endpoint_name/path
             let parts: Vec<&str> = rest.splitn(2, '/').collect();
             let endpoint_name = parts[0];
-            
+
             // Find endpoint by name
             let endpoints = vault.list_endpoints();
             let endpoint = endpoints
                 .iter()
                 .find(|e| e.name.to_lowercase() == endpoint_name.to_lowercase())
-                .ok_or_else(|| CredentialError::ValidationFailed(
-                    format!("endpoint '{endpoint_name}' not found"),
-                ))?;
-            
+                .ok_or_else(|| {
+                    CredentialError::ValidationFailed(format!(
+                        "endpoint '{endpoint_name}' not found"
+                    ))
+                })?;
+
             vault.decrypt_credential_for_endpoint(endpoint.id)
         } else if let Ok(uuid) = Uuid::parse_str(path) {
             // Direct UUID reference
@@ -690,10 +698,10 @@ impl CredentialManager {
             let endpoint = endpoints
                 .iter()
                 .find(|e| e.name.to_lowercase() == path.to_lowercase())
-                .ok_or_else(|| CredentialError::ValidationFailed(
-                    format!("endpoint '{path}' not found"),
-                ))?;
-            
+                .ok_or_else(|| {
+                    CredentialError::ValidationFailed(format!("endpoint '{path}' not found"))
+                })?;
+
             vault.decrypt_credential_for_endpoint(endpoint.id)
         }
     }
@@ -719,14 +727,14 @@ impl CredentialManager {
         use std::io::{BufRead, BufReader};
 
         let audit_path = self.vault_path.join("audit.log");
-        
+
         let Ok(file) = File::open(&audit_path) else {
             return Vec::new();
         };
-        
+
         let reader = BufReader::new(file);
         let mut entries: Vec<AuditEntry> = Vec::new();
-        
+
         for line in reader.lines() {
             let Ok(line) = line else {
                 continue;
@@ -738,7 +746,7 @@ impl CredentialManager {
                 entries.push(entry);
             }
         }
-        
+
         // Return most recent entries (last N)
         if entries.len() > limit {
             entries.split_off(entries.len() - limit)
@@ -752,7 +760,7 @@ impl CredentialManager {
         if self.is_locked().await {
             return Err(CredentialError::VaultLocked);
         }
-        
+
         let mut vault = self.vault.write().await;
         vault.delete_endpoint(endpoint_id)
     }
@@ -795,13 +803,13 @@ mod tests {
     #[tokio::test]
     async fn test_manager_unlock_lock() {
         let (manager, _temp) = create_test_manager();
-        
+
         let salt = generate_salt();
         let master_key = MasterKey::derive_from_password("test-password", &salt).unwrap();
-        
+
         manager.unlock(master_key).await.unwrap();
         assert!(!manager.is_locked().await);
-        
+
         manager.lock().await.unwrap();
         assert!(manager.is_locked().await);
     }
@@ -809,7 +817,7 @@ mod tests {
     #[tokio::test]
     async fn test_locked_operations_fail() {
         let (manager, _temp) = create_test_manager();
-        
+
         let result = manager
             .create_endpoint(
                 "test".to_string(),
@@ -817,27 +825,29 @@ mod tests {
                 "http://test".to_string(),
             )
             .await;
-        
+
         assert!(matches!(result, Err(CredentialError::VaultLocked)));
     }
 
     #[tokio::test]
     async fn test_permission_denied() {
         let (manager, _temp) = create_test_manager();
-        
+
         // Add deny permission (use ** to match multiple path segments)
-        manager.add_permission(PathPermission {
-            id: Uuid::new_v4(),
-            path_pattern: "secret://**".to_string(),
-            level: PermissionLevel::Deny,
-            description: Some("Deny all secrets".to_string()),
-        }).await;
-        
+        manager
+            .add_permission(PathPermission {
+                id: Uuid::new_v4(),
+                path_pattern: "secret://**".to_string(),
+                level: PermissionLevel::Deny,
+                description: Some("Deny all secrets".to_string()),
+            })
+            .await;
+
         let result = manager
             .request_credential("secret://api/key", "test-agent", "testing")
             .await
             .unwrap();
-        
+
         assert!(result.credential.is_none());
         assert_eq!(result.permission.level, PermissionLevel::Deny);
     }
@@ -845,18 +855,20 @@ mod tests {
     #[tokio::test]
     async fn test_permission_hil_required() {
         let (manager, _temp) = create_test_manager();
-        
+
         // Add HIL permission (use ** to match multiple path segments)
-        manager.add_permission(PathPermission {
-            id: Uuid::new_v4(),
-            path_pattern: "bank://**".to_string(),
-            level: PermissionLevel::AllowHil,
-            description: Some("Require approval for bank credentials".to_string()),
-        }).await;
-        
+        manager
+            .add_permission(PathPermission {
+                id: Uuid::new_v4(),
+                path_pattern: "bank://**".to_string(),
+                level: PermissionLevel::AllowHil,
+                description: Some("Require approval for bank credentials".to_string()),
+            })
+            .await;
+
         // Use check_permission to avoid blocking on HIL
         let permission = manager.check_permission("bank://account/token").await;
-        
+
         assert_eq!(permission.level, PermissionLevel::AllowHil);
     }
 
@@ -866,19 +878,21 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         CredentialVault::init_with_password(temp_dir.path(), "test").unwrap();
         let manager = CredentialManager::with_hil_timeout(temp_dir.path(), 2).unwrap();
-        
+
         let salt = generate_salt();
         let master_key = MasterKey::derive_from_password("test-password", &salt).unwrap();
         manager.unlock(master_key).await.unwrap();
-        
+
         // Add HIL permission for saggyclaw:// URIs
-        manager.add_permission(PathPermission {
-            id: Uuid::new_v4(),
-            path_pattern: "saggyclaw://hil-test/**".to_string(),
-            level: PermissionLevel::AllowHil,
-            description: Some("Test HIL".to_string()),
-        }).await;
-        
+        manager
+            .add_permission(PathPermission {
+                id: Uuid::new_v4(),
+                path_pattern: "saggyclaw://hil-test/**".to_string(),
+                level: PermissionLevel::AllowHil,
+                description: Some("Test HIL".to_string()),
+            })
+            .await;
+
         // Create endpoint and credential
         let endpoint = manager
             .create_endpoint(
@@ -888,34 +902,37 @@ mod tests {
             )
             .await
             .unwrap();
-        
+
         manager
             .store_credential(endpoint.id, CredentialType::BearerToken, b"secret")
             .await
             .unwrap();
-        
+
         // Subscribe to HIL notifications
         let mut hil_rx = manager.subscribe_hil_notifications().await;
-        
+
         // Spawn a task to auto-approve
         let manager_clone = manager.clone();
         tokio::spawn(async move {
             if let Some(request) = hil_rx.recv().await {
-                manager_clone.respond_to_approval(HilApprovalResponse {
-                    request_id: request.id,
-                    approved: true,
-                    resolved_by: "test".to_string(),
-                    denial_reason: None,
-                }).await.unwrap();
+                manager_clone
+                    .respond_to_approval(HilApprovalResponse {
+                        request_id: request.id,
+                        approved: true,
+                        resolved_by: "test".to_string(),
+                        denial_reason: None,
+                    })
+                    .await
+                    .unwrap();
             }
         });
-        
+
         // Request credential - should succeed after approval
         let result = manager
             .request_credential("saggyclaw://hil-test/api", "test-agent", "testing")
             .await
             .unwrap();
-        
+
         assert!(result.credential.is_some());
         assert_eq!(result.credential.unwrap(), b"secret");
     }
@@ -926,20 +943,22 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         CredentialVault::init_with_password(temp_dir.path(), "test").unwrap();
         let manager = CredentialManager::with_hil_timeout(temp_dir.path(), 1).unwrap();
-        
-        manager.add_permission(PathPermission {
-            id: Uuid::new_v4(),
-            path_pattern: "timeout-test://**".to_string(),
-            level: PermissionLevel::AllowHil,
-            description: None,
-        }).await;
-        
+
+        manager
+            .add_permission(PathPermission {
+                id: Uuid::new_v4(),
+                path_pattern: "timeout-test://**".to_string(),
+                level: PermissionLevel::AllowHil,
+                description: None,
+            })
+            .await;
+
         // Request without responding - should timeout
         let result = manager
             .request_credential("timeout-test://api", "test-agent", "testing")
             .await
             .unwrap();
-        
+
         assert!(result.credential.is_none());
         assert!(result.reason.unwrap().contains("timed out"));
     }
@@ -947,20 +966,22 @@ mod tests {
     #[tokio::test]
     async fn test_full_credential_flow() {
         let (manager, _temp) = create_test_manager();
-        
+
         // Unlock vault
         let salt = generate_salt();
         let master_key = MasterKey::derive_from_password("test-password", &salt).unwrap();
         manager.unlock(master_key).await.unwrap();
-        
+
         // Add allow permission
-        manager.add_permission(PathPermission {
-            id: Uuid::new_v4(),
-            path_pattern: "saggyclaw://homeassistant/**".to_string(),
-            level: PermissionLevel::Allow,
-            description: Some("Allow Home Assistant".to_string()),
-        }).await;
-        
+        manager
+            .add_permission(PathPermission {
+                id: Uuid::new_v4(),
+                path_pattern: "saggyclaw://homeassistant/**".to_string(),
+                level: PermissionLevel::Allow,
+                description: Some("Allow Home Assistant".to_string()),
+            })
+            .await;
+
         // Create endpoint
         let endpoint = manager
             .create_endpoint(
@@ -970,20 +991,20 @@ mod tests {
             )
             .await
             .unwrap();
-        
+
         // Store credential
         let secret = b"my-api-token";
         manager
             .store_credential(endpoint.id, CredentialType::BearerToken, secret)
             .await
             .unwrap();
-        
+
         // Request credential by name (via saggyclaw:// URI)
         let result = manager
             .request_credential("saggyclaw://homeassistant/api", "test-agent", "testing")
             .await
             .unwrap();
-        
+
         assert!(result.credential.is_some());
         assert_eq!(result.credential.unwrap(), secret);
         assert_eq!(result.permission.level, PermissionLevel::Allow);
@@ -992,15 +1013,15 @@ mod tests {
     #[tokio::test]
     async fn test_manager_clone() {
         let (manager, _temp) = create_test_manager();
-        
+
         let salt = generate_salt();
         let master_key = MasterKey::derive_from_password("test-password", &salt).unwrap();
         manager.unlock(master_key).await.unwrap();
-        
+
         // Clone should share state
         let manager2 = manager.clone();
         assert!(!manager2.is_locked().await);
-        
+
         manager.lock().await.unwrap();
         assert!(manager2.is_locked().await);
     }

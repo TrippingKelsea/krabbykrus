@@ -63,7 +63,8 @@ fn render_tab_cards(
     selected_tab: usize,
     effect_state: &EffectState,
 ) {
-    let mut constraints: Vec<Constraint> = TABS.iter()
+    let mut constraints: Vec<Constraint> = TABS
+        .iter()
         .map(|_| Constraint::Length(CARD_WIDTH))
         .collect();
     constraints.push(Constraint::Min(0));
@@ -98,7 +99,9 @@ fn render_tab_cards(
         }
 
         let label_style = if is_selected {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
@@ -114,7 +117,11 @@ fn render_tab_cards(
             Line::from(Span::styled(label, label_style)),
             Line::from(Span::styled(sub1, Style::default().fg(Color::Cyan))),
             Line::from(Span::styled(
-                if count_text.is_empty() { sub2.to_string() } else { format!("{count_text} {sub2}") },
+                if count_text.is_empty() {
+                    sub2.to_string()
+                } else {
+                    format!("{count_text} {sub2}")
+                },
                 Style::default().fg(Color::DarkGray),
             )),
         ];
@@ -137,7 +144,9 @@ fn render_vault_init(frame: &mut Frame, area: Rect, state: &AppState) {
         Line::from(""),
         Line::from(Span::styled(
             "Vault not initialized",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(vec![
@@ -154,8 +163,7 @@ fn render_vault_init(frame: &mut Frame, area: Rect, state: &AppState) {
         )),
     ];
 
-    let paragraph = Paragraph::new(content)
-        .alignment(Alignment::Center);
+    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
 
     frame.render_widget(paragraph, body);
 }
@@ -165,15 +173,20 @@ fn render_vault_locked(frame: &mut Frame, area: Rect) {
 
     let content = vec![
         Line::from(""),
-        Line::from(Span::styled("Vault Locked", Style::default().fg(Color::Yellow))),
+        Line::from(Span::styled(
+            "Vault Locked",
+            Style::default().fg(Color::Yellow),
+        )),
         Line::from(""),
         Line::from("Enter your password to unlock the vault."),
         Line::from(""),
-        Line::from(Span::styled("Press 'u' to unlock", Style::default().fg(Color::Green))),
+        Line::from(Span::styled(
+            "Press 'u' to unlock",
+            Style::default().fg(Color::Green),
+        )),
     ];
 
-    let paragraph = Paragraph::new(content)
-        .alignment(Alignment::Center);
+    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
 
     frame.render_widget(paragraph, body);
 }
@@ -185,35 +198,51 @@ fn render_endpoints_list(frame: &mut Frame, area: Rect, state: &AppState) {
     if state.endpoints.is_empty() {
         let content = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled("No endpoints configured", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "No endpoints configured",
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from(""),
-            Line::from(Span::styled("Press 'a' to add a credential endpoint", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "Press 'a' to add a credential endpoint",
+                Style::default().fg(Color::DarkGray),
+            )),
         ])
         .alignment(Alignment::Center);
         frame.render_widget(content, body);
         return;
     }
 
-    let items: Vec<ListItem> = state.endpoints.iter().map(|ep| {
-        let (icon, icon_color) = if ep.has_credential {
-            ("●", Color::Green)
-        } else {
-            ("○", Color::Yellow)
-        };
+    let items: Vec<ListItem> = state
+        .endpoints
+        .iter()
+        .map(|ep| {
+            let (icon, icon_color) = if ep.has_credential {
+                ("●", Color::Green)
+            } else {
+                ("○", Color::Yellow)
+            };
 
-        let url_short = if ep.base_url.is_empty() {
-            ep.id.chars().take(20).collect::<String>()
-        } else {
-            ep.base_url.replace("https://", "").replace("http://", "")
-        };
+            let url_short = if ep.base_url.is_empty() {
+                ep.id.chars().take(20).collect::<String>()
+            } else {
+                ep.base_url.replace("https://", "").replace("http://", "")
+            };
 
-        ListItem::new(Line::from(vec![
-            Span::styled(format!("{icon} "), Style::default().fg(icon_color)),
-            Span::styled(&ep.name, Style::default().fg(Color::White)),
-            Span::styled(format!("  {}", ep.endpoint_type), Style::default().fg(Color::Cyan)),
-            Span::styled(format!("  {url_short}"), Style::default().fg(Color::DarkGray)),
-        ]))
-    }).collect();
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{icon} "), Style::default().fg(icon_color)),
+                Span::styled(&ep.name, Style::default().fg(Color::White)),
+                Span::styled(
+                    format!("  {}", ep.endpoint_type),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::styled(
+                    format!("  {url_short}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]))
+        })
+        .collect();
 
     let highlight_style = if !state.sidebar_focus {
         Style::default()
@@ -232,7 +261,11 @@ fn render_endpoints_list(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let mut list_state = ListState::default();
     if !state.endpoints.is_empty() {
-        list_state.select(Some(state.selected_endpoint.min(state.endpoints.len().saturating_sub(1))));
+        list_state.select(Some(
+            state
+                .selected_endpoint
+                .min(state.endpoints.len().saturating_sub(1)),
+        ));
     }
 
     frame.render_stateful_widget(list, body, &mut list_state);
@@ -260,27 +293,41 @@ fn render_providers_list(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
-    let items: Vec<ListItem> = state.credential_schemas.iter().map(|schema| {
-        let configured = state.endpoints.iter().any(|e| {
-            e.id.to_lowercase().contains(&schema.provider_id) ||
-            e.name.to_lowercase().contains(&schema.provider_id)
-        });
-        let (indicator, ind_color) = if configured { ("●", Color::Green) } else { ("○", Color::Yellow) };
+    let items: Vec<ListItem> = state
+        .credential_schemas
+        .iter()
+        .map(|schema| {
+            let configured = state.endpoints.iter().any(|e| {
+                e.id.to_lowercase().contains(&schema.provider_id)
+                    || e.name.to_lowercase().contains(&schema.provider_id)
+            });
+            let (indicator, ind_color) = if configured {
+                ("●", Color::Green)
+            } else {
+                ("○", Color::Yellow)
+            };
 
-        let cat_icon = match schema.category.as_str() {
-            "model" => "LLM ",
-            "communication" => "MSG ",
-            "tool" => "TL  ",
-            _ => "",
-        };
+            let cat_icon = match schema.category.as_str() {
+                "model" => "LLM ",
+                "communication" => "MSG ",
+                "tool" => "TL  ",
+                _ => "",
+            };
 
-        ListItem::new(Line::from(vec![
-            Span::raw(cat_icon),
-            Span::styled(format!("{indicator} "), Style::default().fg(ind_color)),
-            Span::styled(schema.provider_name.as_str(), Style::default().fg(Color::White)),
-            Span::styled(format!(" ({})", schema.provider_id), Style::default().fg(Color::DarkGray)),
-        ]))
-    }).collect();
+            ListItem::new(Line::from(vec![
+                Span::raw(cat_icon),
+                Span::styled(format!("{indicator} "), Style::default().fg(ind_color)),
+                Span::styled(
+                    schema.provider_name.as_str(),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" ({})", schema.provider_id),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]))
+        })
+        .collect();
 
     let highlight_style = if !state.sidebar_focus {
         Style::default()
@@ -299,7 +346,11 @@ fn render_providers_list(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let mut list_state = ListState::default();
     if !state.credential_schemas.is_empty() {
-        list_state.select(Some(state.selected_provider_index.min(state.credential_schemas.len().saturating_sub(1))));
+        list_state.select(Some(
+            state
+                .selected_provider_index
+                .min(state.credential_schemas.len().saturating_sub(1)),
+        ));
     }
 
     frame.render_stateful_widget(list, body, &mut list_state);
@@ -334,23 +385,28 @@ fn render_permissions_list(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
-    let mut items: Vec<ListItem> = state.permissions.iter().enumerate().map(|(i, rule)| {
-        let access_color = rule.access.color();
+    let mut items: Vec<ListItem> = state
+        .permissions
+        .iter()
+        .enumerate()
+        .map(|(i, rule)| {
+            let access_color = rule.access.color();
 
-        ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("#{:<2} ", i + 1),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                format!("[{}] ", rule.access.short_label()),
-                Style::default().fg(access_color),
-            ),
-            Span::styled(&rule.endpoint_name, Style::default().fg(Color::White)),
-            Span::styled(" → ", Style::default().fg(Color::DarkGray)),
-            Span::styled(rule.source.label(), Style::default().fg(Color::Cyan)),
-        ]))
-    }).collect();
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("#{:<2} ", i + 1),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("[{}] ", rule.access.short_label()),
+                    Style::default().fg(access_color),
+                ),
+                Span::styled(&rule.endpoint_name, Style::default().fg(Color::White)),
+                Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+                Span::styled(rule.source.label(), Style::default().fg(Color::Cyan)),
+            ]))
+        })
+        .collect();
 
     // Implicit deny-all rule (not editable)
     items.push(ListItem::new(Line::from(vec![
@@ -359,9 +415,19 @@ fn render_permissions_list(frame: &mut Frame, area: Rect, state: &AppState) {
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled("[DENY] ", Style::default().fg(Color::Red)),
-        Span::styled("* (implicit)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+        Span::styled(
+            "* (implicit)",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+        ),
         Span::styled(" → ", Style::default().fg(Color::DarkGray)),
-        Span::styled("All Sources", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+        Span::styled(
+            "All Sources",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+        ),
     ])));
 
     let highlight_style = if !state.sidebar_focus {
@@ -381,7 +447,11 @@ fn render_permissions_list(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let mut list_state = ListState::default();
     if !state.permissions.is_empty() {
-        list_state.select(Some(state.selected_permission.min(state.permissions.len().saturating_sub(1))));
+        list_state.select(Some(
+            state
+                .selected_permission
+                .min(state.permissions.len().saturating_sub(1)),
+        ));
     }
 
     frame.render_stateful_widget(list, body, &mut list_state);

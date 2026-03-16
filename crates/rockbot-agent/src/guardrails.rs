@@ -56,7 +56,9 @@ impl Default for GuardrailPipeline {
 impl GuardrailPipeline {
     /// Create an empty pipeline.
     pub fn new() -> Self {
-        Self { guardrails: Vec::new() }
+        Self {
+            guardrails: Vec::new(),
+        }
     }
 
     /// Add a guardrail to the pipeline.
@@ -80,7 +82,9 @@ impl GuardrailPipeline {
             return GuardrailResult::Pass;
         }
 
-        let futures: Vec<_> = self.guardrails.iter()
+        let futures: Vec<_> = self
+            .guardrails
+            .iter()
             .map(|g| {
                 let g = Arc::clone(g);
                 let msg = message.clone();
@@ -102,7 +106,9 @@ impl GuardrailPipeline {
         }
 
         let response = response.to_string();
-        let futures: Vec<_> = self.guardrails.iter()
+        let futures: Vec<_> = self
+            .guardrails
+            .iter()
             .map(|g| {
                 let g = Arc::clone(g);
                 let resp = response.clone();
@@ -161,10 +167,23 @@ impl PiiGuardrail {
     pub fn new() -> Self {
         // These patterns are intentionally broad — better to over-warn than leak PII
         let patterns = vec![
-            ("US SSN", regex::Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap()),
-            ("Credit card (16-digit)", regex::Regex::new(r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b").unwrap()),
-            ("AWS access key", regex::Regex::new(r"\bAKIA[0-9A-Z]{16}\b").unwrap()),
-            ("AWS secret key", regex::Regex::new(r"(?i)\baws[_\s]?secret[_\s]?access[_\s]?key\s*[=:]\s*\S{20,}").unwrap()),
+            (
+                "US SSN",
+                regex::Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(),
+            ),
+            (
+                "Credit card (16-digit)",
+                regex::Regex::new(r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b").unwrap(),
+            ),
+            (
+                "AWS access key",
+                regex::Regex::new(r"\bAKIA[0-9A-Z]{16}\b").unwrap(),
+            ),
+            (
+                "AWS secret key",
+                regex::Regex::new(r"(?i)\baws[_\s]?secret[_\s]?access[_\s]?key\s*[=:]\s*\S{20,}")
+                    .unwrap(),
+            ),
         ];
         Self { patterns }
     }
@@ -181,7 +200,9 @@ impl PiiGuardrail {
 
 #[async_trait::async_trait]
 impl Guardrail for PiiGuardrail {
-    fn name(&self) -> &str { "pii" }
+    fn name(&self) -> &str {
+        "pii"
+    }
 
     async fn check_input(&self, _message: &Message) -> GuardrailResult {
         // We don't block user input for PII — the user may intentionally share it
@@ -229,15 +250,17 @@ impl PromptInjectionGuardrail {
 
 #[async_trait::async_trait]
 impl Guardrail for PromptInjectionGuardrail {
-    fn name(&self) -> &str { "prompt_injection" }
+    fn name(&self) -> &str {
+        "prompt_injection"
+    }
 
     async fn check_input(&self, message: &Message) -> GuardrailResult {
         let text = message.extract_text().unwrap_or_default();
         for (label, pattern) in &self.patterns {
             if pattern.is_match(&text) {
-                return GuardrailResult::Warn(
-                    format!("Possible prompt injection: {label} pattern detected")
-                );
+                return GuardrailResult::Warn(format!(
+                    "Possible prompt injection: {label} pattern detected"
+                ));
             }
         }
         GuardrailResult::Pass
@@ -310,6 +333,9 @@ mod tests {
         let pipeline = GuardrailPipeline::new();
         assert!(pipeline.is_empty());
         let msg = Message::text("anything");
-        assert!(matches!(pipeline.check_input(&msg).await, GuardrailResult::Pass));
+        assert!(matches!(
+            pipeline.check_input(&msg).await,
+            GuardrailResult::Pass
+        ));
     }
 }

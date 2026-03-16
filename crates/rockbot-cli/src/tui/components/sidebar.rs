@@ -59,10 +59,13 @@ pub fn render_sidebar(frame: &mut Frame, area: Rect, state: &AppState, effect_st
     let block = Block::default()
         .borders(Borders::RIGHT)
         .border_style(border_style)
-        .title_bottom(Line::from(Span::styled(
-            scroll_hint,
-            Style::default().fg(Color::DarkGray),
-        )).right_aligned());
+        .title_bottom(
+            Line::from(Span::styled(
+                scroll_hint,
+                Style::default().fg(Color::DarkGray),
+            ))
+            .right_aligned(),
+        );
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -78,9 +81,7 @@ pub fn render_sidebar(frame: &mut Frame, area: Rect, state: &AppState, effect_st
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD)
         } else if is_selected {
-            Style::default()
-                .bg(Color::DarkGray)
-                .fg(Color::White)
+            Style::default().bg(Color::DarkGray).fg(Color::White)
         } else {
             Style::default().fg(Color::White)
         };

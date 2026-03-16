@@ -110,7 +110,12 @@ impl DenseVector {
         if self.norm == 0.0 || other.norm == 0.0 || self.values.len() != other.values.len() {
             return 0.0;
         }
-        let dot: f32 = self.values.iter().zip(&other.values).map(|(a, b)| a * b).sum();
+        let dot: f32 = self
+            .values
+            .iter()
+            .zip(&other.values)
+            .map(|(a, b)| a * b)
+            .sum();
         dot / (self.norm * other.norm)
     }
 }
@@ -125,8 +130,13 @@ struct SparseVector {
 }
 
 impl SparseVector {
-    fn from_term_freqs(tf: &HashMap<String, usize>, doc_freq: &HashMap<String, usize>, total_docs: usize) -> Self {
-        let mut entries: Vec<(String, f32)> = tf.iter()
+    fn from_term_freqs(
+        tf: &HashMap<String, usize>,
+        doc_freq: &HashMap<String, usize>,
+        total_docs: usize,
+    ) -> Self {
+        let mut entries: Vec<(String, f32)> = tf
+            .iter()
             .filter_map(|(term, &count)| {
                 let df = doc_freq.get(term).copied().unwrap_or(1) as f32;
                 let idf = ((total_docs as f32) / df).ln() + 1.0;
@@ -200,18 +210,15 @@ pub struct SearchResultChunk {
 
 /// Common English stop words to exclude from TF-IDF indexing
 const STOP_WORDS: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
-    "being", "have", "has", "had", "do", "does", "did", "will", "would",
-    "could", "should", "may", "might", "can", "shall", "not", "no", "nor",
-    "so", "if", "then", "than", "too", "very", "just", "about", "above",
-    "after", "again", "all", "also", "am", "as", "because", "before",
-    "between", "both", "each", "few", "further", "get", "got", "here",
-    "how", "into", "it", "its", "more", "most", "much", "must", "my",
-    "new", "now", "only", "other", "our", "out", "own", "same", "she",
-    "he", "his", "her", "some", "such", "that", "their", "them", "there",
-    "these", "they", "this", "those", "through", "up", "us", "we", "what",
-    "when", "where", "which", "while", "who", "whom", "why", "you", "your",
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
+    "from", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+    "did", "will", "would", "could", "should", "may", "might", "can", "shall", "not", "no", "nor",
+    "so", "if", "then", "than", "too", "very", "just", "about", "above", "after", "again", "all",
+    "also", "am", "as", "because", "before", "between", "both", "each", "few", "further", "get",
+    "got", "here", "how", "into", "it", "its", "more", "most", "much", "must", "my", "new", "now",
+    "only", "other", "our", "out", "own", "same", "she", "he", "his", "her", "some", "such",
+    "that", "their", "them", "there", "these", "they", "this", "those", "through", "up", "us",
+    "we", "what", "when", "where", "which", "while", "who", "whom", "why", "you", "your",
 ];
 
 /// Tokenize text into lowercase terms, filtering stop words and short tokens
@@ -283,7 +290,9 @@ impl MemoryManager {
 
         // Load daily logs
         let current_date = Utc::now().format("%Y-%m-%d").to_string();
-        let yesterday = (Utc::now() - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+        let yesterday = (Utc::now() - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
 
         for date in [current_date, yesterday] {
             let daily_log = memory_dir.join(format!("{date}.md"));
@@ -319,9 +328,13 @@ impl MemoryManager {
             chunks,
             metadata: HashMap::new(),
             last_modified: DateTime::from_timestamp(
-                metadata.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64,
+                metadata
+                    .modified()?
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs() as i64,
                 0,
-            ).unwrap_or_else(Utc::now),
+            )
+            .unwrap_or_else(Utc::now),
         };
 
         // Store document
@@ -341,7 +354,7 @@ impl MemoryManager {
         let mut chunks = Vec::new();
         let lines: Vec<&str> = content.lines().collect();
         let chunk_size: usize = 10; // Lines per chunk
-        let overlap: usize = 3;     // Lines of overlap between chunks
+        let overlap: usize = 3; // Lines of overlap between chunks
         let step = chunk_size.saturating_sub(overlap).max(1);
 
         let mut i = 0;
@@ -412,7 +425,11 @@ impl MemoryManager {
                     }
                 }
             }
-            tracing::debug!("Computed {} embeddings for {} chunks", embeddings.len(), total_chunks);
+            tracing::debug!(
+                "Computed {} embeddings for {} chunks",
+                embeddings.len(),
+                total_chunks
+            );
         }
 
         // Phase 4: Store the index
@@ -473,7 +490,11 @@ impl MemoryManager {
         }
 
         // Sort by relevance score
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Apply limit
         let limit = query.limit.unwrap_or(10);
@@ -495,7 +516,10 @@ impl MemoryManager {
         let idx = self.vector_index.read().await;
 
         if idx.total_chunks == 0 {
-            return Ok(MemoryResult { chunks: Vec::new(), total_results: 0 });
+            return Ok(MemoryResult {
+                chunks: Vec::new(),
+                total_results: 0,
+            });
         }
 
         // Tokenize query and build its TF-IDF vector using the index's doc frequencies
@@ -528,13 +552,20 @@ impl MemoryManager {
         let use_hybrid = query_embedding.is_some();
 
         // Score every chunk
-        let mut scored: Vec<(String, f32)> = idx.vectors.iter()
+        let mut scored: Vec<(String, f32)> = idx
+            .vectors
+            .iter()
             .map(|(chunk_id, chunk_vec)| {
                 let tfidf_sim = query_vec.cosine_similarity(chunk_vec);
 
                 let score = if use_hybrid {
-                    let emb_sim = query_embedding.as_ref()
-                        .and_then(|qe| idx.embeddings.get(chunk_id).map(|ce| qe.cosine_similarity(ce)))
+                    let emb_sim = query_embedding
+                        .as_ref()
+                        .and_then(|qe| {
+                            idx.embeddings
+                                .get(chunk_id)
+                                .map(|ce| qe.cosine_similarity(ce))
+                        })
                         .unwrap_or(0.0);
                     // Hybrid: weight embeddings higher since they capture semantic similarity
                     0.3 * tfidf_sim + 0.7 * emb_sim
@@ -553,15 +584,23 @@ impl MemoryManager {
         let total_results = scored.len();
         scored.truncate(limit);
 
-        let results: Vec<SearchResultChunk> = scored.into_iter()
+        let results: Vec<SearchResultChunk> = scored
+            .into_iter()
             .filter_map(|(chunk_id, score)| {
                 let chunk = idx.chunks.get(&chunk_id)?.clone();
                 let highlights = vec![self.create_highlight(&chunk.content, &query.query)];
-                Some(SearchResultChunk { chunk, score, highlights })
+                Some(SearchResultChunk {
+                    chunk,
+                    score,
+                    highlights,
+                })
             })
             .collect();
 
-        Ok(MemoryResult { chunks: results, total_results })
+        Ok(MemoryResult {
+            chunks: results,
+            total_results,
+        })
     }
 
     /// Create a highlight snippet
@@ -586,7 +625,10 @@ impl MemoryManager {
     /// Write to daily log
     pub async fn write_daily_log(&self, content: &str) -> Result<()> {
         let date = Utc::now().format("%Y-%m-%d").to_string();
-        let log_path = self.workspace_path.join("memory").join(format!("{date}.md"));
+        let log_path = self
+            .workspace_path
+            .join("memory")
+            .join(format!("{date}.md"));
 
         // Append to daily log
         let mut file = tokio::fs::OpenOptions::new()
@@ -719,11 +761,13 @@ impl EpisodicStore {
         let query_lower = query.to_lowercase();
         let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
 
-        let mut scored: Vec<(f32, Episode)> = content.lines()
+        let mut scored: Vec<(f32, Episode)> = content
+            .lines()
             .filter_map(|line| serde_json::from_str::<Episode>(line).ok())
             .map(|ep| {
                 let summary_lower = ep.summary.to_lowercase();
-                let term_hits = query_terms.iter()
+                let term_hits = query_terms
+                    .iter()
                     .filter(|t| summary_lower.contains(**t))
                     .count();
                 let score = term_hits as f32 / query_terms.len().max(1) as f32;
@@ -785,7 +829,9 @@ mod tests {
     #[tokio::test]
     async fn test_memory_manager_creation() {
         let temp_dir = TempDir::new().unwrap();
-        let memory_manager = MemoryManager::new(temp_dir.path().to_path_buf()).await.unwrap();
+        let memory_manager = MemoryManager::new(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
 
         // Should create memory directory
         assert!(temp_dir.path().join("memory").exists());
@@ -798,11 +844,15 @@ mod tests {
     #[tokio::test]
     async fn test_keyword_search() {
         let temp_dir = TempDir::new().unwrap();
-        let memory_manager = MemoryManager::new(temp_dir.path().to_path_buf()).await.unwrap();
+        let memory_manager = MemoryManager::new(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
 
         // Create a test file
         let test_file = temp_dir.path().join("memory").join("test.md");
-        tokio::fs::write(&test_file, "This is a test document with some content").await.unwrap();
+        tokio::fs::write(&test_file, "This is a test document with some content")
+            .await
+            .unwrap();
 
         // Load the document
         memory_manager.load_document(&test_file).await.unwrap();
@@ -822,14 +872,26 @@ mod tests {
     #[tokio::test]
     async fn test_semantic_search_basic() {
         let temp_dir = TempDir::new().unwrap();
-        let mm = MemoryManager::new(temp_dir.path().to_path_buf()).await.unwrap();
+        let mm = MemoryManager::new(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
 
         // Create documents with distinct topics
         let file1 = temp_dir.path().join("memory").join("rust.md");
-        tokio::fs::write(&file1, "Rust programming language memory safety ownership borrowing compiler").await.unwrap();
+        tokio::fs::write(
+            &file1,
+            "Rust programming language memory safety ownership borrowing compiler",
+        )
+        .await
+        .unwrap();
 
         let file2 = temp_dir.path().join("memory").join("cooking.md");
-        tokio::fs::write(&file2, "Recipe for chocolate cake flour sugar eggs butter baking oven temperature").await.unwrap();
+        tokio::fs::write(
+            &file2,
+            "Recipe for chocolate cake flour sugar eggs butter baking oven temperature",
+        )
+        .await
+        .unwrap();
 
         let file3 = temp_dir.path().join("memory").join("systems.md");
         tokio::fs::write(&file3, "Systems programming low level memory allocation garbage collection runtime performance").await.unwrap();
@@ -848,7 +910,10 @@ mod tests {
         };
 
         let results = mm.search(query).await.unwrap();
-        assert!(results.total_results >= 2, "Should find at least 2 relevant chunks");
+        assert!(
+            results.total_results >= 2,
+            "Should find at least 2 relevant chunks"
+        );
 
         // The rust document should be the top result
         assert!(
@@ -861,13 +926,25 @@ mod tests {
     #[tokio::test]
     async fn test_semantic_search_ranking() {
         let temp_dir = TempDir::new().unwrap();
-        let mm = MemoryManager::new(temp_dir.path().to_path_buf()).await.unwrap();
+        let mm = MemoryManager::new(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
 
         let file1 = temp_dir.path().join("memory").join("agents.md");
-        tokio::fs::write(&file1, "AI agent system tool execution loop detection circuit breaker").await.unwrap();
+        tokio::fs::write(
+            &file1,
+            "AI agent system tool execution loop detection circuit breaker",
+        )
+        .await
+        .unwrap();
 
         let file2 = temp_dir.path().join("memory").join("credentials.md");
-        tokio::fs::write(&file2, "Credential vault encryption AES Argon2 password keyfile permissions").await.unwrap();
+        tokio::fs::write(
+            &file2,
+            "Credential vault encryption AES Argon2 password keyfile permissions",
+        )
+        .await
+        .unwrap();
 
         mm.load_document(&file1).await.unwrap();
         mm.load_document(&file2).await.unwrap();
@@ -888,7 +965,9 @@ mod tests {
     #[tokio::test]
     async fn test_semantic_search_no_results() {
         let temp_dir = TempDir::new().unwrap();
-        let mm = MemoryManager::new(temp_dir.path().to_path_buf()).await.unwrap();
+        let mm = MemoryManager::new(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
 
         // No documents loaded
         let query = MemoryQuery {
@@ -921,7 +1000,10 @@ mod tests {
         let v2 = SparseVector::from_term_freqs(&tf2, &doc_freq, 3);
 
         let sim = v1.cosine_similarity(&v2);
-        assert!(sim > 0.9, "Similar vectors should have high cosine similarity: {sim}");
+        assert!(
+            sim > 0.9,
+            "Similar vectors should have high cosine similarity: {sim}"
+        );
 
         // Completely disjoint vectors
         let mut tf3 = HashMap::new();
@@ -929,7 +1011,10 @@ mod tests {
         let v3 = SparseVector::from_term_freqs(&tf3, &doc_freq, 3);
 
         let sim2 = v1.cosine_similarity(&v3);
-        assert!(sim2 < 0.01, "Disjoint vectors should have near-zero similarity: {sim2}");
+        assert!(
+            sim2 < 0.01,
+            "Disjoint vectors should have near-zero similarity: {sim2}"
+        );
     }
 
     #[tokio::test]
@@ -948,10 +1033,15 @@ mod tests {
     #[tokio::test]
     async fn test_overlapping_chunks() {
         let temp_dir = TempDir::new().unwrap();
-        let mm = MemoryManager::new(temp_dir.path().to_path_buf()).await.unwrap();
+        let mm = MemoryManager::new(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
 
         // Create a document with 25 lines
-        let content: String = (1..=25).map(|i| format!("Line {i} of the document")).collect::<Vec<_>>().join("\n");
+        let content: String = (1..=25)
+            .map(|i| format!("Line {i} of the document"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let file = temp_dir.path().join("memory").join("long.md");
         tokio::fs::write(&file, &content).await.unwrap();
 
@@ -960,7 +1050,11 @@ mod tests {
         let docs = mm.documents.read().await;
         let doc = docs.get("long.md").unwrap();
         // With chunk_size=10, overlap=3, step=7: chunks start at 0, 7, 14, 21
-        assert!(doc.chunks.len() >= 4, "Should have at least 4 overlapping chunks, got {}", doc.chunks.len());
+        assert!(
+            doc.chunks.len() >= 4,
+            "Should have at least 4 overlapping chunks, got {}",
+            doc.chunks.len()
+        );
         // Verify overlap: chunk 0 ends at 10, chunk 1 starts at 7
         assert_eq!(doc.chunks[0].start_offset, 0);
         assert_eq!(doc.chunks[1].start_offset, 7);
@@ -992,14 +1086,26 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_search_with_embeddings() {
         let temp_dir = TempDir::new().unwrap();
-        let mut mm = MemoryManager::new(temp_dir.path().to_path_buf()).await.unwrap();
+        let mut mm = MemoryManager::new(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
         mm.set_embedding_provider(Arc::new(MockEmbeddingProvider));
 
         let file1 = temp_dir.path().join("memory").join("rust.md");
-        tokio::fs::write(&file1, "Rust programming language memory safety ownership borrowing compiler").await.unwrap();
+        tokio::fs::write(
+            &file1,
+            "Rust programming language memory safety ownership borrowing compiler",
+        )
+        .await
+        .unwrap();
 
         let file2 = temp_dir.path().join("memory").join("cooking.md");
-        tokio::fs::write(&file2, "Recipe for chocolate cake flour sugar eggs butter baking oven temperature").await.unwrap();
+        tokio::fs::write(
+            &file2,
+            "Recipe for chocolate cake flour sugar eggs butter baking oven temperature",
+        )
+        .await
+        .unwrap();
 
         mm.load_document(&file1).await.unwrap();
         mm.load_document(&file2).await.unwrap();
@@ -1008,7 +1114,10 @@ mod tests {
         // Verify embeddings were computed
         {
             let idx = mm.vector_index.read().await;
-            assert!(!idx.embeddings.is_empty(), "Embeddings should have been computed");
+            assert!(
+                !idx.embeddings.is_empty(),
+                "Embeddings should have been computed"
+            );
         }
 
         let query = MemoryQuery {
@@ -1025,11 +1134,15 @@ mod tests {
     #[tokio::test]
     async fn test_fallback_to_tfidf_without_embeddings() {
         let temp_dir = TempDir::new().unwrap();
-        let mm = MemoryManager::new(temp_dir.path().to_path_buf()).await.unwrap();
+        let mm = MemoryManager::new(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
         // No embedding provider set
 
         let file = temp_dir.path().join("memory").join("test.md");
-        tokio::fs::write(&file, "Some searchable content about programming").await.unwrap();
+        tokio::fs::write(&file, "Some searchable content about programming")
+            .await
+            .unwrap();
         mm.load_document(&file).await.unwrap();
         mm.rebuild_index().await.unwrap();
 
@@ -1064,10 +1177,14 @@ mod tests {
     #[tokio::test]
     async fn test_index_rebuild_after_load() {
         let temp_dir = TempDir::new().unwrap();
-        let mm = MemoryManager::new(temp_dir.path().to_path_buf()).await.unwrap();
+        let mm = MemoryManager::new(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
 
         let file = temp_dir.path().join("memory").join("doc.md");
-        tokio::fs::write(&file, "Some document content here").await.unwrap();
+        tokio::fs::write(&file, "Some document content here")
+            .await
+            .unwrap();
         mm.load_document(&file).await.unwrap();
 
         // Index should be dirty
@@ -1119,7 +1236,10 @@ mod tests {
 
         assert_eq!(store.episode_count("agent-1").await.unwrap(), 2);
 
-        let results = store.recall("agent-1", "database refactor", 5).await.unwrap();
+        let results = store
+            .recall("agent-1", "database refactor", 5)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].session_id, "s1");
 

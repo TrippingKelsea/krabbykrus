@@ -256,7 +256,10 @@ impl LlmProvider for OllamaProvider {
             .unwrap_or(false)
     }
 
-    async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
+    async fn chat_completion(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse> {
         let model = self.normalize_model(&request.model);
 
         let messages: Vec<OllamaMessage> = request
@@ -475,12 +478,10 @@ impl LlmProvider for OllamaProvider {
             .await;
 
         let tags: Vec<String> = match response {
-            Ok(r) if r.status().is_success() => {
-                match r.json::<OllamaTagsResponse>().await {
-                    Ok(tags) => tags.models.into_iter().map(|m| m.name).collect(),
-                    Err(_) => vec![],
-                }
-            }
+            Ok(r) if r.status().is_success() => match r.json::<OllamaTagsResponse>().await {
+                Ok(tags) => tags.models.into_iter().map(|m| m.name).collect(),
+                Err(_) => vec![],
+            },
             _ => vec![],
         };
 
@@ -517,7 +518,9 @@ impl LlmProvider for OllamaProvider {
 
         models
             .into_iter()
-            .find(|m| m.id == model_id || m.id == format!("ollama/{normalized}") || m.name == normalized)
+            .find(|m| {
+                m.id == model_id || m.id == format!("ollama/{normalized}") || m.name == normalized
+            })
             .ok_or_else(|| LlmError::ModelNotFound {
                 model: model_id.to_string(),
             })

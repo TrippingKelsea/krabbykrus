@@ -139,16 +139,19 @@ impl InferenceEngine {
             .map(|s| s.trim().to_lowercase())
             .unwrap_or_default();
 
-        info!("GGUF architecture: {}", if arch.is_empty() { "(not set)" } else { &arch });
+        info!(
+            "GGUF architecture: {}",
+            if arch.is_empty() { "(not set)" } else { &arch }
+        );
 
         let model = match arch.as_str() {
-            "qwen2" => {
-                ModelArch::Qwen2(qqwen2::ModelWeights::from_gguf(content, &mut file, &device)?)
-            }
+            "qwen2" => ModelArch::Qwen2(qqwen2::ModelWeights::from_gguf(
+                content, &mut file, &device,
+            )?),
             // Default to llama — covers llama, mistral, and many llama-compatible models
-            _ => {
-                ModelArch::Llama(qllama::ModelWeights::from_gguf(content, &mut file, &device)?)
-            }
+            _ => ModelArch::Llama(qllama::ModelWeights::from_gguf(
+                content, &mut file, &device,
+            )?),
         };
 
         info!("Loading tokenizer from {}", config.tokenizer_path.display());
@@ -169,9 +172,7 @@ impl InferenceEngine {
     /// GGUF/GGML/AWQ/GPTQ repos typically don't ship `tokenizer.json`;
     /// the tokenizer lives in the base model repo.
     const QUANT_SUFFIXES: &'static [&'static str] = &[
-        "-GGUF", "-gguf", "-GGML", "-ggml",
-        "-AWQ", "-awq", "-GPTQ", "-gptq",
-        "-EXL2", "-exl2",
+        "-GGUF", "-gguf", "-GGML", "-ggml", "-AWQ", "-awq", "-GPTQ", "-gptq", "-EXL2", "-exl2",
     ];
 
     /// Derive the base (non-quantized) repo ID by stripping known suffixes.
@@ -197,8 +198,8 @@ impl InferenceEngine {
         tokenizer_repo: Option<&str>,
         _cache_dir: &Path,
     ) -> Result<(PathBuf, PathBuf), InferenceError> {
-        let api = hf_hub::api::tokio::Api::new()
-            .map_err(|e| InferenceError::Download(e.to_string()))?;
+        let api =
+            hf_hub::api::tokio::Api::new().map_err(|e| InferenceError::Download(e.to_string()))?;
 
         let repo = api.model(repo_id.to_string());
 
@@ -214,9 +215,7 @@ impl InferenceEngine {
             api.model(tok_repo.to_string())
                 .get("tokenizer.json")
                 .await
-                .map_err(|e| InferenceError::Download(format!(
-                    "tokenizer from {tok_repo}: {e}"
-                )))?
+                .map_err(|e| InferenceError::Download(format!("tokenizer from {tok_repo}: {e}")))?
         } else {
             match repo.get("tokenizer.json").await {
                 Ok(path) => path,
@@ -231,9 +230,9 @@ impl InferenceEngine {
                     api.model(base.to_string())
                         .get("tokenizer.json")
                         .await
-                        .map_err(|e| InferenceError::Download(format!(
-                            "tokenizer from {base}: {e}"
-                        )))?
+                        .map_err(|e| {
+                            InferenceError::Download(format!("tokenizer from {base}: {e}"))
+                        })?
                 }
             }
         };

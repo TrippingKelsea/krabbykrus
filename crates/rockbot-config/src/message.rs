@@ -84,14 +84,14 @@ pub enum ContentBlock {
         formatting: TextFormatting,
     },
     /// Code block with syntax highlighting
-    Code { code: String, language: Option<String> },
+    Code {
+        code: String,
+        language: Option<String>,
+    },
     /// Image block
     Image { url: String, alt: Option<String> },
     /// List block
-    List {
-        items: Vec<String>,
-        ordered: bool,
-    },
+    List { items: Vec<String>, ordered: bool },
     /// Table block
     Table {
         headers: Vec<String>,
@@ -221,9 +221,7 @@ impl Message {
 
     /// Create a simple text message
     pub fn text<S: Into<String>>(text: S) -> Self {
-        Self::new(MessageContent::Text {
-            text: text.into(),
-        })
+        Self::new(MessageContent::Text { text: text.into() })
     }
 
     /// Create a system message
@@ -279,9 +277,16 @@ impl Message {
             result: ToolResult::Text {
                 content: content.clone(),
             },
-        }).with_role(MessageRole::Tool);
-        msg.metadata.extra.insert("tool_call_id".to_string(), serde_json::Value::String(tool_call_id));
-        msg.metadata.extra.insert("tool_name".to_string(), serde_json::Value::String(tool_name));
+        })
+        .with_role(MessageRole::Tool);
+        msg.metadata.extra.insert(
+            "tool_call_id".to_string(),
+            serde_json::Value::String(tool_call_id),
+        );
+        msg.metadata.extra.insert(
+            "tool_name".to_string(),
+            serde_json::Value::String(tool_name),
+        );
         msg
     }
 
@@ -360,9 +365,7 @@ impl MessageBuilder {
 
     /// Set text content
     pub fn text<S: Into<String>>(self, text: S) -> Self {
-        self.content(MessageContent::Text {
-            text: text.into(),
-        })
+        self.content(MessageContent::Text { text: text.into() })
     }
 
     /// Set the session ID
@@ -499,7 +502,9 @@ mod tests {
 
     #[test]
     fn test_content_part_text_serde() {
-        let part = ContentPart::Text { text: "hello".to_string() };
+        let part = ContentPart::Text {
+            text: "hello".to_string(),
+        };
         let json = serde_json::to_string(&part).unwrap();
         assert!(json.contains("\"type\":\"text\""));
         let back: ContentPart = serde_json::from_str(&json).unwrap();
@@ -520,7 +525,9 @@ mod tests {
 
     #[test]
     fn test_content_part_image_url_serde() {
-        let part = ContentPart::ImageUrl { url: "https://example.com/img.png".to_string() };
+        let part = ContentPart::ImageUrl {
+            url: "https://example.com/img.png".to_string(),
+        };
         let json = serde_json::to_string(&part).unwrap();
         assert!(json.contains("\"type\":\"image_url\""));
         let back: ContentPart = serde_json::from_str(&json).unwrap();
