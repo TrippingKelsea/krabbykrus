@@ -14,8 +14,11 @@ struct KnownRename {
 ///
 /// These are checked deterministically before invoking the AI model.
 const MIGRATION_TABLE: &[KnownRename] = &[
-    // Example: if a field was renamed in a future version, add it here.
-    // KnownRename { old_path: "gateway.bind", new_path: "gateway.bind_host", since_version: "0.2.0" },
+    KnownRename {
+        old_path: "agents.list",
+        new_path: "vault:agents",
+        since_version: "0.3.0",
+    },
 ];
 
 /// A migration note — either from the static table or AI detection.
@@ -149,9 +152,10 @@ mod tests {
     }
 
     #[test]
-    fn test_format_known_renames_empty() {
+    fn test_format_known_renames() {
         let s = format_known_renames();
-        assert!(s.contains("no known renames"));
+        assert!(s.contains("agents.list"));
+        assert!(s.contains("vault:agents"));
     }
 
     #[test]
@@ -167,5 +171,15 @@ mod tests {
         let toml = "[gateway]\nport = 8080\n";
         let notes = check_static_table(toml);
         assert!(notes.is_empty());
+    }
+
+    #[test]
+    fn test_check_static_table_agents_list() {
+        let toml = "[agents]\nlist = []\n";
+        let notes = check_static_table(toml);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].old_path, "agents.list");
+        assert_eq!(notes[0].new_path.as_deref(), Some("vault:agents"));
+        assert_eq!(notes[0].source, MigrationSource::StaticTable);
     }
 }

@@ -192,6 +192,38 @@ impl Store {
         }
         Ok(pairs)
     }
+
+    // -------------------------------------------------------------------------
+    // Agent convenience methods (AGENTS table)
+    // -------------------------------------------------------------------------
+
+    /// Store an agent instance, serialized as JSON.
+    pub fn store_agent(&self, id: &str, agent: &rockbot_config::AgentInstance) -> anyhow::Result<()> {
+        let bytes = serde_json::to_vec(agent)?;
+        self.put(tables::AGENTS, id, &bytes)
+    }
+
+    /// Load an agent instance by ID.
+    pub fn load_agent(&self, id: &str) -> anyhow::Result<Option<rockbot_config::AgentInstance>> {
+        match self.get(tables::AGENTS, id)? {
+            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// List all stored agent instances.
+    pub fn list_agents(&self) -> anyhow::Result<Vec<rockbot_config::AgentInstance>> {
+        let pairs = self.list(tables::AGENTS)?;
+        pairs
+            .into_iter()
+            .map(|(_, bytes)| serde_json::from_slice(&bytes).map_err(Into::into))
+            .collect()
+    }
+
+    /// Delete an agent by ID. Returns true if it existed.
+    pub fn delete_agent(&self, id: &str) -> anyhow::Result<bool> {
+        self.delete(tables::AGENTS, id)
+    }
 }
 
 // =============================================================================
@@ -263,6 +295,46 @@ mod tests {
         let list = store.kv_list("ns1").unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, "key");
+    }
+
+    #[test]
+    fn agent_store_roundtrip() {
+        let (store, _dir) = open_store();
+        let agent = rockbot_config::AgentInstance {
+            id: "test-agent".to_string(),
+            workspace: None,
+            model: Some("test-model".to_string()),
+            max_tool_calls: None,
+            temperature: Some(0.3),
+            max_tokens: Some(16000),
+            parent_id: None,
+            system_prompt: None,
+            enabled: true,
+            mcp_servers: std::collections::HashMap::new(),
+            config: std::collections::HashMap::new(),
+            max_context_tokens: 128000,
+            guardrails: vec![],
+            reflection_enabled: false,
+            breakpoint_tools: vec![],
+            planning_mode: "never".to_string(),
+            expose_as_tool: None,
+            episodic_memory: false,
+            workflow: None,
+            llm_timeout_secs: 45,
+            tool_timeout_secs: 120,
+        };
+
+        store.store_agent("test-agent", &agent).unwrap();
+        let loaded = store.load_agent("test-agent").unwrap().unwrap();
+        assert_eq!(loaded.id, "test-agent");
+        assert_eq!(loaded.model.as_deref(), Some("test-model"));
+
+        let all = store.list_agents().unwrap();
+        assert_eq!(all.len(), 1);
+
+        let existed = store.delete_agent("test-agent").unwrap();
+        assert!(existed);
+        assert!(store.load_agent("test-agent").unwrap().is_none());
     }
 
     #[test]

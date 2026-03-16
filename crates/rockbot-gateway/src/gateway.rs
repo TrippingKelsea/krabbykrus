@@ -182,6 +182,8 @@ pub struct Gateway {
     pub(crate) credentials_config: CredentialsConfig,
     /// Path to the TOML config file (for persisting agent changes)
     config_path: Option<std::path::PathBuf>,
+    /// Vault store for persisting agents (preferred over TOML when available)
+    store: Option<Arc<rockbot_store::Store>>,
     /// Agent configurations from the config file (source of truth for declared agents)
     agents_config: Arc<RwLock<Vec<rockbot_config::AgentInstance>>>,
     /// Registered agents
@@ -216,6 +218,9 @@ pub struct Gateway {
     /// Stored error from overseer initialization failure (if configured but init failed)
     #[cfg(feature = "overseer")]
     overseer_init_error: Option<String>,
+    /// Embedded butler companion agent
+    #[cfg(feature = "butler")]
+    butler: Option<Arc<rockbot_butler::Butler>>,
     /// Remote executor registry for Noise-encrypted tool dispatch
     #[cfg(feature = "remote-exec")]
     pub(crate) remote_exec_registry: Arc<rockbot_client::remote_exec::RemoteExecutorRegistry>,
@@ -661,6 +666,7 @@ impl Gateway {
             config: config.gateway,
             credentials_config: config.credentials,
             config_path: None,
+            store: None,
             agents_config: Arc::new(RwLock::new(config.agents.list.clone())),
             agents: Arc::new(RwLock::new(HashMap::new())),
             pending_agents: Arc::new(RwLock::new(Vec::new())),
@@ -703,6 +709,8 @@ impl Gateway {
             overseer,
             #[cfg(feature = "overseer")]
             overseer_init_error,
+            #[cfg(feature = "butler")]
+            butler: None,
             #[cfg(feature = "remote-exec")]
             remote_exec_registry: Arc::new(
                 rockbot_client::remote_exec::RemoteExecutorRegistry::new(),
@@ -779,6 +787,18 @@ impl Gateway {
     #[cfg(feature = "overseer")]
     pub fn overseer(&self) -> Option<&Arc<rockbot_overseer::Overseer>> {
         self.overseer.as_ref()
+    }
+
+    /// Set the butler instance.
+    #[cfg(feature = "butler")]
+    pub fn set_butler(&mut self, butler: Arc<rockbot_butler::Butler>) {
+        self.butler = Some(butler);
+    }
+
+    /// Get a reference to the butler, if enabled.
+    #[cfg(feature = "butler")]
+    pub fn butler(&self) -> Option<&Arc<rockbot_butler::Butler>> {
+        self.butler.as_ref()
     }
 
     /// Publish the CA certificate to S3 and register DNS records.
@@ -981,6 +1001,79 @@ impl Gateway {
     /// Set the config file path (for persisting agent changes)
     pub fn set_config_path(&mut self, path: std::path::PathBuf) {
         self.config_path = Some(path);
+    }
+
+    /// Set the vault store for agent persistence.
+    ///
+    /// When a store is configured, agents are loaded from the vault `AGENTS`
+    /// table instead of the TOML `[[agents.list]]` section. On first startup
+    /// with a non-empty `agents.list` and an empty vault, agents are
+    /// auto-migrated.
+    pub fn set_store(&mut self, store: Arc<rockbot_store::Store>) {
+        self.store = Some(store);
+    }
+
+    /// Load agents from the vault store. Returns empty vec if store is not set.
+    pub fn load_agents_from_store(&self) -> Vec<rockbot_config::AgentInstance> {
+        let Some(ref store) = self.store else {
+            return Vec::new();
+        };
+        match store.list_agents() {
+            Ok(agents) => agents,
+            Err(e) => {
+                warn!("Failed to load agents from vault: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Persist a single agent to the vault store. Falls back to TOML if no store.
+    fn persist_agent_to_store(&self, agent: &rockbot_config::AgentInstance) {
+        if let Some(ref store) = self.store {
+            if let Err(e) = store.store_agent(&agent.id, agent) {
+                warn!("Failed to persist agent '{}' to vault: {e}", agent.id);
+            }
+        }
+    }
+
+    /// Delete an agent from the vault store.
+    fn delete_agent_from_store(&self, agent_id: &str) {
+        if let Some(ref store) = self.store {
+            if let Err(e) = store.delete_agent(agent_id) {
+                warn!("Failed to delete agent '{agent_id}' from vault: {e}");
+            }
+        }
+    }
+
+    /// Auto-migrate agents from TOML config to vault store.
+    ///
+    /// Called during agent registration when the vault is empty but TOML
+    /// `agents.list` is non-empty. Each agent is written to the vault.
+    pub async fn auto_migrate_agents_to_store(&self) {
+        let Some(ref store) = self.store else {
+            return;
+        };
+        let agents_config = self.agents_config.read().await;
+        if agents_config.is_empty() {
+            return;
+        }
+        // Only migrate if vault is empty
+        match store.list_agents() {
+            Ok(existing) if !existing.is_empty() => return,
+            Err(_) => return,
+            _ => {}
+        }
+        info!(
+            "Migrating {} agent(s) from TOML config to vault store",
+            agents_config.len()
+        );
+        for agent in agents_config.iter() {
+            if let Err(e) = store.store_agent(&agent.id, agent) {
+                warn!("Failed to migrate agent '{}' to vault: {e}", agent.id);
+            } else {
+                info!("Migrated agent '{}' to vault", agent.id);
+            }
+        }
     }
 
     /// Set the LLM provider registry (single source of truth for provider state).
@@ -3909,6 +4002,29 @@ impl Gateway {
             }
         }
 
+        // Intercept /butler commands before agent processing
+        #[cfg(feature = "butler")]
+        if user_message.trim().starts_with("/butler") {
+            if let Some(ref butler) = self.butler {
+                match butler.dispatch_command(user_message.trim()) {
+                    rockbot_butler::CommandResult::Handled(output) => {
+                        let resp = WsResponseType::AgentResponseMsg {
+                            session_key,
+                            content: output,
+                            tool_calls: vec![],
+                            tokens_used: None,
+                            processing_time_ms: None,
+                        };
+                        let _ = outbound_tx.send(WsMessage::Text(
+                            serde_json::to_string(&resp).unwrap_or_default(),
+                        ));
+                        return;
+                    }
+                    rockbot_butler::CommandResult::NotHandled => {}
+                }
+            }
+        }
+
         // Intercept gateway slash commands before agent processing
         if let Some(output) = self.handle_slash_commands(&user_message).await {
             let resp = WsResponseType::AgentResponseMsg {
@@ -4733,8 +4849,11 @@ impl Gateway {
             // Non-fatal — continue creating the agent
         }
 
-        // Persist to config file
-        self.persist_agent_to_config(&config).await;
+        // Persist to vault store (preferred) or config file (fallback)
+        self.persist_agent_to_store(&config);
+        if self.store.is_none() {
+            self.persist_agent_to_config(&config).await;
+        }
 
         // Add to our in-memory config list
         self.agents_config.write().await.push(config.clone());
@@ -4892,12 +5011,19 @@ impl Gateway {
             }
         }
 
-        // Persist all configs to file
+        // Persist: vault store (preferred) or config file (fallback)
         // Grab the updated config for potential agent recreation
         let updated_config = configs.iter().find(|c| c.id == agent_id).cloned();
-        let configs_snapshot: Vec<_> = configs.iter().cloned().collect();
-        drop(configs);
-        self.persist_all_agents_to_config(&configs_snapshot).await;
+        if let Some(ref cfg) = updated_config {
+            self.persist_agent_to_store(cfg);
+        }
+        if self.store.is_none() {
+            let configs_snapshot: Vec<_> = configs.iter().cloned().collect();
+            drop(configs);
+            self.persist_all_agents_to_config(&configs_snapshot).await;
+        } else {
+            drop(configs);
+        }
 
         // Recreate the running agent instance so it picks up config changes (e.g. model)
         if let (Some(ref factory), Some(cfg)) = (&self.agent_factory, updated_config) {
@@ -4952,11 +5078,19 @@ impl Gateway {
         let had_config = configs.len();
         configs.retain(|c| c.id != agent_id);
         let removed_config = configs.len() < had_config;
-        let configs_snapshot: Vec<_> = configs.iter().cloned().collect();
-        drop(configs);
 
         if removed_config {
-            self.persist_all_agents_to_config(&configs_snapshot).await;
+            // Remove from vault store (preferred) or config file (fallback)
+            self.delete_agent_from_store(&agent_id);
+            if self.store.is_none() {
+                let configs_snapshot: Vec<_> = configs.iter().cloned().collect();
+                drop(configs);
+                self.persist_all_agents_to_config(&configs_snapshot).await;
+            } else {
+                drop(configs);
+            }
+        } else {
+            drop(configs);
         }
 
         if removed_active.is_some() || removed_config {
@@ -5043,6 +5177,26 @@ impl Gateway {
                         serde_json::to_string(&resp).unwrap_or_default().into(),
                     )))
                     .unwrap());
+            }
+        }
+
+        // Intercept /butler commands before agent processing
+        #[cfg(feature = "butler")]
+        if message_request.message.trim().starts_with("/butler") {
+            if let Some(ref butler) = self.butler {
+                match butler.dispatch_command(message_request.message.trim()) {
+                    rockbot_butler::CommandResult::Handled(output) => {
+                        let resp = serde_json::json!({ "response": output });
+                        return Ok(Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Content-Type", "application/json")
+                            .body(GatewayBody::Left(Full::new(
+                                serde_json::to_string(&resp).unwrap_or_default().into(),
+                            )))
+                            .unwrap());
+                    }
+                    rockbot_butler::CommandResult::NotHandled => {}
+                }
             }
         }
 
@@ -5881,6 +6035,7 @@ impl Clone for Gateway {
             config: self.config.clone(),
             credentials_config: self.credentials_config.clone(),
             config_path: self.config_path.clone(),
+            store: self.store.clone(),
             agents_config: Arc::clone(&self.agents_config),
             agents: Arc::clone(&self.agents),
             pending_agents: Arc::clone(&self.pending_agents),
@@ -5899,6 +6054,8 @@ impl Clone for Gateway {
             overseer: self.overseer.clone(),
             #[cfg(feature = "overseer")]
             overseer_init_error: self.overseer_init_error.clone(),
+            #[cfg(feature = "butler")]
+            butler: self.butler.clone(),
             #[cfg(feature = "remote-exec")]
             remote_exec_registry: Arc::clone(&self.remote_exec_registry),
             #[cfg(feature = "remote-exec")]
@@ -6206,6 +6363,8 @@ mod tests {
             overseer: None,
             doctor: None,
             deploy: None,
+            tui: Default::default(),
+            seed_model: Default::default(),
         };
 
         Gateway::new(config, session_manager).await.unwrap()

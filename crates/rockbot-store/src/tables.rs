@@ -12,3 +12,4 @@ pub const CRON_JOBS: TableDefinition<'static, &str, &[u8]> = TableDefinition::ne
 pub const ROUTE_BINDINGS: TableDefinition<'static, &str, &[u8]> =
     TableDefinition::new("route_bindings");
 pub const PKI_INDEX: TableDefinition<'static, &str, &[u8]> = TableDefinition::new("pki_index");
+pub const AGENTS: TableDefinition<'static, &str, &[u8]> = TableDefinition::new("agents");

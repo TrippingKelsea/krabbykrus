@@ -24,6 +24,8 @@ tools-markdown = ["dep:rockbot-tools-markdown"]
 otel = ["rockbot-agent/otel"]
 # Embedded overseer
 overseer = ["dep:rockbot-overseer"]
+# Embedded butler companion agent
+butler = ["dep:rockbot-butler"]
 # Remote tool execution over Noise Protocol
 remote-exec = ["dep:snow", "rockbot-client/remote-exec"]
 # S3 CA distribution + Route53 DNS
@@ -38,6 +40,7 @@ workspace = true
 rockbot-agent = { path = "../rockbot-agent" }
 rockbot-client = { path = "../rockbot-client" }
 rockbot-config = { path = "../rockbot-config" }
+rockbot-store = { path = "../rockbot-store" }
 rockbot-session = { path = "../rockbot-session" }
 rockbot-webui = { path = "../rockbot-webui" }
 rockbot-tools = { path = "../rockbot-tools" }
@@ -86,6 +89,8 @@ cron = { workspace = true }
 
 # Embedded overseer (optional)
 rockbot-overseer = { path = "../rockbot-overseer", optional = true }
+# Embedded butler companion agent (optional)
+rockbot-butler = { path = "../rockbot-butler", optional = true }
 
 # TLS for gateway listener + mTLS CSR signing
 tokio-rustls = { workspace = true }

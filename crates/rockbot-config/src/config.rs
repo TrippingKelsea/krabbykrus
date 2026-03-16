@@ -46,6 +46,11 @@ pub struct Config {
     /// TUI display preferences
     #[serde(default)]
     pub tui: TuiConfig,
+    /// Shared local model configuration for butler, doctor, and overseer.
+    /// Provides a single `[seed_model]` section to avoid duplicating model
+    /// coordinates across components.
+    #[serde(default)]
+    pub seed_model: SeedModelConfig,
 }
 
 /// TUI display preferences
@@ -149,7 +154,13 @@ impl GatewayConfig {
 pub struct AgentConfig {
     /// Default settings for all agents
     pub defaults: AgentDefaults,
-    /// List of configured agents
+    /// List of configured agents.
+    ///
+    /// **Deprecated:** Agent configs should be stored in the vault instead.
+    /// On first startup with a non-empty list and an empty vault, agents are
+    /// auto-migrated. This field defaults to empty and will be removed in a
+    /// future version.
+    #[serde(default)]
     pub list: Vec<AgentInstance>,
 }
 
@@ -447,6 +458,46 @@ impl Default for OllamaProviderConfig {
         Self {
             url: default_ollama_url(),
             enabled: true,
+        }
+    }
+}
+
+/// Shared seed model configuration for local GGUF model inference.
+///
+/// Used by butler, doctor, and overseer components. Provides a single
+/// `[seed_model]` section so you don't need to repeat model coordinates
+/// in `[overseer]`, `[doctor]`, and `[butler]` separately.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeedModelConfig {
+    /// HuggingFace model repo ID (default: "Qwen/Qwen2.5-1.5B-Instruct-GGUF")
+    #[serde(default = "default_seed_model_id")]
+    pub model_id: String,
+    /// GGUF filename within the repo (default: "qwen2.5-1.5b-instruct-q4_k_m.gguf")
+    #[serde(default = "default_seed_model_filename")]
+    pub model_filename: String,
+    /// HuggingFace repo ID for the tokenizer (default: "Qwen/Qwen2.5-1.5B-Instruct")
+    #[serde(default = "default_seed_tokenizer")]
+    pub tokenizer_repo: String,
+}
+
+fn default_seed_model_id() -> String {
+    "Qwen/Qwen2.5-1.5B-Instruct-GGUF".to_string()
+}
+
+fn default_seed_model_filename() -> String {
+    "qwen2.5-1.5b-instruct-q4_k_m.gguf".to_string()
+}
+
+fn default_seed_tokenizer() -> String {
+    "Qwen/Qwen2.5-1.5B-Instruct".to_string()
+}
+
+impl Default for SeedModelConfig {
+    fn default() -> Self {
+        Self {
+            model_id: default_seed_model_id(),
+            model_filename: default_seed_model_filename(),
+            tokenizer_repo: default_seed_tokenizer(),
         }
     }
 }
@@ -913,11 +964,51 @@ mod tests {
             doctor: None,
             deploy: None,
             tui: TuiConfig::default(),
+            seed_model: SeedModelConfig::default(),
         };
 
         assert!(config.validate().is_ok());
 
         config.gateway.port = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_seed_model_defaults() {
+        let config = SeedModelConfig::default();
+        assert_eq!(config.model_id, "Qwen/Qwen2.5-1.5B-Instruct-GGUF");
+        assert_eq!(config.model_filename, "qwen2.5-1.5b-instruct-q4_k_m.gguf");
+        assert_eq!(config.tokenizer_repo, "Qwen/Qwen2.5-1.5B-Instruct");
+    }
+
+    #[test]
+    fn test_seed_model_in_config_toml() {
+        let toml_content = r#"
+            [gateway]
+            bind_host = "127.0.0.1"
+            port = 8080
+
+            [agents.defaults]
+            workspace = "/tmp/workspace"
+            model = "test-model"
+
+            [[agents.list]]
+            id = "main"
+
+            [tools]
+            profile = "standard"
+
+            [security.sandbox]
+            mode = "tools"
+
+            [seed_model]
+            model_id = "custom/model-GGUF"
+            model_filename = "custom.gguf"
+            tokenizer_repo = "custom/model"
+        "#;
+        let config = Config::from_toml(toml_content).unwrap();
+        assert_eq!(config.seed_model.model_id, "custom/model-GGUF");
+        assert_eq!(config.seed_model.model_filename, "custom.gguf");
+        assert_eq!(config.seed_model.tokenizer_repo, "custom/model");
     }
 }
