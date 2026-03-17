@@ -5891,6 +5891,22 @@ async fn handle_remote_tool_request(
     tracing::info!("Executing remote tool locally: {tool_name} (request={request_id})");
     let start = std::time::Instant::now();
 
+    if tool_name == "exec" {
+        if let Err(error_output) =
+            execute_streaming_remote_exec(sender, request_id, params, workspace, start).await
+        {
+            send_tool_response(
+                sender,
+                request_id,
+                false,
+                &format!("Tool execution error: {error_output}"),
+                start.elapsed(),
+            )
+            .await;
+        }
+        return;
+    }
+
     let tool_config = rockbot_tools::ToolConfig {
         profile: "standard".to_string(),
         deny: vec![],
@@ -5975,6 +5991,155 @@ async fn handle_remote_tool_request(
 }
 
 #[cfg(feature = "remote-exec")]
+async fn execute_streaming_remote_exec(
+    sender: &rockbot_client::GatewaySender,
+    request_id: &str,
+    params: &str,
+    workspace: &str,
+    start: std::time::Instant,
+) -> Result<(), String> {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(params).map_err(|e| format!("Invalid exec params: {e}"))?;
+    let command = parsed
+        .get("command")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "command is required".to_string())?
+        .to_string();
+    let workdir = parsed
+        .get("workdir")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or(workspace)
+        .to_string();
+    let timeout_secs = parsed
+        .get("timeout")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(30);
+
+    let mut child = tokio::process::Command::new("sh");
+    child
+        .arg("-c")
+        .arg(&command)
+        .current_dir(&workdir)
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = child
+        .spawn()
+        .map_err(|e| format!("Failed to execute command: {e}"))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture stderr".to_string())?;
+
+    let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
+
+    let stdout_tx = chunk_tx.clone();
+    let stdout_handle = tokio::spawn(async move {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = stdout_tx.send(("stdout".to_string(), format!("{line}\n")));
+        }
+    });
+
+    let stderr_tx = chunk_tx.clone();
+    let stderr_handle = tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = stderr_tx.send(("stderr".to_string(), format!("{line}\n")));
+        }
+    });
+
+    drop(chunk_tx);
+
+    let mut stdout_buf = String::new();
+    let mut stderr_buf = String::new();
+    let mut wait_fut = Box::pin(child.wait());
+    let deadline = std::time::Duration::from_secs(timeout_secs);
+    let sleep = tokio::time::sleep(deadline);
+    tokio::pin!(sleep);
+    let exit_status = loop {
+        tokio::select! {
+            maybe_chunk = chunk_rx.recv() => {
+                if let Some((stream, chunk)) = maybe_chunk {
+                    if stream == "stderr" {
+                        stderr_buf.push_str(&chunk);
+                    } else {
+                        stdout_buf.push_str(&chunk);
+                    }
+                    send_tool_output(sender, request_id, Some(&stream), &chunk).await;
+                }
+            }
+            status = &mut wait_fut => {
+                let status = status.map_err(|e| format!("Failed to wait for command: {e}"))?;
+                break status;
+            }
+            _ = &mut sleep => {
+                return Err("Command timed out".to_string());
+            }
+        }
+    };
+
+    while let Some((stream, chunk)) = chunk_rx.recv().await {
+        if stream == "stderr" {
+            stderr_buf.push_str(&chunk);
+        } else {
+            stdout_buf.push_str(&chunk);
+        }
+        send_tool_output(sender, request_id, Some(&stream), &chunk).await;
+    }
+
+    let _ = stdout_handle.await;
+    let _ = stderr_handle.await;
+
+    let output = serde_json::json!({
+        "exit_code": exit_status.code().unwrap_or(-1),
+        "stdout": stdout_buf,
+        "stderr": stderr_buf,
+        "success": exit_status.success()
+    });
+
+    send_tool_response(
+        sender,
+        request_id,
+        exit_status.success(),
+        &serde_json::to_string(&output).unwrap_or_default(),
+        start.elapsed(),
+    )
+    .await;
+
+    Ok(())
+}
+
+#[cfg(feature = "remote-exec")]
+async fn send_tool_output(
+    sender: &rockbot_client::GatewaySender,
+    request_id: &str,
+    stream: Option<&str>,
+    output: &str,
+) {
+    let resp = serde_json::json!({
+        "type": "remote_tool_output",
+        "request_id": request_id,
+        "stream": stream,
+        "output": output,
+    });
+    let payload = serde_json::to_string(&resp).unwrap_or_default();
+    if let Err(e) = sender.send(payload).await {
+        tracing::warn!("Failed to send remote tool output: {e} (request={request_id})");
+    }
+}
+
+#[cfg(feature = "remote-exec")]
 async fn send_tool_response(
     sender: &rockbot_client::GatewaySender,
     request_id: &str,
@@ -6037,19 +6202,35 @@ async fn handle_gateway_event(
             ));
         }
         GatewayEvent::ToolResult {
+            session_key,
             tool_name,
+            result,
             success,
             duration_ms,
             locality,
         } => {
             let status = if *success { "✓" } else { "✗" };
+            let locality_suffix = locality
+                .as_ref()
+                .map(|value| format!(", executed on: {value}"))
+                .unwrap_or_default();
             let _ = tx.send(Message::SetStatus(
-                format!("{status} {tool_name} ({duration_ms}ms)"),
+                format!("{status} {tool_name} ({duration_ms}ms{locality_suffix})"),
                 !success,
             ));
             let _ = tx.send(Message::ToolExecutionObserved {
                 locality: locality.clone(),
             });
+            if !result.is_empty() && !session_key.is_empty() {
+                let prefix = locality
+                    .as_ref()
+                    .map(|value| format!("\n[{tool_name} | executed on: {value}]\n"))
+                    .unwrap_or_else(|| format!("\n[{tool_name}]\n"));
+                let _ = tx.send(Message::ChatStreamChunk(format!(
+                    "{session_key}:{}{result}",
+                    prefix
+                )));
+            }
         }
         GatewayEvent::AgentResponse {
             session_key,
@@ -6066,6 +6247,7 @@ async fn handle_gateway_event(
                     result: truncate_tool_result(&tc.result, 500),
                     success: tc.success,
                     duration_ms: tc.duration_ms,
+                    locality: tc.locality.clone(),
                     expanded: false,
                 })
                 .collect();

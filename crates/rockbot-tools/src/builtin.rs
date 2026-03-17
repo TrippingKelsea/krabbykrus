@@ -11,6 +11,31 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use tokio::process::Command;
 
+fn get_string_param<'a>(params: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| params.get(*key).and_then(|v| v.as_str()))
+}
+
+fn resolve_tool_path(
+    context: &ToolExecutionContext,
+    params: &serde_json::Value,
+    keys: &[&str],
+) -> Result<PathBuf> {
+    let raw_path = get_string_param(params, keys)
+        .ok_or_else(|| crate::ToolError::InvalidParameters {
+            message: format!("{} is required", keys[0]),
+        })?
+        .to_string();
+
+    let path = if PathBuf::from(&raw_path).is_absolute() {
+        PathBuf::from(raw_path)
+    } else {
+        context.workspace_path.join(raw_path)
+    };
+
+    Ok(path)
+}
+
 /// File reading tool
 pub struct ReadTool;
 
@@ -68,14 +93,6 @@ impl Tool for ReadTool {
         context: ToolExecutionContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let file_path: String = params
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "file_path is required".to_string(),
-                })?
-                .to_string();
-
             let limit = params
                 .get("limit")
                 .and_then(serde_json::Value::as_u64)
@@ -86,11 +103,7 @@ impl Tool for ReadTool {
                 .map_or(1, |v| v as usize);
 
             // Resolve path relative to workspace
-            let path = if PathBuf::from(&file_path).is_absolute() {
-                PathBuf::from(file_path)
-            } else {
-                context.workspace_path.join(file_path)
-            };
+            let path = resolve_tool_path(&context, &params, &["file_path", "path", "file"])?;
 
             // Read file content
             let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
@@ -171,28 +184,13 @@ impl Tool for WriteTool {
         context: ToolExecutionContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let file_path: String = params
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "file_path is required".to_string(),
-                })?
-                .to_string();
+            let path = resolve_tool_path(&context, &params, &["file_path", "path", "file"])?;
 
-            let content: String = params
-                .get("content")
-                .and_then(|v| v.as_str())
+            let content: String = get_string_param(&params, &["content", "text"])
                 .ok_or_else(|| crate::ToolError::InvalidParameters {
                     message: "content is required".to_string(),
                 })?
                 .to_string();
-
-            // Resolve path relative to workspace
-            let path = if PathBuf::from(&file_path).is_absolute() {
-                PathBuf::from(file_path)
-            } else {
-                context.workspace_path.join(file_path)
-            };
 
             // Create parent directories if they don't exist
             if let Some(parent) = path.parent() {
@@ -285,13 +283,7 @@ impl Tool for EditTool {
         context: ToolExecutionContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let file_path: String = params
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "file_path is required".to_string(),
-                })?
-                .to_string();
+            let path = resolve_tool_path(&context, &params, &["file_path", "path", "file"])?;
 
             let old_text: String = params
                 .get("old_text")
@@ -308,13 +300,6 @@ impl Tool for EditTool {
                     message: "new_text is required".to_string(),
                 })?
                 .to_string();
-
-            // Resolve path relative to workspace
-            let path = if PathBuf::from(&file_path).is_absolute() {
-                PathBuf::from(file_path)
-            } else {
-                context.workspace_path.join(file_path)
-            };
 
             // Read current content
             let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
@@ -806,14 +791,6 @@ impl Tool for PatchTool {
         context: ToolExecutionContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + '_>> {
         Box::pin(async move {
-            let file_path: String = params
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| crate::ToolError::InvalidParameters {
-                    message: "file_path is required".to_string(),
-                })?
-                .to_string();
-
             let patch: String = params
                 .get("patch")
                 .and_then(|v| v.as_str())
@@ -822,11 +799,7 @@ impl Tool for PatchTool {
                 })?
                 .to_string();
 
-            let path = if PathBuf::from(&file_path).is_absolute() {
-                PathBuf::from(&file_path)
-            } else {
-                context.workspace_path.join(&file_path)
-            };
+            let path = resolve_tool_path(&context, &params, &["file_path", "path", "file"])?;
 
             // Read existing file content
             let content = tokio::fs::read_to_string(&path).await.map_err(|e| {

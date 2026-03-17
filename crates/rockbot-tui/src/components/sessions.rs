@@ -196,6 +196,11 @@ pub fn render_chat_messages(
             } else {
                 String::new()
             };
+            let locality = tc
+                .locality
+                .as_ref()
+                .map(|locality| format!(" [executed on: {locality}]"))
+                .unwrap_or_default();
             let expand_hint = if !tc.result.is_empty() {
                 if tc.expanded {
                     " [-]"
@@ -221,6 +226,10 @@ pub fn render_chat_messages(
                 ),
                 Span::styled(
                     duration,
+                    Style::default().fg(palette::text_secondary(&state.tui_config)),
+                ),
+                Span::styled(
+                    locality,
                     Style::default().fg(palette::text_secondary(&state.tui_config)),
                 ),
                 Span::styled(

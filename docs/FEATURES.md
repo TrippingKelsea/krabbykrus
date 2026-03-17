@@ -22,6 +22,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 | Agent messaging | ✅ | `POST /api/agents/{id}/message` |
 | Agent CRUD (create/update/delete) | ✅ | `POST/PUT/DELETE /api/agents` |
 | WebSocket support | ✅ | Full duplex streaming, health checks, remote exec |
+| Remote exec output streaming | ✅ | Remote `exec` streams stdout/stderr chunks before final completion |
 | TLS/HTTPS | ✅ | Self-signed bootstrap or PKI-managed certs |
 | Mutual TLS (mTLS) | ✅ | Optional or mandatory client cert verification |
 | Rate limiting | 📋 | |
@@ -159,13 +160,13 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 | Tool | Status | Notes |
 |------|--------|-------|
-| `read` | ✅ | File reading with offset/limit |
-| `write` | ✅ | File writing |
-| `edit` | ✅ | Text editing |
+| `read` | ✅ | File reading with offset/limit; accepts `file_path`, `path`, or `file` |
+| `write` | ✅ | File writing; accepts `file_path`/`path`/`file` and `content`/`text` |
+| `edit` | ✅ | Text editing; accepts `file_path`, `path`, or `file` |
 | `exec` | ✅ | Shell execution |
 | `glob` | ✅ | File pattern matching |
 | `grep` | ✅ | Content searching |
-| `patch` | ✅ | Diff application |
+| `patch` | ✅ | Diff application; accepts `file_path`, `path`, or `file` |
 | `memory_get` | ✅ | Full profile |
 | `memory_search` | ✅ | Full profile |
 | `web_search` | 📋 | |
@@ -181,6 +182,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 | Capability-based filtering | ✅ | |
 | JSON Schema generation | ✅ | Tools provide schemas for LLM function calling |
 | Tool result types | ✅ | |
+| Tool execution provenance in TUI | ✅ | Tool summaries and streamed output show `executed on: ...` when locality is known |
 
 ### Tool Provider Crates
 

@@ -3573,6 +3573,13 @@ The user wants me to explore the codebase. I should start by listing the directo
                         .clone()
                         .unwrap_or_else(|| workspace.to_string_lossy().to_string());
 
+                    #[cfg(feature = "remote-exec")]
+                    let remote_output_channel = progress_tx.as_ref().map(|_| {
+                        tokio::sync::mpsc::unbounded_channel::<
+                            rockbot_client::remote_exec::RemoteToolOutput,
+                        >()
+                    });
+
                     // Try remote dispatch first if a capable client is connected
                     #[cfg(feature = "remote-exec")]
                     let remote_result: Option<(
@@ -3585,6 +3592,13 @@ The user wants me to explore the codebase. I should start by listing the directo
                                     "Dispatching tool '{}' to explicit remote executor '{}'",
                                     tool_call.function.name, target
                                 );
+                                let locality = if _context.remote_workspace_override.is_some() {
+                                    ToolExecutionLocality::ActiveClient
+                                } else {
+                                    ToolExecutionLocality::RemoteClient(target.clone())
+                                };
+                                let output_tx =
+                                    remote_output_channel.as_ref().map(|(tx, _)| tx.clone());
                                 match registry
                                     .dispatch_to_target(
                                         target,
@@ -3593,19 +3607,12 @@ The user wants me to explore the codebase. I should start by listing the directo
                                         &self.config.id,
                                         session_id,
                                         &remote_workspace,
+                                        output_tx,
                                         tool_timeout,
                                     )
                                     .await
                                 {
-                                    Some(resp) => {
-                                        let locality =
-                                            if _context.remote_workspace_override.is_some() {
-                                                ToolExecutionLocality::ActiveClient
-                                            } else {
-                                                ToolExecutionLocality::RemoteClient(target.clone())
-                                            };
-                                        Some((resp, locality))
-                                    }
+                                    Some(resp) => Some((resp, locality)),
                                     None if _context.remote_executor_strict => {
                                         let error_message = Message::tool_result(
                                             tool_call.id.clone(),
@@ -3651,6 +3658,7 @@ The user wants me to explore the codebase. I should start by listing the directo
                                         &self.config.id,
                                         session_id,
                                         &remote_workspace,
+                                        remote_output_channel.as_ref().map(|(tx, _)| tx.clone()),
                                         tool_timeout,
                                     )
                                     .await
@@ -3669,7 +3677,35 @@ The user wants me to explore the codebase. I should start by listing the directo
                     };
 
                     #[cfg(feature = "remote-exec")]
+                    let remote_output_forwarder =
+                        if let (Some((_, mut output_rx)), Some(progress), Some((_, locality))) = (
+                            remote_output_channel,
+                            progress_tx.clone(),
+                            remote_result.as_ref(),
+                        ) {
+                            let tool_name = tool_call.function.name.clone();
+                            Some(tokio::spawn(async move {
+                                while let Some(chunk) = output_rx.recv().await {
+                                    let label =
+                                        chunk.stream.unwrap_or_else(|| "output".to_string());
+                                    let _ = progress.send(AgentProgressEvent::ToolOutput {
+                                        tool_name: tool_name.clone(),
+                                        output: format!("[{label}] {}", chunk.output),
+                                        success: true,
+                                        duration_ms: 0,
+                                        locality: locality.clone(),
+                                    });
+                                }
+                            }))
+                        } else {
+                            None
+                        };
+
+                    #[cfg(feature = "remote-exec")]
                     if let Some((remote_resp, _locality)) = remote_result {
+                        if let Some(handle) = remote_output_forwarder {
+                            let _ = handle.await;
+                        }
                         let elapsed = tool_start.elapsed();
                         info!(
                             "Remote tool '{}' completed: success={}, time={}ms",
@@ -3719,6 +3755,10 @@ The user wants me to explore the codebase. I should start by listing the directo
                         });
                         tool_messages.push(tool_message);
                         continue;
+                    }
+                    #[cfg(feature = "remote-exec")]
+                    if let Some(handle) = remote_output_forwarder {
+                        handle.abort();
                     }
 
                     let tool_future = self.tool_registry.execute_tool(

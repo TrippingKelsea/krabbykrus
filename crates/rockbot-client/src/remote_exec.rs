@@ -230,6 +230,17 @@ pub struct RemoteToolResponse {
     pub execution_time_ms: u64,
 }
 
+/// A streamed output chunk from a remote tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteToolOutput {
+    /// Matching request ID.
+    pub request_id: String,
+    /// Stream name when known (`stdout`, `stderr`).
+    pub stream: Option<String>,
+    /// Output chunk payload.
+    pub output: String,
+}
+
 // ---------------------------------------------------------------------------
 // WS message types for remote execution
 // ---------------------------------------------------------------------------
@@ -250,6 +261,9 @@ pub enum RemoteExecClientMsg {
     /// Tool execution result from the client.
     #[serde(rename = "tool_response")]
     ToolResponse(RemoteToolResponse),
+    /// Streamed tool output from the client.
+    #[serde(rename = "tool_output")]
+    ToolOutput(RemoteToolOutput),
 }
 
 /// Server -> Client messages for the remote execution protocol.
@@ -282,7 +296,12 @@ pub struct RemoteExecutorRegistry {
     /// Active Noise sessions keyed by connection ID.
     sessions: RwLock<HashMap<String, Arc<tokio::sync::Mutex<NoiseSession>>>>,
     /// Pending response channels keyed by request ID.
-    pending: RwLock<HashMap<String, oneshot::Sender<RemoteToolResponse>>>,
+    pending: RwLock<HashMap<String, PendingRemoteToolCall>>,
+}
+
+struct PendingRemoteToolCall {
+    response_tx: oneshot::Sender<RemoteToolResponse>,
+    output_tx: Option<tokio::sync::mpsc::UnboundedSender<RemoteToolOutput>>,
 }
 
 impl RemoteExecutorRegistry {
@@ -388,6 +407,7 @@ impl RemoteExecutorRegistry {
         agent_id: &str,
         session_id: &str,
         workspace_path: &str,
+        output_tx: Option<tokio::sync::mpsc::UnboundedSender<RemoteToolOutput>>,
         timeout: std::time::Duration,
     ) -> Option<RemoteToolResponse> {
         let conn_id = self.find_executor(tool_name).await?;
@@ -410,10 +430,13 @@ impl RemoteExecutorRegistry {
 
         // Set up response channel
         let (resp_tx, resp_rx) = oneshot::channel();
-        self.pending
-            .write()
-            .await
-            .insert(request_id.clone(), resp_tx);
+        self.pending.write().await.insert(
+            request_id.clone(),
+            PendingRemoteToolCall {
+                response_tx: resp_tx,
+                output_tx,
+            },
+        );
 
         // Send the request to the client
         {
@@ -449,6 +472,7 @@ impl RemoteExecutorRegistry {
         agent_id: &str,
         session_id: &str,
         workspace_path: &str,
+        output_tx: Option<tokio::sync::mpsc::UnboundedSender<RemoteToolOutput>>,
         timeout: std::time::Duration,
     ) -> Option<RemoteToolResponse> {
         let conn_id = self.resolve_executor_target(target, tool_name).await?;
@@ -470,10 +494,13 @@ impl RemoteExecutorRegistry {
         };
 
         let (resp_tx, resp_rx) = oneshot::channel();
-        self.pending
-            .write()
-            .await
-            .insert(request_id.clone(), resp_tx);
+        self.pending.write().await.insert(
+            request_id.clone(),
+            PendingRemoteToolCall {
+                response_tx: resp_tx,
+                output_tx,
+            },
+        );
 
         {
             let session = session.lock().await;
@@ -498,12 +525,27 @@ impl RemoteExecutorRegistry {
 
     /// Deliver a response from a client to the waiting dispatch call.
     pub async fn deliver_response(&self, response: RemoteToolResponse) {
-        if let Some(tx) = self.pending.write().await.remove(&response.request_id) {
-            let _ = tx.send(response);
+        if let Some(pending) = self.pending.write().await.remove(&response.request_id) {
+            let _ = pending.response_tx.send(response);
         } else {
             warn!(
                 "Received tool response for unknown request: {}",
                 response.request_id
+            );
+        }
+    }
+
+    /// Deliver a streamed output chunk to the waiting dispatch call.
+    pub async fn deliver_output(&self, output: RemoteToolOutput) {
+        let pending = self.pending.read().await;
+        if let Some(call) = pending.get(&output.request_id) {
+            if let Some(tx) = &call.output_tx {
+                let _ = tx.send(output);
+            }
+        } else {
+            warn!(
+                "Received tool output for unknown request: {}",
+                output.request_id
             );
         }
     }

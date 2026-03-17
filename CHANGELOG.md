@@ -34,6 +34,9 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
   - Noise card shows registration state and connected executor count
   - Exec card shows current tool locality target and a detail overlay for switching
     between the active client, gateway-local execution, and another connected executor
+- **Docs**: Execution locality hardening proposal and feature evaluation tracker
+  - `docs/architecture/execution-locality-proposal.md`
+  - `docs/feature-evaluation.md`
 - **TUI**: Settings overlay tab bar (General | Paths | About | Theme | Fonts) with Left/Right/Tab navigation
 - **TUI**: Theme picker in Settings — change color theme and animation style live with `[`/`]` keys
 - **TUI**: Rich settings overlay editor with token-level theme controls, live preview, and
@@ -51,6 +54,12 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
   active client's current working directory instead of the gateway host cwd
 - **Remote execution**: Explicit remote executor selection no longer inherits the
   requesting client's cwd; selected executors fall back to their own advertised workdir
+- **Gateway WebSocket**: UTF-8-safe truncation for forwarded tool output and final tool summaries
+  no longer panics on multibyte characters
+- **Remote filesystem tools**: `read`, `write`, `edit`, and `patch` now accept
+  common path aliases (`path`, `file`) for better client passthrough compatibility
+- **Remote filesystem tools**: `write` now accepts `text` as a content alias in
+  addition to `content`
 - **TUI**: Chat input box now always visible (was missing on Dashboard/Butler and agent welcome screens)
 - **TUI**: Bottom status bar no longer shows persistent help text — only displays errors/success messages
 - **TUI**: Terminal no longer left in broken state on unclean exit — `TerminalGuard` RAII restores
@@ -65,6 +74,12 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
   `remote-exec` now layering on top of `noise`
 - **WebSocket protocol**: `agent_message`, `tool_call`, and `tool_result` now carry
   execution-locality metadata or executor-target hints for remote dispatch routing
+- **Remote execution**: `exec` on remote clients now streams stdout/stderr over the
+  WS protocol before sending the final tool result
+- **TUI**: Tool output status and session summaries now surface locality as
+  `executed on: ...`
+- **Client/Gateway protocol**: `tool_result` events now preserve result text and
+  session keys for inline TUI streaming of tool output
 - **TUI**: Input architecture rewritten — replaced busy-loop `poll/read` inside `tokio::select!`
   with crossterm's async `EventStream` in a dedicated task, eliminating spurious wakeups
 - **TUI**: Input normalization layer (`InputAction` enum + `normalize_for_text_input()`) is now

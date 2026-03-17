@@ -348,6 +348,13 @@ enum WsMessageType {
         output: String,
         execution_time_ms: u64,
     },
+    #[serde(rename = "remote_tool_output")]
+    RemoteToolOutput {
+        request_id: String,
+        output: String,
+        #[serde(default)]
+        stream: Option<String>,
+    },
 }
 
 /// WebSocket response types (server -> client)
@@ -455,6 +462,8 @@ struct WsToolCallInfo {
     result: String,
     success: bool,
     duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    locality: Option<String>,
 }
 
 /// Token usage sent over WebSocket
@@ -463,6 +472,26 @@ struct WsTokenUsage {
     prompt_tokens: u64,
     completion_tokens: u64,
     total_tokens: u64,
+}
+
+fn truncate_utf8(input: &str, max_chars: usize) -> String {
+    let mut truncated = String::new();
+    let mut iter = input.chars();
+    for _ in 0..max_chars {
+        let Some(ch) = iter.next() else {
+            return input.to_string();
+        };
+        truncated.push(ch);
+    }
+    if iter.next().is_some() {
+        format!(
+            "{}... ({} chars truncated)",
+            truncated,
+            input.chars().count().saturating_sub(max_chars)
+        )
+    } else {
+        input.to_string()
+    }
 }
 
 /// Gateway health status
@@ -3965,6 +3994,26 @@ impl Gateway {
                     warn!("Received remote tool response but remote-exec feature is disabled");
                 }
             }
+            WsMessageType::RemoteToolOutput {
+                request_id,
+                output,
+                stream,
+            } => {
+                #[cfg(feature = "remote-exec")]
+                {
+                    let output = rockbot_client::remote_exec::RemoteToolOutput {
+                        request_id,
+                        output,
+                        stream,
+                    };
+                    self.remote_exec_registry.deliver_output(output).await;
+                }
+                #[cfg(not(feature = "remote-exec"))]
+                {
+                    let _ = (request_id, output, stream);
+                    warn!("Received remote tool output but remote-exec feature is disabled");
+                }
+            }
         }
     }
 
@@ -4191,11 +4240,7 @@ impl Gateway {
                         ref locality,
                     } => {
                         // Send structured tool result (not injected into chat stream)
-                        let truncated = if output.len() > 500 {
-                            format!("{}…", &output[..500])
-                        } else {
-                            output.clone()
-                        };
+                        let truncated = truncate_utf8(output, 500);
                         vec![WsResponseType::ToolResult {
                             session_key: progress_sk.clone(),
                             tool_name: tool_name.clone(),
@@ -4358,20 +4403,13 @@ impl Gateway {
                             }
                         };
                         // Cap tool results to avoid sending megabytes over WebSocket
-                        let result = if raw_result.len() > 2000 {
-                            format!(
-                                "{}... ({} bytes truncated)",
-                                &raw_result[..2000],
-                                raw_result.len() - 2000
-                            )
-                        } else {
-                            raw_result
-                        };
+                        let result = truncate_utf8(&raw_result, 2000);
                         WsToolCallInfo {
                             tool_name: tr.tool_name.clone(),
                             result,
                             success: tr.success,
                             duration_ms: tr.execution_time_ms,
+                            locality: None,
                         }
                     })
                     .collect();

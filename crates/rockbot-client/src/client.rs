@@ -19,6 +19,7 @@ pub struct ToolCallSummary {
     pub result: String,
     pub success: bool,
     pub duration_ms: u64,
+    pub locality: Option<String>,
 }
 
 /// Events emitted by a `GatewayClient`.
@@ -43,7 +44,9 @@ pub enum GatewayEvent {
     },
     /// A tool call has completed.
     ToolResult {
+        session_key: String,
         tool_name: String,
+        result: String,
         success: bool,
         duration_ms: u64,
         locality: Option<String>,
@@ -442,12 +445,23 @@ impl GatewayClient {
                     .get("success")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true);
+                let session_key = json
+                    .get("session_key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let duration_ms = json
                     .get("duration_ms")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
                 GatewayEvent::ToolResult {
+                    session_key,
                     tool_name,
+                    result: json
+                        .get("result")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     success,
                     duration_ms,
                     locality: json
@@ -488,6 +502,10 @@ impl GatewayClient {
                                         .get("duration_ms")
                                         .and_then(|v| v.as_u64())
                                         .unwrap_or(0),
+                                    locality: tc
+                                        .get("locality")
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(String::from),
                                 })
                             })
                             .collect()

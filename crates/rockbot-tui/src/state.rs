@@ -910,6 +910,7 @@ pub struct ToolCallInfo {
     pub result: String,
     pub success: bool,
     pub duration_ms: u64,
+    pub locality: Option<String>,
     pub expanded: bool,
 }
 
