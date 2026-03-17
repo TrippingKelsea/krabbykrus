@@ -150,7 +150,7 @@ pub(crate) fn render_theme(frame: &mut Frame, area: Rect, state: &AppState) {
             Constraint::Length(1), // Animation Style picker
             Constraint::Length(1), // spacer
             Constraint::Length(1), // hint
-            Constraint::Fill(1),  // fill
+            Constraint::Fill(1),   // fill
         ])
         .split(body);
 
@@ -162,7 +162,10 @@ pub(crate) fn render_theme(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         Style::default().fg(Color::Cyan)
     };
-    frame.render_widget(Paragraph::new(Span::styled("Color Theme", label_style)), rows[0]);
+    frame.render_widget(
+        Paragraph::new(Span::styled("Color Theme", label_style)),
+        rows[0],
+    );
 
     // Color Theme picker
     let theme_spans: Vec<Span<'_>> = ColorTheme::all()

@@ -120,9 +120,7 @@ pub fn render_settings_overlay(
         .border_style(Style::default().fg(primary))
         .title(Span::styled(
             " Settings ",
-            Style::default()
-                .fg(primary)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(primary).add_modifier(Modifier::BOLD),
         ));
 
     let inner = block.inner(area);
@@ -137,15 +135,10 @@ pub fn render_settings_overlay(
             if i == state.selected_settings_card {
                 Line::from(Span::styled(
                     *label,
-                    Style::default()
-                        .fg(primary)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(primary).add_modifier(Modifier::BOLD),
                 ))
             } else {
-                Line::from(Span::styled(
-                    *label,
-                    Style::default().fg(Color::DarkGray),
-                ))
+                Line::from(Span::styled(*label, Style::default().fg(Color::DarkGray)))
             }
         })
         .collect();
@@ -158,11 +151,7 @@ pub fn render_settings_overlay(
     let tabs = Tabs::new(titles)
         .select(state.selected_settings_card)
         .style(Style::default().fg(Color::DarkGray))
-        .highlight_style(
-            Style::default()
-                .fg(primary)
-                .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(Style::default().fg(primary).add_modifier(Modifier::BOLD))
         .divider("│");
     frame.render_widget(tabs, chunks[0]);
 

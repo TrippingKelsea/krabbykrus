@@ -48,17 +48,21 @@ fn render_client_detail(frame: &mut Frame, area: Rect, state: &AppState) {
 
     if !state.ws_latency_history.is_empty() {
         let data: Vec<u64> = state.ws_latency_history.iter().copied().collect();
-        let sparkline = Sparkline::default()
-            .data(&data)
-            .style(Style::default().fg(if state.ws_connected {
-                Color::Green
-            } else {
-                Color::Yellow
-            }));
+        let sparkline =
+            Sparkline::default()
+                .data(&data)
+                .style(Style::default().fg(if state.ws_connected {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }));
         let spark_block = ratatui::widgets::Block::default()
             .borders(ratatui::widgets::Borders::BOTTOM)
             .border_style(Style::default().fg(Color::DarkGray))
-            .title(Span::styled(" RTT ms ", Style::default().fg(Color::DarkGray)));
+            .title(Span::styled(
+                " RTT ms ",
+                Style::default().fg(Color::DarkGray),
+            ));
         let spark_inner = spark_block.inner(chunks[0]);
         frame.render_widget(spark_block, chunks[0]);
         frame.render_widget(sparkline, spark_inner);

@@ -198,7 +198,11 @@ impl Store {
     // -------------------------------------------------------------------------
 
     /// Store an agent instance, serialized as JSON.
-    pub fn store_agent(&self, id: &str, agent: &rockbot_config::AgentInstance) -> anyhow::Result<()> {
+    pub fn store_agent(
+        &self,
+        id: &str,
+        agent: &rockbot_config::AgentInstance,
+    ) -> anyhow::Result<()> {
         let bytes = serde_json::to_vec(agent)?;
         self.put(tables::AGENTS, id, &bytes)
     }

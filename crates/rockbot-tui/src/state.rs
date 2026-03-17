@@ -994,7 +994,6 @@ pub struct AppState {
 
     // Message sender for async updates
     pub tx: mpsc::UnboundedSender<Message>,
-
 }
 
 /// What the user is currently chatting with.

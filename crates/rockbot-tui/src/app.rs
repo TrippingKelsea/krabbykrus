@@ -3566,9 +3566,7 @@ impl App {
             if c == '\n' {
                 self.insert_chat_newline();
             } else if !c.is_control() {
-                self.state
-                    .input_buffer
-                    .insert(self.state.input_cursor, c);
+                self.state.input_buffer.insert(self.state.input_cursor, c);
                 self.state.input_cursor += c.len_utf8();
             }
         }
@@ -4768,7 +4766,6 @@ impl App {
             .scroll((detail.scroll as u16, 0));
         frame.render_widget(paragraph, area);
     }
-
 }
 
 /// Add a credential to the vault based on form state (standalone to avoid borrow issues)

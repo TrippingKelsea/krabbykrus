@@ -13,7 +13,12 @@ use crate::state::{AppState, MenuItem};
 
 /// Render the sidebar navigation as a compact scrollable menu.
 /// Fits within the same height as the card strip (typically 5 rows).
-pub fn render_sidebar(frame: &mut Frame, area: Rect, state: &AppState, _effect_state: &EffectState) {
+pub fn render_sidebar(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    _effect_state: &EffectState,
+) {
     let all_items = MenuItem::all();
     let total = all_items.len();
     let selected = state.menu_index;

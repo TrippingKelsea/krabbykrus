@@ -183,11 +183,7 @@ impl Butler {
     ///
     /// Formats SOUL + conversation history into a prompt, calls the local model,
     /// and appends both turns to the session.
-    pub async fn chat(
-        &self,
-        session: &mut ButlerSession,
-        message: &str,
-    ) -> anyhow::Result<String> {
+    pub async fn chat(&self, session: &mut ButlerSession, message: &str) -> anyhow::Result<String> {
         let prompt = build_prompt(session, message);
         let engine = Arc::clone(&self.engine);
 
@@ -218,9 +214,7 @@ impl Butler {
         };
 
         session.messages.push((Role::User, message.to_string()));
-        session
-            .messages
-            .push((Role::Assistant, response.clone()));
+        session.messages.push((Role::Assistant, response.clone()));
 
         Ok(response)
     }
@@ -245,9 +239,7 @@ fn build_prompt(session: &ButlerSession, new_message: &str) -> String {
             Role::User => "user",
             Role::Assistant => "assistant",
         };
-        prompt.push_str(&format!(
-            "<|im_start|>{role_tag}\n{content}<|im_end|>\n"
-        ));
+        prompt.push_str(&format!("<|im_start|>{role_tag}\n{content}<|im_end|>\n"));
     }
 
     prompt.push_str(&format!(

@@ -49,6 +49,8 @@ impl ChatCommand for SessionCommand {
         if key.is_empty() {
             return CommandResult::Handled("Usage: /session <key>".to_string());
         }
-        CommandResult::Handled(format!("Session switch to '{key}' — use Sessions view to manage sessions."))
+        CommandResult::Handled(format!(
+            "Session switch to '{key}' — use Sessions view to manage sessions."
+        ))
     }
 }

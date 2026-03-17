@@ -13,13 +13,11 @@ struct KnownRename {
 /// Static migration table. Add entries here as the config schema evolves.
 ///
 /// These are checked deterministically before invoking the AI model.
-const MIGRATION_TABLE: &[KnownRename] = &[
-    KnownRename {
-        old_path: "agents.list",
-        new_path: "vault:agents",
-        since_version: "0.3.0",
-    },
-];
+const MIGRATION_TABLE: &[KnownRename] = &[KnownRename {
+    old_path: "agents.list",
+    new_path: "vault:agents",
+    since_version: "0.3.0",
+}];
 
 /// A migration note — either from the static table or AI detection.
 #[derive(Debug, Clone)]
