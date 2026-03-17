@@ -38,7 +38,7 @@ fn resolve_pki_dir(config_path: &Path) -> PathBuf {
 }
 
 async fn resolve_pki_dir_from_config(config_path: &Path) -> Result<PathBuf> {
-    if let Ok(config) = load_config(&config_path.to_path_buf()).await {
+    if let Ok(config) = rockbot_config::Config::from_file(config_path).await {
         if let Some(dir) = &config.gateway.pki.pki_dir {
             return Ok(expand_tilde(dir));
         }

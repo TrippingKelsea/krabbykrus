@@ -145,7 +145,7 @@ client_port = {client_port}
 [security.storage]
 enabled = true
 mode = "encrypted_by_default"
-key_source = "pki"
+key_source = "pki_local"
 
 [security.roles]
 gateway = true
@@ -212,7 +212,7 @@ client_port = {client_port}
 [security.storage]
 enabled = true
 mode = "encrypted_by_default"
-key_source = "pki"
+key_source = "pki_local"
 
 [security.roles]
 gateway = false
