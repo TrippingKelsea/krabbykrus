@@ -117,12 +117,6 @@ pub struct App {
     local_tool_registry: Option<std::sync::Arc<rockbot_tools::ToolRegistry>>,
     /// Keybinding configuration (data-driven, replaces hardcoded key matching)
     keybindings: super::keybindings::KeybindingConfig,
-    /// Butler companion agent (local GGUF model)
-    #[cfg(feature = "butler")]
-    butler: Option<rockbot_butler::Butler>,
-    /// Butler conversation session
-    #[cfg(feature = "butler")]
-    butler_session: Option<rockbot_butler::ButlerSession>,
     /// Chat command registry for slash command dispatch
     command_registry: rockbot_chat::ChatCommandRegistry,
 }
@@ -163,10 +157,6 @@ impl App {
             #[cfg(feature = "remote-exec")]
             local_tool_registry: None,
             keybindings: super::keybindings::KeybindingConfig::default(),
-            #[cfg(feature = "butler")]
-            butler: None,
-            #[cfg(feature = "butler")]
-            butler_session: None,
             command_registry: build_command_registry(),
         }
     }

@@ -130,7 +130,7 @@ async fn init_gateway_config(
 
 [gateway]
 bind_host = "{bind_host}"
-{listen_ips}\
+{listen_ips}
 port = {https_port}
 client_port = {client_port}
 tls_cert = "{tls_cert}"
