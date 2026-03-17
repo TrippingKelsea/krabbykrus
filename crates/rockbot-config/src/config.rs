@@ -706,6 +706,7 @@ impl Default for ToolConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
     /// Sandbox configuration
+    #[serde(default)]
     pub sandbox: SandboxConfig,
     /// Capability restrictions
     #[serde(default)]
@@ -1104,7 +1105,18 @@ pub struct SandboxConfig {
     #[serde(default = "default_sandbox_scope")]
     pub scope: String,
     /// Container image for sandboxing
+    #[serde(default)]
     pub image: Option<String>,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_sandbox_mode(),
+            scope: default_sandbox_scope(),
+            image: None,
+        }
+    }
 }
 
 /// Capability restrictions
