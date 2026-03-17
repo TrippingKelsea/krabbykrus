@@ -3,7 +3,7 @@
 //! Uses tokio::select! for responsive concurrent event + background task handling.
 
 use anyhow::Result;
-use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -534,13 +534,9 @@ impl App {
         }
     }
 
-    /// Handle key events
+    /// Handle key events.
+    /// Only receives Press events — release/repeat filtered by the EventStream task.
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
-        // Only handle key press events (ignore release/repeat from keyboard enhancement)
-        if key.kind != crossterm::event::KeyEventKind::Press {
-            return Ok(());
-        }
-
         // Global keybindings (always active)
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
@@ -3396,93 +3392,80 @@ impl App {
     }
 
     fn handle_chat_input(&mut self, key: KeyEvent) -> Result<()> {
+        use crate::event::{normalize_for_text_input, InputAction};
         use crate::keybindings::TuiAction;
 
-        // Shift+Enter inserts a newline (up to 10 lines) — checked before lookup
-        if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::SHIFT) {
-            self.insert_chat_newline();
-            return Ok(());
-        }
-        // Ctrl+J (LF) or Ctrl+N inserts a newline — universally supported fallback
-        if (key.code == KeyCode::Char('j') || key.code == KeyCode::Char('n'))
-            && key.modifiers.contains(KeyModifiers::CONTROL)
-        {
-            self.insert_chat_newline();
-            return Ok(());
-        }
-        // Ctrl+R to retry the last user message
-        if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.retry_last_message();
-            return Ok(());
-        }
-        // Ctrl+T to toggle tool call expand/collapse
-        if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.state.toggle_tool_expansion();
-            return Ok(());
-        }
-        // Ctrl+Up/Down scroll by 3 lines
-        if key.code == KeyCode::Up && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if let Some(chat) = self.state.active_chat_mut() {
-                if chat.auto_scroll {
-                    chat.scroll = chat.max_scroll.get();
-                    chat.auto_scroll = false;
+        // Ctrl-modified commands checked first (before normalization eats them)
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('r') => {
+                    self.retry_last_message();
+                    return Ok(());
                 }
-                chat.scroll = chat.scroll.saturating_sub(3);
-            }
-            return Ok(());
-        }
-        if key.code == KeyCode::Down && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if let Some(chat) = self.state.active_chat_mut() {
-                if !chat.auto_scroll {
-                    chat.scroll = chat.scroll.saturating_add(3);
-                    if chat.scroll >= chat.max_scroll.get() {
-                        chat.auto_scroll = true;
-                    }
+                KeyCode::Char('t') => {
+                    self.state.toggle_tool_expansion();
+                    return Ok(());
                 }
-            }
-            return Ok(());
-        }
-
-        // Route named actions through the keybinding table (Enter, Esc, PageUp, PageDown)
-        if let Some(action) = self.keybindings.lookup("chat", &key) {
-            match action {
-                TuiAction::Escape => {
-                    self.state.input_mode = InputMode::Normal;
-                }
-                TuiAction::Enter => {
-                    self.send_chat_buffer();
-                }
-                TuiAction::ScrollUp => {
+                KeyCode::Up => {
                     if let Some(chat) = self.state.active_chat_mut() {
                         if chat.auto_scroll {
                             chat.scroll = chat.max_scroll.get();
                             chat.auto_scroll = false;
                         }
-                        chat.scroll = chat.scroll.saturating_sub(10);
+                        chat.scroll = chat.scroll.saturating_sub(3);
                     }
+                    return Ok(());
                 }
-                TuiAction::ScrollDown => {
+                KeyCode::Down => {
                     if let Some(chat) = self.state.active_chat_mut() {
                         if !chat.auto_scroll {
-                            chat.scroll = chat.scroll.saturating_add(10);
+                            chat.scroll = chat.scroll.saturating_add(3);
                             if chat.scroll >= chat.max_scroll.get() {
                                 chat.auto_scroll = true;
                             }
                         }
                     }
+                    return Ok(());
                 }
                 _ => {}
             }
-            return Ok(());
         }
 
-        // Text editing keys (not in the keybinding table)
-        match key.code {
-            KeyCode::Char(c) => {
+        // Card bar / overlay keybindings (Alt+arrows, Alt+Enter, Alt+letter)
+        if let Some(action) = self.keybindings.lookup("chat", &key) {
+            match action {
+                TuiAction::CardLeft
+                | TuiAction::CardRight
+                | TuiAction::CardUp
+                | TuiAction::CardDown
+                | TuiAction::CardActivate
+                | TuiAction::OpenVault
+                | TuiAction::OpenSettings
+                | TuiAction::OpenModels
+                | TuiAction::OpenCron => {
+                    // Delegate to normal-mode handler for card/overlay actions
+                    return self.handle_normal_mode(key);
+                }
+                _ => {} // Submit/Escape/Scroll handled below via normalization
+            }
+        }
+
+        // Normalize the key event into a text-input action
+        match normalize_for_text_input(key) {
+            InputAction::Newline => {
+                self.insert_chat_newline();
+            }
+            InputAction::Submit => {
+                self.send_chat_buffer();
+            }
+            InputAction::Cancel => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            InputAction::Text(c) => {
                 self.state.input_buffer.insert(self.state.input_cursor, c);
                 self.state.input_cursor += c.len_utf8();
             }
-            KeyCode::Backspace => {
+            InputAction::Backspace => {
                 if self.state.input_cursor > 0 {
                     let prev = self.state.input_buffer[..self.state.input_cursor]
                         .char_indices()
@@ -3493,12 +3476,12 @@ impl App {
                     self.state.input_cursor = prev;
                 }
             }
-            KeyCode::Delete => {
+            InputAction::Delete => {
                 if self.state.input_cursor < self.state.input_buffer.len() {
                     self.state.input_buffer.remove(self.state.input_cursor);
                 }
             }
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 if self.state.input_cursor > 0 {
                     self.state.input_cursor = self.state.input_buffer[..self.state.input_cursor]
                         .char_indices()
@@ -3507,7 +3490,7 @@ impl App {
                         .unwrap_or(0);
                 }
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 if self.state.input_cursor < self.state.input_buffer.len() {
                     self.state.input_cursor = self.state.input_buffer[self.state.input_cursor..]
                         .char_indices()
@@ -3516,15 +3499,76 @@ impl App {
                         .unwrap_or(self.state.input_buffer.len());
                 }
             }
-            KeyCode::Home => {
+            InputAction::Home => {
                 self.state.input_cursor = 0;
             }
-            KeyCode::End => {
+            InputAction::End => {
                 self.state.input_cursor = self.state.input_buffer.len();
             }
-            _ => {}
+            InputAction::PageUp => {
+                if let Some(chat) = self.state.active_chat_mut() {
+                    if chat.auto_scroll {
+                        chat.scroll = chat.max_scroll.get();
+                        chat.auto_scroll = false;
+                    }
+                    chat.scroll = chat.scroll.saturating_sub(10);
+                }
+            }
+            InputAction::PageDown => {
+                if let Some(chat) = self.state.active_chat_mut() {
+                    if !chat.auto_scroll {
+                        chat.scroll = chat.scroll.saturating_add(10);
+                        if chat.scroll >= chat.max_scroll.get() {
+                            chat.auto_scroll = true;
+                        }
+                    }
+                }
+            }
+            InputAction::NavUp | InputAction::NavDown => {
+                // Up/Down in chat scrolls history (same as PageUp/PageDown but smaller)
+                if let Some(chat) = self.state.active_chat_mut() {
+                    match normalize_for_text_input(key) {
+                        InputAction::NavUp => {
+                            if chat.auto_scroll {
+                                chat.scroll = chat.max_scroll.get();
+                                chat.auto_scroll = false;
+                            }
+                            chat.scroll = chat.scroll.saturating_sub(1);
+                        }
+                        InputAction::NavDown => {
+                            if !chat.auto_scroll {
+                                chat.scroll = chat.scroll.saturating_add(1);
+                                if chat.scroll >= chat.max_scroll.get() {
+                                    chat.auto_scroll = true;
+                                }
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            InputAction::Raw(_) => {
+                // Unrecognized key — ignore in text input context
+            }
         }
         Ok(())
+    }
+
+    /// Handle bracketed paste — insert text at cursor in chat input mode.
+    fn handle_paste(&mut self, text: &str) {
+        if !matches!(self.state.input_mode, InputMode::ChatInput) {
+            return;
+        }
+        for c in text.chars() {
+            if c == '\n' {
+                self.insert_chat_newline();
+            } else if !c.is_control() {
+                self.state
+                    .input_buffer
+                    .insert(self.state.input_cursor, c);
+                self.state.input_cursor += c.len_utf8();
+            }
+        }
     }
 
     fn insert_chat_newline(&mut self) {
@@ -4849,40 +4893,24 @@ fn update_credential_in_vault(
     Ok(state.name.clone())
 }
 
-/// Run the main async TUI event loop
+/// Run the main async TUI event loop.
+///
+/// Uses crossterm's `EventStream` for async terminal input (not poll/read),
+/// a `TerminalGuard` for RAII cleanup, and a unified `AppEvent` bus.
 pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: String) -> Result<()> {
-    use crossterm::{
-        event::{
-            KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
-        },
-        execute,
-        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-    };
-    use ratatui::backend::CrosstermBackend;
-    use ratatui::Terminal;
-    use std::io;
+    use crate::event::{spawn_terminal_input, AppEvent, TerminalGuard};
 
-    // Setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    // Try to enable keyboard enhancement for Shift+Enter detection.
-    // DISAMBIGUATE_ESCAPE_CODES: Shift+Enter reported distinctly from Enter.
-    // REPORT_EVENT_TYPES: Press/Release/Repeat events reported (we filter for Press only).
-    let has_keyboard_enhancement = execute!(
-        stdout,
-        PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-        )
-    )
-    .is_ok();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    // TerminalGuard owns raw mode, alternate screen, keyboard enhancement,
+    // bracketed paste, and focus change. Cleaned up on drop (including panic).
+    let (_guard, mut terminal) = TerminalGuard::enter()?;
 
     // Create and initialize app
     let mut app = App::new(config_path, vault_path, gateway_url);
     app.init().await?;
+
+    // Unified event channel — terminal input task sends AppEvents here
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
+    spawn_terminal_input(event_tx);
 
     // Tick interval for animations and periodic updates
     let mut tick_interval = tokio::time::interval(Duration::from_millis(100));
@@ -4890,24 +4918,26 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: Str
     // Periodic refresh interval
     let mut refresh_interval = tokio::time::interval(Duration::from_secs(15));
 
-    // Main async event loop
+    // Main async event loop — all event sources are proper async streams
     loop {
-        // Render
         terminal.draw(|frame| {
             app.render(frame);
         })?;
 
-        // Async select on multiple event sources
         tokio::select! {
-            // Terminal events (non-blocking poll)
-            _ = async {
-                tokio::task::yield_now().await;
-            } => {
-                // Poll for terminal events with a short timeout
-                if event::poll(Duration::from_millis(10))? {
-                    if let CrosstermEvent::Key(key) = event::read()? {
-                        app.handle_key(key)?;
+            // Terminal events (key, paste, resize, focus) from EventStream task
+            Some(evt) = event_rx.recv() => {
+                match evt {
+                    AppEvent::Key(key) => app.handle_key(key)?,
+                    AppEvent::Paste(text) => app.handle_paste(&text),
+                    AppEvent::Resize(_w, _h) => {
+                        // ratatui handles resize automatically on next draw
                     }
+                    AppEvent::FocusGained | AppEvent::FocusLost => {
+                        // Could track focus state if needed
+                    }
+                    // These variants are only used if routed through the event bus
+                    AppEvent::Tick | AppEvent::Msg(_) | AppEvent::Gateway(_) => {}
                 }
             }
 
@@ -4936,10 +4966,9 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: Str
                 }
             }
 
-            // Periodic refresh
+            // Periodic refresh (health check, reconnect)
             _ = refresh_interval.tick() => {
                 if app.ws_connected() {
-                    // WebSocket is active — send a health check
                     if let Some(ref client) = app.gateway_client {
                         let sender = client.sender();
                         tokio::spawn(async move {
@@ -4947,11 +4976,9 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: Str
                         });
                     }
                 } else {
-                    // No WebSocket — fall back to HTTP status check
                     if !app.state.gateway_loading {
                         app.spawn_gateway_check();
                     }
-                    // Try to reconnect WebSocket if gateway is up
                     if app.state.gateway.connected && app.gateway_client.as_ref().is_none_or(|c| !c.is_connected()) {
                         app.spawn_ws_connect();
                     }
@@ -4964,14 +4991,7 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: Str
         }
     }
 
-    // Restore terminal
-    if has_keyboard_enhancement {
-        let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
-    }
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-
+    // _guard drops here, restoring terminal state
     Ok(())
 }
 

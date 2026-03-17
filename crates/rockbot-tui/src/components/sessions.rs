@@ -339,7 +339,7 @@ pub fn render_chat_input(frame: &mut Frame, area: Rect, state: &AppState, is_act
     };
 
     let title = if is_active {
-        "Enter:Send │ Shift+Enter:Newline │ PgUp/Dn:Scroll │ Ctrl+R:Retry │ Esc:Cancel"
+        "Enter:Send │ Shift+Enter / Ctrl+J:Newline │ PgUp/Dn:Scroll │ Ctrl+R:Retry │ Esc:Back"
     } else {
         "Press 'c' to chat │ 'd' to archive"
     };

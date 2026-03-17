@@ -1,43 +1,286 @@
-//! Event handling utilities
+//! Terminal event handling — async EventStream, RAII terminal guard, and input normalization.
 //!
-//! Legacy event handler kept for standalone credentials TUI.
-//! The main TUI now uses async tokio::select! directly in app.rs.
+//! The main TUI uses [`AppEvent`] as a unified event bus. Terminal input is read
+//! from a dedicated async task via crossterm's [`EventStream`], not poll/read.
+//!
+//! [`TerminalGuard`] owns terminal lifecycle (raw mode, alternate screen,
+//! keyboard enhancement, bracketed paste, focus change) and restores state on drop.
 
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
-use std::time::Duration;
+use anyhow::Result;
+use crossterm::event::{
+    DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange,
+    EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use crossterm::{event::Event as CrosstermEvent, execute};
+use futures::StreamExt;
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
+use std::io;
+use tokio::sync::mpsc;
 
-/// Terminal events
+use crate::state::Message;
+
+// ---------------------------------------------------------------------------
+// AppEvent — unified event bus
+// ---------------------------------------------------------------------------
+
+/// All events the main loop can receive.
+#[derive(Debug)]
+pub enum AppEvent {
+    /// Key press (already filtered to Press kind only)
+    Key(KeyEvent),
+    /// Bracketed paste
+    Paste(String),
+    /// Terminal resized
+    Resize(u16, u16),
+    /// Terminal gained focus
+    FocusGained,
+    /// Terminal lost focus
+    FocusLost,
+    /// Tick for animations / periodic counters
+    Tick,
+    /// Background task message (state updates)
+    Msg(Message),
+    /// Gateway event from WebSocket
+    Gateway(rockbot_client::GatewayEvent),
+}
+
+// ---------------------------------------------------------------------------
+// Terminal input stream
+// ---------------------------------------------------------------------------
+
+/// Spawn a task that reads terminal events via crossterm's `EventStream`
+/// and forwards them as `AppEvent`s. Returns when the stream ends or the
+/// receiver is dropped.
+pub fn spawn_terminal_input(tx: mpsc::UnboundedSender<AppEvent>) {
+    tokio::spawn(async move {
+        let mut stream = EventStream::new();
+
+        while let Some(result) = stream.next().await {
+            let event = match result {
+                Ok(evt) => evt,
+                Err(err) => {
+                    tracing::warn!("terminal event error: {err}");
+                    continue;
+                }
+            };
+
+            let app_event = match event {
+                CrosstermEvent::Key(key) => {
+                    // Only forward key-press events (ignore release/repeat)
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    AppEvent::Key(key)
+                }
+                CrosstermEvent::Paste(text) => AppEvent::Paste(text),
+                CrosstermEvent::Resize(w, h) => AppEvent::Resize(w, h),
+                CrosstermEvent::FocusGained => AppEvent::FocusGained,
+                CrosstermEvent::FocusLost => AppEvent::FocusLost,
+                // Mouse events not handled yet
+                _ => continue,
+            };
+
+            if tx.send(app_event).is_err() {
+                break; // receiver dropped, app is shutting down
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// TerminalGuard — RAII terminal lifecycle
+// ---------------------------------------------------------------------------
+
+/// Owns the terminal session. On drop, restores raw mode, alternate screen,
+/// keyboard enhancement, bracketed paste, and focus change — even on panic.
+pub struct TerminalGuard {
+    keyboard_enhanced: bool,
+}
+
+impl TerminalGuard {
+    /// Enter raw mode, alternate screen, and enable optional terminal features.
+    /// Returns the guard (for RAII cleanup) and the ratatui Terminal.
+    pub fn enter() -> Result<(Self, Terminal<CrosstermBackend<io::Stdout>>)> {
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            EnableFocusChange,
+        )?;
+
+        // Try to enable Kitty keyboard protocol for Shift+Enter detection.
+        // This writes CSI > flags u to the terminal. Terminals that support it
+        // will report modifier keys on Enter; others silently ignore the sequence.
+        // We don't use supports_keyboard_enhancement() because it requires
+        // the `use-dev-tty` feature which has a build incompatibility with
+        // `event-stream` in crossterm 0.28.
+        let keyboard_enhanced = execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+            )
+        )
+        .is_ok();
+
+        let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+        Ok((Self { keyboard_enhanced }, terminal))
+    }
+
+    /// Whether the Kitty keyboard protocol is active.
+    pub fn keyboard_enhanced(&self) -> bool {
+        self.keyboard_enhanced
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let mut stdout = io::stdout();
+        if self.keyboard_enhanced {
+            let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+        }
+        let _ = execute!(
+            stdout,
+            DisableBracketedPaste,
+            DisableFocusChange,
+            LeaveAlternateScreen,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Input normalization
+// ---------------------------------------------------------------------------
+
+/// High-level input actions produced by normalizing raw key events.
+/// Consumers match on these instead of raw `KeyCode` + `KeyModifiers`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputAction {
+    /// Submit / confirm (plain Enter)
+    Submit,
+    /// Insert newline (Shift+Enter, Ctrl+J, Ctrl+N)
+    Newline,
+    /// Cancel / escape
+    Cancel,
+    /// Typed text (only when modifiers are empty or Shift-only)
+    Text(char),
+    /// Navigation
+    NavUp,
+    NavDown,
+    NavLeft,
+    NavRight,
+    /// Editing
+    Backspace,
+    Delete,
+    Home,
+    End,
+    /// Scroll
+    PageUp,
+    PageDown,
+    /// Raw key event that doesn't map to a known action
+    Raw(KeyEvent),
+}
+
+/// Normalize a key event into an [`InputAction`] suitable for text-input contexts.
+///
+/// This is the single source of truth for "what does this key mean in a text field."
+/// Modal/navigation contexts should use the keybinding system instead.
+pub fn normalize_for_text_input(key: KeyEvent) -> InputAction {
+    let mods = key.modifiers;
+
+    // Newline: Shift+Enter (all representations), Ctrl+J, Ctrl+N
+    if mods.contains(KeyModifiers::SHIFT)
+        && matches!(
+            key.code,
+            KeyCode::Enter | KeyCode::Char('\r') | KeyCode::Char('\n')
+        )
+    {
+        return InputAction::Newline;
+    }
+    if mods.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('j') | KeyCode::Char('n'))
+    {
+        return InputAction::Newline;
+    }
+
+    // Submit: plain Enter
+    if key.code == KeyCode::Enter && mods.is_empty() {
+        return InputAction::Submit;
+    }
+
+    // Cancel
+    if key.code == KeyCode::Esc {
+        return InputAction::Cancel;
+    }
+
+    // Navigation
+    match key.code {
+        KeyCode::Up if mods.is_empty() => return InputAction::NavUp,
+        KeyCode::Down if mods.is_empty() => return InputAction::NavDown,
+        KeyCode::Left if mods.is_empty() => return InputAction::NavLeft,
+        KeyCode::Right if mods.is_empty() => return InputAction::NavRight,
+        KeyCode::PageUp => return InputAction::PageUp,
+        KeyCode::PageDown => return InputAction::PageDown,
+        _ => {}
+    }
+
+    // Editing
+    match key.code {
+        KeyCode::Backspace => return InputAction::Backspace,
+        KeyCode::Delete => return InputAction::Delete,
+        KeyCode::Home => return InputAction::Home,
+        KeyCode::End => return InputAction::End,
+        _ => {}
+    }
+
+    // Text: only accept when modifiers are empty or Shift-only.
+    // This prevents Alt/Ctrl combos from being inserted as text.
+    if let KeyCode::Char(c) = key.code {
+        if mods.is_empty() || mods == KeyModifiers::SHIFT {
+            return InputAction::Text(c);
+        }
+    }
+
+    InputAction::Raw(key)
+}
+
+// ---------------------------------------------------------------------------
+// Legacy event handler (kept for standalone credentials TUI)
+// ---------------------------------------------------------------------------
+
+/// Terminal events (legacy synchronous API)
 #[derive(Debug)]
 pub enum Event {
-    /// Key press event
     Key(KeyEvent),
-    /// Mouse event
-    Mouse(MouseEvent),
-    /// Terminal resize
+    Mouse(crossterm::event::MouseEvent),
     Resize(u16, u16),
-    /// Tick for periodic updates
     Tick,
 }
 
-/// Synchronous event handler (for standalone TUIs)
-///
-/// Note: The main TUI uses async event handling via tokio::select!.
-/// This is kept for the standalone credentials TUI and backward compatibility.
+/// Synchronous event handler for standalone TUIs (credentials, doctor).
 pub struct EventHandler {
-    tick_rate: Duration,
+    tick_rate: std::time::Duration,
 }
 
 impl EventHandler {
     pub fn new(tick_rate_ms: u64) -> Self {
         Self {
-            tick_rate: Duration::from_millis(tick_rate_ms),
+            tick_rate: std::time::Duration::from_millis(tick_rate_ms),
         }
     }
 
-    /// Poll for the next event (blocking)
-    pub fn next(&self) -> anyhow::Result<Event> {
-        if event::poll(self.tick_rate)? {
-            match event::read()? {
+    pub fn next(&self) -> Result<Event> {
+        if crossterm::event::poll(self.tick_rate)? {
+            match crossterm::event::read()? {
                 CrosstermEvent::Key(key) => Ok(Event::Key(key)),
                 CrosstermEvent::Mouse(mouse) => Ok(Event::Mouse(mouse)),
                 CrosstermEvent::Resize(w, h) => Ok(Event::Resize(w, h)),
@@ -48,5 +291,3 @@ impl EventHandler {
         }
     }
 }
-
-// Note: For async event handling, see app.rs which uses tokio::select! directly
