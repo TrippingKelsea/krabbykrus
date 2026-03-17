@@ -21,8 +21,10 @@ automatically while the gateway is running.
 [credentials]    # Encrypted vault settings
 [providers]      # LLM provider configuration
 [overseer]       # Embedded oversight model (optional)
+[doctor]         # Embedded doctor AI config (optional)
 [deploy]         # S3 CA distribution + Route53 DNS (optional, requires bedrock-deploy feature)
 [tui]            # TUI display preferences
+[seed_model]     # Shared local GGUF model coordinates
 ```
 
 ---
@@ -205,6 +207,10 @@ api_url = "https://api.openai.com"  # Endpoint override (optional, for Azure etc
 enabled = true
 region = "us-east-1"
 auth_mode = "aws_credentials"  # "aws_credentials" or "agentcore"
+credential_provider_name = "my-agentcore-provider" # optional
+agentcore_auth_flow = "client_credentials"         # optional
+agentcore_scopes = "scope1 scope2"                 # optional
+credentials_secret_arn = "arn:aws:secretsmanager:..." # optional
 ```
 
 ### Ollama
@@ -317,6 +323,10 @@ animation_style = "Coalesce" # Animation style: Coalesce, Fade, Slide, None
 ## `[seed_model]`
 
 Shared local GGUF model definition used by Butler, Doctor, and Overseer.
+
+This section provides shared defaults for local-model features so you do not
+need to repeat the same model coordinates under `[doctor]`, `[overseer]`, and
+future local-model consumers.
 
 ```toml
 [seed_model]

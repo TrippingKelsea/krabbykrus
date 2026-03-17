@@ -30,7 +30,7 @@ exposed to the agent.
 - **Terminal UI + Web dashboard** — manage everything from either interface
 - **Multi-agent orchestration** — handoffs, swarm blackboards, graph workflows
 - **Remote tool execution** — Noise Protocol encrypted dispatch to clients
-- **Modular crate architecture** — 20 focused crates, compile only what you need
+- **Modular crate architecture** — compile only what you need
 
 ## Quick Start
 

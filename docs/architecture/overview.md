@@ -10,10 +10,10 @@ encrypted vault that agents never see directly.
 ```
 ┌───────────────────────────────────────────────────────────┐
 │                      Interfaces                           │
-│   TUI (rockbot-cli)   Web UI (rockbot-webui)   Channels  │
-│         ▲                    ▲               (Discord,    │
-│         │                    │                Telegram,   │
-│         │ WebSocket          │ HTTP           Signal)     │
+│ CLI (rockbot-cli)  TUI (rockbot-tui)  Web UI  Channels   │
+│         ▲                 ▲              ▲    (Discord,  │
+│         │                 │              │     Telegram, │
+│         │                 │ WebSocket    │ HTTP Signal)  │
 └─────────┼────────────────────┼──────────┬─────────────────┘
           │                    │          │
      ┌────▼────────────────────▼──────────▼────┐
@@ -86,10 +86,11 @@ execution and sanitized from responses.
 
 ### Remote Execution
 
-With the `remote-exec` feature, TUI and CLI clients register as remote
-executors over a Noise Protocol encrypted channel. The gateway dispatches
-tool calls (file reads, shell commands, etc.) to the client's local
-machine, enabling agents to work on remote workstations.
+With the `remote-exec` feature, interactive clients can register as remote
+executors over a Noise Protocol encrypted channel. In practice this is used by
+the TUI and by `rockbot agent run --exec`. The gateway dispatches tool calls
+(file reads, shell commands, etc.) to the client's local machine, enabling
+agents to work on remote workstations.
 
 ### Multi-Agent Orchestration
 

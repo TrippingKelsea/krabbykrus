@@ -146,7 +146,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 | AWS Bedrock | ✅ | Converse API |
 | Streaming support | ✅ | All 3 providers implement `stream_completion` |
 | Retry/backoff | ✅ | Exponential with jitter |
-| Ollama (local) | 📋 | |
+| Ollama (local) | ✅ | Feature-gated local provider |
 
 ---
 
@@ -258,13 +258,13 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 ---
 
-## CLI (`rockbot-cli`)
+## CLI and TUI (`rockbot-cli`, `rockbot-tui`)
 
 ### Commands
 
 | Command | Status | Notes |
 |---------|--------|-------|
-| `gateway` | ✅ | Start gateway server |
+| `gateway` | ✅ | Run/status/log/install lifecycle commands |
 | `config show` | ✅ | |
 | `config validate` | ✅ | |
 | `config init` | ✅ | |
@@ -276,7 +276,8 @@ This document tracks feature implementation status and helps identify gaps betwe
 | `agent list` | ✅ | |
 | `agent status` | ✅ | |
 | `agent message` | ✅ | |
-| `agent create` | 🚧 | |
+| `agent create` | ✅ | Create a new agent from the CLI |
+| `agent run` | ✅ | Interactive remote-gateway session, optional remote exec |
 | `tool list` | ✅ | |
 | `tool info` | ✅ | |
 | `tool test` | 🚧 | |
@@ -293,10 +294,11 @@ This document tracks feature implementation status and helps identify gaps betwe
 | `credentials remove` | ✅ | |
 | `credentials unlock` | ✅ | |
 | `credentials lock` | ✅ | |
+| `credentials ui` | ✅ | Standalone terminal vault management UI |
 | `credentials permissions` | ✅ | |
 | `credentials audit` | ✅ | |
-| `doctor` | 🚧 | |
-| `migrate` | 📋 | |
+| `doctor` | ✅ | Health check always available; AI subcommands feature-gated |
+| `migrate` | ✅ | OpenClaw config/session migration and verification |
 
 ### Post-Build Testing
 
@@ -314,7 +316,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 |---------|--------|-------|
 | Async event loop | ✅ | tokio::select! |
 | Dashboard view | ✅ | Card strip layout |
-| Credentials view (4 sub-tabs) | ✅ | All, Model, Communication, Tool |
+| Credentials view (4 sub-tabs) | ✅ | Endpoints, Providers, Permissions, Audit |
 | Agents view | ✅ | CRUD, modal editing |
 | Sessions view | ✅ | Card strip + chat |
 | Models view | ✅ | Dynamic provider list, test |
@@ -332,7 +334,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 ---
 
-## Web UI (`rockbot-core::web_ui`)
+## Web UI (`rockbot-webui`)
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -343,7 +345,7 @@ This document tracks feature implementation status and helps identify gaps betwe
 | Sessions page | ✅ | Chat |
 | Models page | ✅ | Test, configure |
 | Settings page | 🚧 | |
-| Real-time updates | 📋 | WebSocket needed |
+| Real-time updates | ✅ | Via gateway WebSocket events |
 
 ---
 
@@ -481,19 +483,19 @@ cargo build --release --features "conservative,otel"
 
 ### Critical Path Items
 
-1. **Streaming responses** - LLM streaming is implemented in all three providers but not wired through the agent engine, gateway API, or UI layers.
-2. **Credential injection** - Tools execute but have no mechanism to retrieve vault credentials from the execution context at call time.
-3. **Routing/binding system** - No channel-to-agent message routing exists; channels and agents run independently with no dispatch layer connecting them.
-4. **Subagent delegation** - Agent-to-agent task delegation is not implemented; parent/child relationship fields exist in the data model only.
-5. **WebSocket protocol** - Required for real-time UI updates in both TUI and Web UI; placeholder exists in gateway but handler is not implemented.
+1. **API authentication enforcement** - `require_api_key` is documented in config, but auth enforcement remains incomplete.
+2. **Rate limiting** - the gateway exposes the right perimeter for it, but request throttling is still planned.
+3. **Credential unlock breadth** - password/keyfile flows work, but Age and SSH unlock paths remain partial.
+4. **Signal integration** - the Signal channel crate is still a scaffold rather than a production transport.
+5. **Plugin runtime** - the plugin crate exists, but discovery, isolation, and execution remain scaffold-level.
 
 ### Nice to Have (Post-MVP)
 
-1. Additional LLM providers (Ollama)
-2. Signal channel integration
-3. WASM plugin system
-4. Sandbox implementation (container and process)
-5. Session export (JSON/Markdown)
+1. Additional channel providers beyond Discord/Telegram/Signal scaffold
+2. WASM plugin system
+3. Sandbox implementation (container and process)
+4. Session export (JSON/Markdown)
+5. Hardware-backed PKI key providers
 
 ### Technical Debt
 

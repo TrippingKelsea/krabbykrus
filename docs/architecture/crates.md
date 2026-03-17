@@ -1,41 +1,45 @@
 # Crate Structure
 
-RockBot is a Cargo workspace with 29 crates organized by responsibility.
+RockBot is a Cargo workspace with 33 crates organized by responsibility.
 
 ## Workspace Layout
 
 ```
 rockbot/
 ├── crates/
-│   ├── rockbot/                  # Binary entry point
-│   ├── rockbot-cli/              # CLI commands and TUI
-│   ├── rockbot-core/             # Re-export facade (backward compat)
-│   ├── rockbot-config/           # Config types, message types, errors
-│   ├── rockbot-session/          # Session management and persistence
-│   ├── rockbot-agent/            # Agent execution engine
-│   ├── rockbot-client/           # Gateway WS client, ACP, remote exec
-│   ├── rockbot-gateway/          # HTTP/WS server, A2A, cron, routing
-│   ├── rockbot-webui/            # Embedded web dashboard (static HTML)
-│   ├── rockbot-llm/              # LLM provider abstraction
-│   ├── rockbot-tools/            # Tool trait and registry
-│   ├── rockbot-tools-credentials/# Credential vault access tool
-│   ├── rockbot-tools-mcp/        # MCP server connection tool
-│   ├── rockbot-tools-markdown/   # Markdown processing tool
-│   ├── rockbot-channels/         # Channel traits and registry
-│   ├── rockbot-channels-discord/ # Discord (Serenity)
-│   ├── rockbot-channels-telegram/# Telegram (Teloxide)
-│   ├── rockbot-channels-signal/  # Signal (placeholder)
-│   ├── rockbot-memory/           # Memory and search system
-│   ├── rockbot-security/         # Capability system and sandboxing
-│   ├── rockbot-store/            # Unified embedded storage (redb + optional OpenRaft)
-│   ├── rockbot-credentials/      # Encrypted credential vault (backed by rockbot-store)
-│   ├── rockbot-credentials-schema/# Shared credential schema types
-│   ├── rockbot-pki/              # PKI: CA, client certs, CRL, enrollment
-│   ├── rockbot-overseer/         # Embedded local-model oversight
-│   ├── rockbot-doctor/           # AI-powered config diagnostics and auto-repair
-│   ├── rockbot-butler/           # Embedded queer sassy helper agent (opt-in)
-│   ├── rockbot-deploy/           # S3 CA distribution + Route53 DNS (opt-in)
-│   └── rockbot-plugins/          # Plugin system (scaffold)
+│   ├── rockbot/                   # Binary entry point and top-level feature profiles
+│   ├── rockbot-cli/               # Clap CLI surface and command dispatch
+│   ├── rockbot-core/              # Re-export facade for backward compatibility
+│   ├── rockbot-config/            # Config types, message types, shared errors
+│   ├── rockbot-session/           # Session management and persistence
+│   ├── rockbot-agent/             # Agent execution engine
+│   ├── rockbot-client/            # Gateway client, ACP, remote exec
+│   ├── rockbot-gateway/           # HTTP/WS server, A2A, cron, routing
+│   ├── rockbot-webui/             # Embedded web dashboard assets
+│   ├── rockbot-tui/               # Terminal UI application
+│   ├── rockbot-chat/              # Shared chat primitives/UI-facing types
+│   ├── rockbot-editor/            # Text editor helpers for interactive clients
+│   ├── rockbot-shell/             # Shell/session helpers for interactive clients
+│   ├── rockbot-llm/               # LLM provider abstraction
+│   ├── rockbot-tools/             # Tool trait, registry, built-ins
+│   ├── rockbot-tools-credentials/ # Credential vault access tool
+│   ├── rockbot-tools-mcp/         # MCP server connection tool
+│   ├── rockbot-tools-markdown/    # Markdown processing tool
+│   ├── rockbot-channels/          # Channel traits and registry
+│   ├── rockbot-channels-discord/  # Discord (Serenity)
+│   ├── rockbot-channels-telegram/ # Telegram (Teloxide)
+│   ├── rockbot-channels-signal/   # Signal channel scaffold
+│   ├── rockbot-memory/            # Memory and search system
+│   ├── rockbot-security/          # Capability system and sandboxing
+│   ├── rockbot-store/             # Unified embedded storage (redb + optional OpenRaft)
+│   ├── rockbot-credentials/       # Encrypted credential vault
+│   ├── rockbot-credentials-schema/ # Shared credential schema types
+│   ├── rockbot-pki/               # PKI: CA, client certs, CRL, enrollment
+│   ├── rockbot-overseer/          # Embedded local-model oversight
+│   ├── rockbot-doctor/            # Config diagnostics and auto-repair
+│   ├── rockbot-butler/            # Optional companion agent
+│   ├── rockbot-deploy/            # S3 CA distribution + Route53 DNS
+│   └── rockbot-plugins/           # Plugin system scaffold
 ```
 
 ## Dependency Graph
@@ -43,49 +47,44 @@ rockbot/
 The crate hierarchy follows a strict DAG — no cycles.
 
 ```
-rockbot-config            (leaf: config, message, error types)
+rockbot-config             (leaf: config, message, error types)
 rockbot-credentials-schema (leaf: shared schema types)
-rockbot-webui             (leaf: pure static HTML)
+rockbot-webui              (leaf: embedded static assets)
+rockbot-chat               (leaf: shared chat types)
+rockbot-editor             (leaf-ish: editor helpers)
+rockbot-shell              (leaf-ish: shell helpers)
 
-rockbot-session           → rockbot-config
-rockbot-security          → (standalone)
-rockbot-memory            → (standalone)
-rockbot-store             → (standalone: redb, chacha20; optional: openraft)
-rockbot-credentials       → rockbot-store, rockbot-security
+rockbot-session            → rockbot-config
+rockbot-security           → (standalone)
+rockbot-memory             → (standalone)
+rockbot-store              → (standalone: redb, chacha20; optional: openraft)
+rockbot-credentials        → rockbot-store, rockbot-security
 
-rockbot-llm               → rockbot-credentials-schema
-rockbot-tools             → rockbot-security, rockbot-credentials-schema
-rockbot-channels          → rockbot-credentials-schema
+rockbot-llm                → rockbot-credentials-schema
+rockbot-tools              → rockbot-security, rockbot-credentials-schema
+rockbot-channels           → rockbot-credentials-schema
 
-rockbot-agent             → rockbot-config, rockbot-session, rockbot-llm,
-                             rockbot-tools, rockbot-memory, rockbot-security
-                             [optional: rockbot-client for remote-exec]
+rockbot-agent              → rockbot-config, rockbot-session, rockbot-llm,
+                              rockbot-tools, rockbot-memory, rockbot-security
+                              [optional: rockbot-client for remote-exec]
 
-rockbot-client            → rockbot-config
-                             [optional: snow for remote-exec]
+rockbot-client             → rockbot-config
+                              [optional: snow for remote-exec]
+rockbot-pki                → rcgen, x509-parser, rustls, ring, chrono
+rockbot-doctor             → rockbot-overseer, rockbot-config
+rockbot-butler             → rockbot-overseer, rockbot-config
+rockbot-deploy             → rockbot-pki, rockbot-config, rockbot-credentials
 
-rockbot-pki               → rcgen, x509-parser, rustls, ring, chrono
+rockbot-gateway            → rockbot-config, rockbot-session, rockbot-agent,
+                              rockbot-webui, rockbot-client, rockbot-llm,
+                              rockbot-tools, rockbot-channels, rockbot-credentials,
+                              rockbot-pki
 
-rockbot-doctor            → rockbot-overseer, rockbot-config
-                             [deps: toml, toml_edit; feature: doctor-ai]
-
-rockbot-butler            → rockbot-overseer, rockbot-config
-                             [feature: butler; in enhanced profile]
-
-rockbot-deploy            → rockbot-pki, rockbot-config, rockbot-credentials
-                             [optional: aws-config, aws-sdk-s3, aws-sdk-route53;
-                              feature: bedrock]
-
-rockbot-gateway           → rockbot-config, rockbot-session, rockbot-agent,
-                             rockbot-webui, rockbot-client, rockbot-llm,
-                             rockbot-tools, rockbot-channels, rockbot-credentials,
-                             rockbot-pki
-                             [optional: channel/tool provider crates, overseer,
-                              rockbot-deploy]
-
-rockbot-core              → facade: re-exports all of the above
-rockbot-cli               → rockbot-core, rockbot-client, rockbot-pki
-rockbot                   → rockbot-cli, rockbot-core
+rockbot-core               → facade: re-exports config/session/agent/client/gateway/webui
+rockbot-tui                → rockbot-core, rockbot-client, rockbot-credentials,
+                              rockbot-chat, rockbot-editor, rockbot-shell
+rockbot-cli                → rockbot-core, rockbot-client, rockbot-pki, rockbot-tui
+rockbot                    → rockbot-cli, rockbot-core
 ```
 
 ## Feature Flags
@@ -171,6 +170,20 @@ cargo build --profile release-small --no-default-features -F anthropic
 
 ## Key Modules by Crate
 
+### rockbot-cli
+- `lib.rs` — clap command tree, feature passthrough, logging/bootstrap
+- `commands/gateway.rs` — gateway service and foreground server commands
+- `commands/cert.rs` — CA, client cert, enrollment, verification commands
+- `commands/credentials.rs` — vault lifecycle, CRUD, permissions, audit, standalone credentials UI
+- `commands/doctor.rs` — diagnostics, repair, and Doctor TUI entry points
+
+### rockbot-tui
+- `app.rs` — main terminal app, update loop, gateway integration
+- `state.rs` — application state and view models
+- `components/` — page renderers, overlays, cards, modals
+- `credentials.rs` — standalone credential-management TUI used by `rockbot credentials ui`
+- `effects.rs` — visual effects, palette, animation helpers
+
 ### rockbot-gateway
 - `gateway.rs` — HTTP/WS server, agent lifecycle, TLS listener
 - `routing.rs` — Multi-agent routing engine
@@ -220,6 +233,11 @@ cargo build --profile release-small --no-default-features -F anthropic
 - `commands.rs` — `/butler` slash command dispatch (status, mood, help)
 - Uses shared `SeedModelConfig` for GGUF model coordinates
 - Feature-gated: `butler` in enhanced profile
+
+### Support crates
+- `rockbot-chat` — shared chat/session presentation types
+- `rockbot-editor` — editor abstractions for interactive clients
+- `rockbot-shell` — shell/session helpers for terminal integrations
 
 ### rockbot-config
 - `config.rs` — `Config`, `GatewayConfig`, `AgentInstance`, `SeedModelConfig`, feature types

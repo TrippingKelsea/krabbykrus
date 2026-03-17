@@ -19,6 +19,10 @@ rockbot --version
 rockbot doctor        # diagnostic checks
 ```
 
+The top-level `rockbot` crate defaults to the `conservative` feature profile:
+Bedrock, Telegram, Signal, and the built-in tool crates. Additional profiles and
+feature bundles are available when you need more providers or infrastructure.
+
 ## Initial Setup
 
 ### Generate Config
@@ -75,6 +79,15 @@ rockbot tui -g 192.168.1.10:18080
 ```
 
 The `-g` flag accepts bare `host:port` — no need to specify `https://`.
+
+### Credential Management UI
+
+For vault setup and inspection from the terminal, you can also launch the
+standalone credential UI:
+
+```bash
+rockbot credentials ui
+```
 
 ### Open the Web UI
 
@@ -172,13 +185,21 @@ rockbot credentials list
 
 | Flag | Description |
 |------|-------------|
+| `conservative` | Default profile: bedrock + telegram + signal + built-in tool crates |
+| `enhanced` | Conservative plus overseer, doctor-ai, and vault replication |
+| `experimental` | Enhanced plus telemetry and S3/Route53 deployment helpers |
 | `remote-exec` | Noise Protocol remote tool dispatch |
 | `overseer` | Embedded local-model agent oversight |
+| `doctor-ai` | Local AI-powered configuration diagnostics and repair |
+| `bedrock-deploy` | S3 CA distribution and Route53 DNS provisioning |
 | `otel` | OpenTelemetry export |
 | `http-insecure` | Allow plain HTTP (TLS is default) |
 | `anthropic` | Anthropic API provider |
 | `openai` | OpenAI API provider |
 | `ollama` | Ollama local models |
+| `all-providers` | Enable Anthropic, OpenAI, Ollama, and Bedrock together |
+| `all-channels` | Enable Discord, Telegram, and Signal together |
+| `all-tools` | Enable all built-in tool provider crates together |
 
 ## Troubleshooting
 
