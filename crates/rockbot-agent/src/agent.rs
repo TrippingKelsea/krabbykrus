@@ -1965,19 +1965,42 @@ impl Agent {
         // Add session and agent context
         let effective_workspace = self.resolve_workspace(context);
         let agent_dir = self.get_agent_directory();
+        let execution_target = if context.remote_workspace_override.is_some() {
+            "active client".to_string()
+        } else if let Some(ref target) = context.remote_executor_target {
+            format!("remote executor `{target}`")
+        } else {
+            "gateway local execution".to_string()
+        };
+        let execution_workdir =
+            if let Some(ref remote_workspace) = context.remote_workspace_override {
+                remote_workspace.clone()
+            } else if context.remote_executor_target.is_some() {
+                "unknown until verified with a tool on the selected executor".to_string()
+            } else {
+                effective_workspace.display().to_string()
+            };
         let context_section = format!(
             "# Current Context\n\n\
              - Agent ID: {}\n\
              - Session ID: {}\n\
              - Available tools: {}\n\
-             - Working directory: {}\n\
+             - Execution target: {}\n\
+             - Execution working directory hint: {}\n\
+             - Gateway workspace hint: {}\n\
              - Agent context directory: {}\n\n\
+             Environment-sensitive claims MUST be verified with tool calls against the execution target. \
+             This includes hostname, current user, working directory, filesystem contents, installed tools, \
+             operating system details, running processes, and any other live machine state. \
+             Do NOT infer these from the gateway context, prior messages, or model knowledge.\n\n\
              You have read/write access to your context directory. Your SOUL.md file at \
              `{}/SOUL.md` defines your identity — you may read and update it to refine \
              your behavior over time.",
             self.config.id,
             context.session_id,
             context.available_tools.join(", "),
+            execution_target,
+            execution_workdir,
             effective_workspace.display(),
             agent_dir.display(),
             agent_dir.display(),
@@ -2146,9 +2169,11 @@ The user wants me to explore the codebase. I should start by listing the directo
 
 6. **Inspect before assuming.** If you are unsure about the state of the filesystem, codebase, or environment, use tools to examine it. Do not guess or make assumptions about file contents, directory structure, or system state.
 
-7. **Verify your work.** After making changes or completing a task, use tools to confirm the results are correct (e.g., re-read a file after editing, run a command to verify output).
+7. **Verify live environment facts with tools.** Any claim about hostname, current user, working directory, operating system, installed software, running processes, or filesystem state MUST come from a tool call against the current execution target. Never answer these from memory or inference.
 
-8. **Avoid repetitive loops.** If you notice you are calling the same tool with the same arguments repeatedly, STOP. Reassess your approach inside a <think> block and try something fundamentally different.
+8. **Verify your work.** After making changes or completing a task, use tools to confirm the results are correct (e.g., re-read a file after editing, run a command to verify output).
+
+9. **Avoid repetitive loops.** If you notice you are calling the same tool with the same arguments repeatedly, STOP. Reassess your approach inside a <think> block and try something fundamentally different.
 
 ## Anti-Patterns — NEVER Do These
 
