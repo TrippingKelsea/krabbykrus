@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::backend::{FileBackend, KeyBackend, KeyHandle};
 use crate::ca;
-use crate::index::{CertEntry, CertRole, EnrollmentToken, PkiIndex};
+use crate::index::{CertEntry, CertRole, CertStatus, EnrollmentToken, PkiIndex};
 
 /// Path constants relative to `pki_dir`.
 const CA_CERT_FILE: &str = "ca.crt";
@@ -386,6 +386,40 @@ impl PkiManager {
         self.save_index()?;
 
         Ok(cert_pem)
+    }
+
+    /// Import a previously signed client certificate into the local PKI index.
+    ///
+    /// Useful on enrolled client nodes, where the certificate/key are obtained
+    /// remotely and then need to be locally installable via the normal PKI flows.
+    pub fn import_signed_client(
+        &mut self,
+        name: &str,
+        role: CertRole,
+        cert_pem: &str,
+    ) -> anyhow::Result<()> {
+        let (not_before, not_after) = parse_cert_validity(cert_pem)?;
+        let der = pem_to_der(cert_pem)?;
+        let fingerprint = ca::sha256_fingerprint(&der);
+
+        let serial = self.index.next_serial();
+        let entry = CertEntry {
+            serial,
+            name: name.to_string(),
+            role,
+            status: CertStatus::Active,
+            not_before,
+            not_after,
+            fingerprint_sha256: fingerprint,
+            subject: format!("CN={name}"),
+            sans: vec![],
+            roles: vec![],
+            groups: vec![],
+        };
+
+        self.index.add_entry(entry);
+        self.save_index()?;
+        Ok(())
     }
 
     // -------------------------------------------------------------------------

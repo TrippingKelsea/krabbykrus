@@ -858,6 +858,10 @@ async fn cmd_enroll_submit(
     let ca_path = dir.join("ca.crt");
     std::fs::write(&ca_path, &sign_resp.ca_certificate)?;
 
+    let mut mgr = open_pki(dir.clone())?;
+    let role = parse_role(role_str)?;
+    mgr.import_signed_client(name, role, &sign_resp.certificate)?;
+
     let key_path = dir.join("keys").join(format!("{name}.key"));
     println!("Enrollment successful:");
     println!("  Cert:   {}", cert_path.display());
