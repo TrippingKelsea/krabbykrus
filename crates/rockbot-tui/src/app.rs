@@ -536,6 +536,11 @@ impl App {
 
     /// Handle key events
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
+        // Only handle key press events (ignore release/repeat from keyboard enhancement)
+        if key.kind != crossterm::event::KeyEventKind::Press {
+            return Ok(());
+        }
+
         // Global keybindings (always active)
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
@@ -4860,10 +4865,15 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: Str
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    // Try to enable keyboard enhancement for Shift+Enter detection
+    // Try to enable keyboard enhancement for Shift+Enter detection.
+    // DISAMBIGUATE_ESCAPE_CODES: Shift+Enter reported distinctly from Enter.
+    // REPORT_EVENT_TYPES: Press/Release/Repeat events reported (we filter for Press only).
     let has_keyboard_enhancement = execute!(
         stdout,
-        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+        )
     )
     .is_ok();
     execute!(stdout, EnterAlternateScreen)?;
