@@ -181,7 +181,7 @@ impl Gateway {
                     let mut out = String::from(
                         "## Noise Sessions\n\n| Conn | Type | Capabilities | Dir |\n|------|------|--------------|-----|\n",
                     );
-                    for (id, caps) in &executors {
+                    for (_id, identity, caps) in &executors {
                         let cl: Vec<&str> = caps
                             .capabilities
                             .iter()
@@ -198,7 +198,15 @@ impl Gateway {
                                 }
                             })
                             .collect();
-                        let short = if id.len() > 8 { &id[..8] } else { id };
+                        let display_id = identity
+                            .client_uuid
+                            .as_deref()
+                            .unwrap_or(identity.conn_id.as_str());
+                        let short = if display_id.len() > 8 {
+                            &display_id[..8]
+                        } else {
+                            display_id
+                        };
                         let wd = caps.working_dir.as_deref().unwrap_or("-");
                         out.push_str(&format!(
                             "| `{short}…` | `{}` | {} | `{wd}` |\n",

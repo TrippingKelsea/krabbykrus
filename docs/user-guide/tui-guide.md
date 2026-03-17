@@ -53,7 +53,7 @@ The card bar mode selector provides four navigation targets:
 
 | # | Mode | Description |
 |---|------|-------------|
-| 1 | Dashboard | Butler chat + status overview cards |
+| 1 | Dashboard | Butler chat + status overview cards, including WS, Noise, and execution target |
 | 2 | Agents | One card per agent; selecting changes chat target |
 | 3 | Sessions | Sessions grouped by agent; selecting changes active chat |
 | 4 | Cron Jobs | Cron overview card |
@@ -218,6 +218,26 @@ ai_font_size = 14
 The terminal TUI uses the text-color tokens immediately, including
 `ai_text_color`, `thinking_text_color`, and `tool_text_color`. Font families and
 sizes are persisted but not enforced by the terminal emulator.
+
+## Remote Execution Controls
+
+The Dashboard exposes two remote-exec cards:
+
+- **Noise**: shows WS connectivity, Noise registration state, and how many
+  executors the gateway currently knows about.
+- **Exec**: shows where tool calls will run by default.
+
+Open the Exec card detail overlay with `Alt+Enter` while that card is selected.
+Inside the overlay:
+
+- `t` toggles local active-client execution on or off
+- `g` forces gateway-local execution
+- `Up` / `Down` select a connected remote executor
+- `Enter` assigns the highlighted executor as the remote tool target
+
+This execution target only affects remote-capable tool calls such as shell and
+filesystem work. When local execution is enabled, those tools use the active
+client's current working directory instead of the gateway host's cwd.
 
 ## Tips
 

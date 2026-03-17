@@ -155,8 +155,10 @@ Build with the `remote-exec` feature to let the gateway dispatch tool calls
 cargo build --release -F remote-exec
 ```
 
-When the TUI connects, it automatically registers as a remote executor via
-a Noise Protocol encrypted channel.
+When the TUI connects, it automatically registers as a remote executor after
+the Noise handshake completes. The Dashboard also exposes Noise and execution
+target cards so you can verify registration state and choose whether tools run
+on the active client, the gateway, or another connected executor.
 
 ## Setting Up Credentials
 

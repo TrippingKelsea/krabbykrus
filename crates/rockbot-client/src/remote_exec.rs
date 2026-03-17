@@ -83,6 +83,19 @@ pub struct ClientCapabilities {
     pub working_dir: Option<String>,
 }
 
+/// Stable identity for a registered remote executor.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExecutorIdentity {
+    /// WS connection ID on the gateway.
+    pub conn_id: String,
+    /// Stable client UUID, when the client identified itself.
+    pub client_uuid: Option<String>,
+    /// Hostname reported by the client.
+    pub hostname: Option<String>,
+    /// Optional user-friendly label.
+    pub label: Option<String>,
+}
+
 impl ClientCapabilities {
     /// Create capabilities for a TUI client (full local access).
     pub fn tui() -> Self {
@@ -143,6 +156,8 @@ pub enum NoiseState {
 ///
 /// Wraps the `snow` transport state and tracks client capabilities.
 pub struct NoiseSession {
+    /// Stable executor identity.
+    pub identity: ExecutorIdentity,
     /// Connection ID (matches WS connection ID).
     pub conn_id: String,
     /// Noise transport state for encrypt/decrypt.
@@ -174,6 +189,7 @@ impl NoiseSession {
 impl std::fmt::Debug for NoiseSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NoiseSession")
+            .field("identity", &self.identity)
             .field("conn_id", &self.conn_id)
             .field("capabilities", &self.capabilities)
             .finish()
@@ -270,6 +286,27 @@ pub struct RemoteExecutorRegistry {
 }
 
 impl RemoteExecutorRegistry {
+    fn resolve_workspace_path(
+        session: &NoiseSession,
+        workspace_path: &str,
+        tool_name: &str,
+    ) -> String {
+        if !workspace_path.trim().is_empty() {
+            return workspace_path.to_string();
+        }
+
+        if matches!(
+            ToolCapability::for_tool(tool_name),
+            Some(ToolCapability::Filesystem | ToolCapability::Shell)
+        ) {
+            if let Some(working_dir) = session.capabilities.working_dir.as_ref() {
+                return working_dir.clone();
+            }
+        }
+
+        workspace_path.to_string()
+    }
+
     pub fn new() -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
@@ -322,6 +359,25 @@ impl RemoteExecutorRegistry {
         best.map(|(id, _)| id)
     }
 
+    /// Find a specific executor by connection ID, UUID, label, or hostname.
+    pub async fn resolve_executor_target(&self, target: &str, tool_name: &str) -> Option<String> {
+        let sessions = self.sessions.read().await;
+        for (conn_id, session) in sessions.iter() {
+            let session = session.lock().await;
+            if !session.capabilities.can_execute(tool_name) {
+                continue;
+            }
+            if session.conn_id == target
+                || session.identity.client_uuid.as_deref() == Some(target)
+                || session.identity.label.as_deref() == Some(target)
+                || session.identity.hostname.as_deref() == Some(target)
+            {
+                return Some(conn_id.clone());
+            }
+        }
+        None
+    }
+
     /// Dispatch a tool call to a remote client and wait for the response.
     ///
     /// Returns `None` if no capable client is found or the client disconnects.
@@ -339,13 +395,17 @@ impl RemoteExecutorRegistry {
         let session = sessions.get(&conn_id)?;
 
         let request_id = uuid::Uuid::new_v4().to_string();
+        let resolved_workspace = {
+            let session = session.lock().await;
+            Self::resolve_workspace_path(&session, workspace_path, tool_name)
+        };
         let request = RemoteToolRequest {
             request_id: request_id.clone(),
             tool_name: tool_name.to_string(),
             params: params.to_string(),
             agent_id: agent_id.to_string(),
             session_id: session_id.to_string(),
-            workspace_path: workspace_path.to_string(),
+            workspace_path: resolved_workspace,
         };
 
         // Set up response channel
@@ -380,6 +440,62 @@ impl RemoteExecutorRegistry {
         }
     }
 
+    /// Dispatch to a specific executor target and wait for the response.
+    pub async fn dispatch_to_target(
+        &self,
+        target: &str,
+        tool_name: &str,
+        params: &str,
+        agent_id: &str,
+        session_id: &str,
+        workspace_path: &str,
+        timeout: std::time::Duration,
+    ) -> Option<RemoteToolResponse> {
+        let conn_id = self.resolve_executor_target(target, tool_name).await?;
+        let sessions = self.sessions.read().await;
+        let session = sessions.get(&conn_id)?;
+
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let resolved_workspace = {
+            let session = session.lock().await;
+            Self::resolve_workspace_path(&session, workspace_path, tool_name)
+        };
+        let request = RemoteToolRequest {
+            request_id: request_id.clone(),
+            tool_name: tool_name.to_string(),
+            params: params.to_string(),
+            agent_id: agent_id.to_string(),
+            session_id: session_id.to_string(),
+            workspace_path: resolved_workspace,
+        };
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.pending
+            .write()
+            .await
+            .insert(request_id.clone(), resp_tx);
+
+        {
+            let session = session.lock().await;
+            let _ = session.tool_tx.send(request);
+        }
+
+        let result = tokio::time::timeout(timeout, resp_rx).await;
+        self.pending.write().await.remove(&request_id);
+
+        match result {
+            Ok(Ok(response)) => Some(response),
+            Ok(Err(_)) => {
+                warn!("Remote executor {conn_id} dropped response channel");
+                None
+            }
+            Err(_) => {
+                warn!("Remote tool call to {conn_id} timed out");
+                None
+            }
+        }
+    }
+
     /// Deliver a response from a client to the waiting dispatch call.
     pub async fn deliver_response(&self, response: RemoteToolResponse) {
         if let Some(tx) = self.pending.write().await.remove(&response.request_id) {
@@ -398,12 +514,16 @@ impl RemoteExecutorRegistry {
     }
 
     /// List connected executors with their capabilities.
-    pub async fn list_executors(&self) -> Vec<(String, ClientCapabilities)> {
+    pub async fn list_executors(&self) -> Vec<(String, ExecutorIdentity, ClientCapabilities)> {
         let sessions = self.sessions.read().await;
         let mut result = Vec::new();
         for (conn_id, session) in sessions.iter() {
             let session = session.lock().await;
-            result.push((conn_id.clone(), session.capabilities.clone()));
+            result.push((
+                conn_id.clone(),
+                session.identity.clone(),
+                session.capabilities.clone(),
+            ));
         }
         result
     }

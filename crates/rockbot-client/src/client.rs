@@ -37,12 +37,16 @@ pub enum GatewayEvent {
     /// Agent processing error.
     AgentError { session_key: String, error: String },
     /// A tool call has started.
-    ToolCall { tool_name: String },
+    ToolCall {
+        tool_name: String,
+        locality: Option<String>,
+    },
     /// A tool call has completed.
     ToolResult {
         tool_name: String,
         success: bool,
         duration_ms: u64,
+        locality: Option<String>,
     },
     /// Token usage update.
     TokenUsage {
@@ -72,6 +76,11 @@ pub enum GatewayEvent {
     Pong,
     /// WebSocket connection established.
     Connected,
+    ClientIdentityAssigned {
+        client_uuid: String,
+        hostname: String,
+        label: Option<String>,
+    },
     /// WebSocket disconnected.
     Disconnected { reason: String },
     /// Gateway-level error message.
@@ -414,7 +423,14 @@ impl GatewayClient {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown")
                     .to_string();
-                GatewayEvent::ToolCall { tool_name }
+                let locality = json
+                    .get("locality")
+                    .and_then(serde_json::Value::as_str)
+                    .map(String::from);
+                GatewayEvent::ToolCall {
+                    tool_name,
+                    locality,
+                }
             }
             "tool_result" => {
                 let tool_name = json
@@ -434,6 +450,10 @@ impl GatewayClient {
                     tool_name,
                     success,
                     duration_ms,
+                    locality: json
+                        .get("locality")
+                        .and_then(serde_json::Value::as_str)
+                        .map(String::from),
                 }
             }
             "agent_response" => {
@@ -560,6 +580,22 @@ impl GatewayClient {
                 }
             }
             "pong" => GatewayEvent::Pong,
+            "client_identity_assigned" => GatewayEvent::ClientIdentityAssigned {
+                client_uuid: json
+                    .get("client_uuid")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                hostname: json
+                    .get("hostname")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                label: json
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .map(String::from),
+            },
             "health_status" => {
                 if let Some(status) = json.get("status") {
                     GatewayEvent::HealthStatus {

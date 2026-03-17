@@ -216,6 +216,7 @@ impl App {
         self.spawn_cron_jobs_load();
         self.spawn_credential_schemas_load();
         self.spawn_sessions_load();
+        self.spawn_remote_executors_load();
         self.spawn_ws_connect();
         self.spawn_keybinding_watch();
         Ok(())
@@ -555,6 +556,22 @@ impl App {
                 }
                 Err(e) => {
                     let _ = tx.send(Message::SessionsError(e.to_string()));
+                }
+            }
+        });
+    }
+
+    /// Spawn a task to load connected remote executors from the gateway.
+    fn spawn_remote_executors_load(&self) {
+        let tx = self.state.tx.clone();
+        let gw = self.state.gateway_http_url.clone();
+        tokio::spawn(async move {
+            match load_remote_executors_from_gateway(&gw).await {
+                Ok(executors) => {
+                    let _ = tx.send(Message::RemoteExecutorsLoaded(executors));
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::RemoteExecutorsError(e.to_string()));
                 }
             }
         });
@@ -1097,6 +1114,13 @@ impl App {
         key: KeyEvent,
         mut detail: crate::state::CardDetailState,
     ) -> Result<()> {
+        let slot_label = self
+            .state
+            .slot_bar
+            .slots
+            .get(detail.slot_index)
+            .map(|slot| slot.label.clone())
+            .unwrap_or_default();
         match key.code {
             KeyCode::Esc => {
                 self.state.input_mode = InputMode::Normal;
@@ -1104,6 +1128,61 @@ impl App {
             // Alt+Enter also closes
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('t') if slot_label == "Exec" => {
+                self.state.allow_local_tool_execution = !self.state.allow_local_tool_execution;
+                if self.state.allow_local_tool_execution {
+                    self.state.status_message =
+                        Some(("Tool execution target: active client".to_string(), false));
+                } else {
+                    self.state.status_message =
+                        Some(("Tool execution target: manual selection".to_string(), false));
+                }
+                self.state.input_mode = InputMode::CardDetail(detail);
+            }
+            KeyCode::Up | KeyCode::Char('k') if slot_label == "Exec" => {
+                if !self.state.remote_executors.is_empty() {
+                    if self.state.selected_executor_index == 0 {
+                        self.state.selected_executor_index = self.state.remote_executors.len() - 1;
+                    } else {
+                        self.state.selected_executor_index -= 1;
+                    }
+                }
+                self.state.input_mode = InputMode::CardDetail(detail);
+            }
+            KeyCode::Down | KeyCode::Char('j') if slot_label == "Exec" => {
+                if !self.state.remote_executors.is_empty() {
+                    self.state.selected_executor_index = (self.state.selected_executor_index + 1)
+                        % self.state.remote_executors.len();
+                }
+                self.state.input_mode = InputMode::CardDetail(detail);
+            }
+            KeyCode::Enter if slot_label == "Exec" => {
+                self.state.selected_executor_target = self
+                    .state
+                    .remote_executors
+                    .get(self.state.selected_executor_index)
+                    .map(|executor| executor.target_id.clone());
+                self.state.allow_local_tool_execution = false;
+                self.state.status_message = Some((
+                    format!(
+                        "Tool execution target: {}",
+                        self.state
+                            .remote_executors
+                            .get(self.state.selected_executor_index)
+                            .map(RemoteExecutorInfo::display_name)
+                            .unwrap_or_else(|| "gateway".to_string())
+                    ),
+                    false,
+                ));
+                self.state.input_mode = InputMode::CardDetail(detail);
+            }
+            KeyCode::Char('g') if slot_label == "Exec" => {
+                self.state.allow_local_tool_execution = false;
+                self.state.selected_executor_target = None;
+                self.state.status_message =
+                    Some(("Tool execution target: gateway".to_string(), false));
+                self.state.input_mode = InputMode::CardDetail(detail);
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 detail.scroll = detail.scroll.saturating_sub(1);
@@ -4331,6 +4410,16 @@ impl App {
                 .cloned()
         });
         let launch_dir = self.state.launch_dir.to_string_lossy().to_string();
+        let executor_target = if self.state.allow_local_tool_execution {
+            None
+        } else {
+            Some(
+                self.state
+                    .selected_executor_target
+                    .clone()
+                    .unwrap_or_else(|| "gateway".to_string()),
+            )
+        };
 
         // WebSocket is the only communication path — no HTTP fallback
         if !self.ws_connected() {
@@ -4358,6 +4447,8 @@ impl App {
             "session_key": session_key,
             "message": user_message,
             "workspace": launch_dir,
+            "executor_target": executor_target,
+            "allow_active_client_tools": self.state.allow_local_tool_execution,
         });
         if let Some(ref client) = self.gateway_client {
             let sender = client.sender();
@@ -4783,6 +4874,16 @@ impl App {
                 self.state.ws_latency_history.iter().copied().collect(),
                 "WS RTT (ms)",
             ),
+            "Exec" => (
+                [
+                    self.state.gateway_tool_exec_count,
+                    self.state.local_tool_exec_count,
+                    self.state.remote_tool_exec_count,
+                ]
+                .into_iter()
+                .collect(),
+                "Execution Mix",
+            ),
             _ => (Vec::new(), ""),
         };
 
@@ -4908,6 +5009,111 @@ impl App {
                 if self.state.agents.is_empty() {
                     lines.push(Line::from(Span::styled(
                         "No agents configured",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+            "Noise" => {
+                lines.push(Line::from(vec![
+                    Span::styled("WS: ", Style::default().fg(Color::Cyan)),
+                    Span::styled(
+                        if self.state.ws_connected {
+                            "connected"
+                        } else {
+                            "offline"
+                        },
+                        Style::default().fg(if self.state.ws_connected {
+                            Color::Green
+                        } else {
+                            Color::DarkGray
+                        }),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Noise: ", Style::default().fg(Color::Cyan)),
+                    Span::styled(
+                        if self.state.noise_registered {
+                            "registered"
+                        } else {
+                            "pending"
+                        },
+                        Style::default().fg(if self.state.noise_registered {
+                            Color::Green
+                        } else {
+                            Color::Yellow
+                        }),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Executors: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(format!("{}", self.state.remote_executors.len())),
+                ]));
+                if let Some(message) = self.state.noise_status_message.as_deref() {
+                    lines.push(Line::from(vec![
+                        Span::styled("Status: ", Style::default().fg(Color::Cyan)),
+                        Span::raw(message.to_string()),
+                    ]));
+                }
+            }
+            "Exec" => {
+                let active_target = if self.state.allow_local_tool_execution {
+                    "active client".to_string()
+                } else if let Some(target) = self.state.selected_executor_target.as_deref() {
+                    self.state
+                        .remote_executors
+                        .iter()
+                        .find(|executor| executor.target_id == target)
+                        .map(RemoteExecutorInfo::display_name)
+                        .unwrap_or_else(|| target.to_string())
+                } else {
+                    "gateway".to_string()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("Current: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(active_target),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Last: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(
+                        self.state
+                            .last_tool_locality
+                            .clone()
+                            .unwrap_or_else(|| "idle".to_string()),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Counts: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(format!(
+                        "local {} | gw {} | remote {}",
+                        self.state.local_tool_exec_count,
+                        self.state.gateway_tool_exec_count,
+                        self.state.remote_tool_exec_count
+                    )),
+                ]));
+                lines.push(Line::from(Span::styled(
+                    "t toggle local  g gateway  enter select client",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                for (index, executor) in self.state.remote_executors.iter().enumerate() {
+                    let selected = index == self.state.selected_executor_index;
+                    let marker = if selected { ">" } else { " " };
+                    let workdir = executor.working_dir.as_deref().unwrap_or("--");
+                    lines.push(Line::from(vec![
+                        Span::styled(marker, Style::default().fg(Color::Yellow)),
+                        Span::raw(format!(" {}", executor.display_name())),
+                        Span::styled(
+                            format!("  {}", executor.client_type),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::styled(
+                            format!("  {}", truncate_tool_result(workdir, 28)),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+                if self.state.remote_executors.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "No remote executors registered",
                         Style::default().fg(Color::DarkGray),
                     )));
                 }
@@ -5468,6 +5674,7 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: Str
             // Periodic refresh (health check, reconnect)
             _ = refresh_interval.tick() => {
                 if app.ws_connected() {
+                    app.spawn_remote_executors_load();
                     if let Some(ref client) = app.gateway_client {
                         app.last_ws_ping_sent_at = Some(Instant::now());
                         let sender = client.sender();
@@ -5811,7 +6018,7 @@ async fn send_tool_response(
 /// Map a GatewayEvent from rockbot-client into TUI Messages.
 async fn handle_gateway_event(
     tx: &mpsc::UnboundedSender<Message>,
-    _client: Option<&rockbot_client::GatewayClient>,
+    client: Option<&rockbot_client::GatewayClient>,
     event: &rockbot_client::GatewayEvent,
     ws_rtt_ms: Option<u64>,
 ) {
@@ -5820,7 +6027,10 @@ async fn handle_gateway_event(
         GatewayEvent::StreamChunk { session_key, delta } => {
             let _ = tx.send(Message::ChatStreamChunk(format!("{session_key}:{delta}")));
         }
-        GatewayEvent::ToolCall { tool_name } => {
+        GatewayEvent::ToolCall {
+            tool_name,
+            locality: _,
+        } => {
             let _ = tx.send(Message::SetStatus(
                 format!("Running: {tool_name}..."),
                 false,
@@ -5830,12 +6040,16 @@ async fn handle_gateway_event(
             tool_name,
             success,
             duration_ms,
+            locality,
         } => {
             let status = if *success { "✓" } else { "✗" };
             let _ = tx.send(Message::SetStatus(
                 format!("{status} {tool_name} ({duration_ms}ms)"),
                 !success,
             ));
+            let _ = tx.send(Message::ToolExecutionObserved {
+                locality: locality.clone(),
+            });
         }
         GatewayEvent::AgentResponse {
             session_key,
@@ -5943,6 +6157,31 @@ async fn handle_gateway_event(
                 connected: true,
                 reason: None,
             });
+            if let Some(client) = client {
+                let sender = client.sender();
+                tokio::spawn(async move {
+                    let hostname = std::env::var("HOSTNAME")
+                        .ok()
+                        .or_else(|| std::env::var("COMPUTERNAME").ok())
+                        .unwrap_or_else(|| "unknown-host".to_string());
+                    let identify_msg = serde_json::json!({
+                        "type": "client_identify",
+                        "hostname": hostname,
+                    });
+                    let _ = sender.send(identify_msg.to_string()).await;
+                });
+            }
+        }
+        GatewayEvent::ClientIdentityAssigned {
+            client_uuid,
+            hostname,
+            label,
+        } => {
+            let display = label.clone().unwrap_or_else(|| hostname.clone());
+            let _ = tx.send(Message::SetStatus(
+                format!("Connected as {display} ({client_uuid})"),
+                false,
+            ));
         }
         GatewayEvent::Disconnected { reason } => {
             let _ = tx.send(Message::WsConnectionChanged {
@@ -5960,7 +6199,7 @@ async fn handle_gateway_event(
         #[cfg(feature = "remote-exec")]
         GatewayEvent::NoiseHandshakeStep { step, payload } => {
             if *step == 2 {
-                if let Some(c) = _client {
+                if let Some(c) = client {
                     let sender = c.sender();
                     handle_noise_step2(&sender, payload).await;
                 }
@@ -5968,6 +6207,10 @@ async fn handle_gateway_event(
         }
         #[cfg(feature = "remote-exec")]
         GatewayEvent::RemoteCapabilitiesAck { accepted, message } => {
+            let _ = tx.send(Message::NoiseStatusChanged {
+                registered: *accepted,
+                message: message.clone(),
+            });
             if *accepted {
                 tracing::info!("Remote execution registered: {message}");
             } else {
@@ -5983,7 +6226,7 @@ async fn handle_gateway_event(
             session_id,
             workspace_path,
         } => {
-            if let Some(c) = _client {
+            if let Some(c) = client {
                 let sender = c.sender();
                 let request_id = request_id.clone();
                 let tool_name = tool_name.clone();
@@ -6015,7 +6258,7 @@ async fn handle_gateway_event(
 
 use crate::state::{
     AgentInfo, AgentStatus, AuthMethodInfo, CredentialFieldInfo, CredentialSchemaInfo, CronJobInfo,
-    GatewayStatus, ModelProvider, ModelProviderModel, VaultStatus,
+    GatewayStatus, ModelProvider, ModelProviderModel, RemoteExecutorInfo, VaultStatus,
 };
 
 /// Build a reqwest client that accepts self-signed TLS certificates.
@@ -6091,6 +6334,17 @@ async fn check_gateway_status(gateway_url: &str) -> Result<GatewayStatus> {
             })
         }
     }
+}
+
+async fn load_remote_executors_from_gateway(gateway_url: &str) -> Result<Vec<RemoteExecutorInfo>> {
+    let response = http_client()
+        .get(format!("{gateway_url}/api/executors"))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        anyhow::bail!("gateway returned {}", response.status());
+    }
+    Ok(response.json::<Vec<RemoteExecutorInfo>>().await?)
 }
 
 /// Load agents from the gateway API, falling back to the config file if the gateway is unreachable.

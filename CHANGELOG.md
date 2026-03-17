@@ -11,6 +11,8 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
 ## [Unreleased]
 
 ### Added
+- **Gateway API**: `GET /api/executors` for listing connected remote executors,
+  their identities, advertised working directories, and capability sets
 - **Config**: Rich TUI theme token configuration via `[tui.theme]`
   - RGBA token overrides for border, text, AI/thinking/tool text, accents, graphs, and backgrounds
   - Backward-compatible preset resolution from legacy `color_theme`
@@ -26,6 +28,10 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
 - **TUI**: Dashboard Client card replaced Sessions overview with WS Connection detail panel
   showing RTT, server connections, server sessions, reconnect/disconnect counts
 - **TUI**: Gateway load sparkline now driven by `active_connections` instead of static data
+- **TUI**: Dashboard Noise and Exec cards for remote-exec visibility and control
+  - Noise card shows registration state and connected executor count
+  - Exec card shows current tool locality target and a detail overlay for switching
+    between the active client, gateway-local execution, and another connected executor
 - **TUI**: Settings overlay tab bar (General | Paths | About | Theme | Fonts) with Left/Right/Tab navigation
 - **TUI**: Theme picker in Settings — change color theme and animation style live with `[`/`]` keys
 - **TUI**: Rich settings overlay editor with token-level theme controls, live preview, and
@@ -36,6 +42,10 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
   - Automatic save of `[tui]`, `[tui.theme]`, and `[tui.fonts]` changes to `rockbot.toml`
 
 ### Fixed
+- **Remote execution**: TUI-originated shell/filesystem calls now default to the
+  active client's current working directory instead of the gateway host cwd
+- **Remote execution**: Explicit remote executor selection no longer inherits the
+  requesting client's cwd; selected executors fall back to their own advertised workdir
 - **TUI**: Chat input box now always visible (was missing on Dashboard/Butler and agent welcome screens)
 - **TUI**: Bottom status bar no longer shows persistent help text — only displays errors/success messages
 - **TUI**: Terminal no longer left in broken state on unclean exit — `TerminalGuard` RAII restores
@@ -46,6 +56,8 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
   text acceptance guarded to empty or Shift-only modifiers
 
 ### Changed
+- **WebSocket protocol**: `agent_message`, `tool_call`, and `tool_result` now carry
+  execution-locality metadata or executor-target hints for remote dispatch routing
 - **TUI**: Input architecture rewritten — replaced busy-loop `poll/read` inside `tokio::select!`
   with crossterm's async `EventStream` in a dedicated task, eliminating spurious wakeups
 - **TUI**: Input normalization layer (`InputAction` enum + `normalize_for_text_input()`) is now

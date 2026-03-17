@@ -323,7 +323,8 @@ This document tracks feature implementation status and helps identify gaps betwe
 | Agents view | ✅ | CRUD, modal editing |
 | Sessions view | ✅ | Card strip + chat |
 | Models view | ✅ | Dynamic provider list, test |
-| Settings view | 🚧 | |
+| Settings view | 🚧 | Rich theme editor shipped; broader settings still in progress |
+| Noise / execution cards | ✅ | Dashboard cards for Noise registration and tool locality targeting |
 | Vault unlock modal | ✅ | Auto-unlock for keyfile |
 | Real data binding | ✅ | Gateway API calls wired |
 | Gateway API calls | ✅ | |

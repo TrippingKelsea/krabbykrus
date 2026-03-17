@@ -8,6 +8,16 @@ use rockbot_config::{Config, CredentialsConfig, GatewayConfig};
 use rockbot_credentials::{generate_salt, CredentialManager, MasterKey};
 use rockbot_pki::KeyBackend;
 
+fn tool_locality_label(locality: &rockbot_agent::agent::ToolExecutionLocality) -> String {
+    match locality {
+        rockbot_agent::agent::ToolExecutionLocality::Gateway => "gateway".to_string(),
+        rockbot_agent::agent::ToolExecutionLocality::ActiveClient => "active_client".to_string(),
+        rockbot_agent::agent::ToolExecutionLocality::RemoteClient(target) => {
+            format!("remote:{target}")
+        }
+    }
+}
+
 /// Simple base64 encoding (using standard alphabet)
 #[cfg(feature = "remote-exec")]
 fn base64_encode(input: &[u8]) -> String {
@@ -284,6 +294,8 @@ enum WsMessageType {
         session_key: String,
         message: String,
         workspace: Option<String>,
+        executor_target: Option<String>,
+        allow_active_client_tools: Option<bool>,
     },
     #[serde(rename = "health_check")]
     HealthCheck,
@@ -350,6 +362,7 @@ enum WsResponseType {
         session_key: String,
         tool_name: String,
         arguments: String,
+        locality: Option<String>,
     },
     #[serde(rename = "tool_result")]
     ToolResult {
@@ -358,6 +371,7 @@ enum WsResponseType {
         result: String,
         success: bool,
         duration_ms: u64,
+        locality: Option<String>,
     },
     #[serde(rename = "agent_response")]
     AgentResponseMsg {
@@ -1580,6 +1594,7 @@ impl Gateway {
                 self.handle_trigger_cron_job(&path).await
             }
             (&Method::GET, "/api/cron/clients") => self.handle_list_cron_clients().await,
+            (&Method::GET, "/api/executors") => self.handle_list_executors().await,
             // Certificate API (PSK-authenticated CSR signing)
             (&Method::POST, "/api/cert/sign") => self.handle_cert_sign(req).await,
             (&Method::GET, "/api/cert/ca") => self.handle_cert_ca_info().await,
@@ -3812,6 +3827,8 @@ impl Gateway {
                 session_key,
                 message,
                 workspace,
+                executor_target,
+                allow_active_client_tools,
             } => {
                 self.handle_ws_agent_message(
                     conn_id,
@@ -3820,6 +3837,8 @@ impl Gateway {
                     session_key,
                     message,
                     workspace,
+                    executor_target,
+                    allow_active_client_tools,
                 )
                 .await;
             }
@@ -3955,6 +3974,8 @@ impl Gateway {
         session_key: String,
         user_message: String,
         workspace: Option<String>,
+        executor_target: Option<String>,
+        allow_active_client_tools: Option<bool>,
     ) {
         // Intercept /overseer commands before agent processing
         #[cfg(feature = "overseer")]
@@ -4072,8 +4093,43 @@ impl Gateway {
         // When a remote TUI sends its local cwd, that path won't exist here —
         // fall back to the agent's configured workspace instead.
         let workspace_path = workspace
+            .clone()
             .map(std::path::PathBuf::from)
             .filter(|p| p.exists());
+        let requesting_identity = self
+            .ws_connections
+            .read()
+            .await
+            .get(conn_id)
+            .and_then(|conn| conn.identity.as_ref())
+            .cloned();
+        let requesting_client_uuid = requesting_identity
+            .as_ref()
+            .map(|identity| identity.client_uuid.clone());
+        let resolved_executor_target = if executor_target.as_deref() == Some("gateway") {
+            None
+        } else if let Some(target) = executor_target.clone() {
+            Some(target)
+        } else if allow_active_client_tools.unwrap_or(true) {
+            requesting_client_uuid
+                .clone()
+                .or_else(|| Some(conn_id.to_string()))
+        } else {
+            None
+        };
+        let strict_executor_target = executor_target.is_some();
+        let is_active_client_target = resolved_executor_target.as_ref().is_some_and(|target| {
+            target == conn_id
+                || requesting_identity
+                    .as_ref()
+                    .map(|identity| identity.client_uuid.as_str())
+                    .is_some_and(|client_uuid| client_uuid == target)
+        });
+        let remote_workspace_override = if is_active_client_target {
+            workspace.clone()
+        } else {
+            None
+        };
 
         // Create a progress channel to send real-time updates to the client
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -4082,12 +4138,16 @@ impl Gateway {
         let progress_handle = tokio::spawn(async move {
             while let Some(event) = progress_rx.recv().await {
                 let messages: Vec<WsResponseType> = match event {
-                    rockbot_agent::agent::AgentProgressEvent::ToolStart { ref tool_name } => {
+                    rockbot_agent::agent::AgentProgressEvent::ToolStart {
+                        ref tool_name,
+                        ref locality,
+                    } => {
                         vec![
                             WsResponseType::ToolCall {
                                 session_key: progress_sk.clone(),
                                 tool_name: tool_name.clone(),
                                 arguments: String::new(),
+                                locality: Some(tool_locality_label(locality)),
                             },
                             WsResponseType::ThinkingStatus {
                                 session_key: progress_sk.clone(),
@@ -4101,6 +4161,7 @@ impl Gateway {
                         ref tool_name,
                         success,
                         duration_ms,
+                        ref locality,
                     } => {
                         vec![WsResponseType::ToolResult {
                             session_key: progress_sk.clone(),
@@ -4112,6 +4173,7 @@ impl Gateway {
                             },
                             success,
                             duration_ms,
+                            locality: Some(tool_locality_label(locality)),
                         }]
                     }
                     rockbot_agent::agent::AgentProgressEvent::ToolOutput {
@@ -4119,6 +4181,7 @@ impl Gateway {
                         ref output,
                         success,
                         duration_ms,
+                        ref locality,
                     } => {
                         // Send structured tool result (not injected into chat stream)
                         let truncated = if output.len() > 500 {
@@ -4132,6 +4195,7 @@ impl Gateway {
                             result: truncated,
                             success,
                             duration_ms,
+                            locality: Some(tool_locality_label(locality)),
                         }]
                     }
                     rockbot_agent::agent::AgentProgressEvent::TextDelta { ref text } => {
@@ -4189,7 +4253,15 @@ impl Gateway {
 
         // Run the agent with progress reporting
         let mut result = agent
-            .process_message_with_progress(session_id.clone(), message, workspace_path, progress_tx)
+            .process_message_with_progress(
+                session_id.clone(),
+                message,
+                workspace_path,
+                resolved_executor_target.clone(),
+                strict_executor_target,
+                remote_workspace_override,
+                progress_tx,
+            )
             .await;
 
         // Progress channel is closed when agent completes; clean up the forwarder
@@ -4236,7 +4308,14 @@ impl Gateway {
                         .with_role(rockbot_config::message::MessageRole::User);
 
                     result = target_agent
-                        .process_message(session_id.clone(), msg, None)
+                        .process_message(
+                            session_id.clone(),
+                            msg,
+                            None,
+                            resolved_executor_target.clone(),
+                            strict_executor_target,
+                            workspace.clone(),
+                        )
                         .await;
                 } else {
                     warn!("Handoff target '{}' not found", handoff.target_agent_id);
@@ -4560,7 +4639,27 @@ impl Gateway {
             working_dir,
         };
 
+        let identity = self
+            .ws_connections
+            .read()
+            .await
+            .get(conn_id)
+            .and_then(|conn| conn.identity.as_ref())
+            .map(|id| rockbot_client::remote_exec::ExecutorIdentity {
+                conn_id: conn_id.to_string(),
+                client_uuid: Some(id.client_uuid.clone()),
+                hostname: Some(id.hostname.clone()),
+                label: id.label.clone(),
+            })
+            .unwrap_or_else(|| rockbot_client::remote_exec::ExecutorIdentity {
+                conn_id: conn_id.to_string(),
+                client_uuid: None,
+                hostname: None,
+                label: None,
+            });
+
         let session = NoiseSession {
+            identity,
             conn_id: conn_id.to_string(),
             transport,
             capabilities: client_caps,
@@ -5388,12 +5487,27 @@ impl Gateway {
             .with_session_id(&session_id)
             .with_role(MessageRole::User);
 
+        let workspace_override = request
+            .workspace
+            .as_ref()
+            .map(|workspace| std::path::PathBuf::from(workspace.as_str()));
+        let remote_workspace_override = if request.allow_active_client_tools.unwrap_or(false) {
+            request.workspace.clone()
+        } else {
+            None
+        };
+        let executor_target = request.executor_target.clone();
+        let strict_executor_target = executor_target.is_some();
+
         // Process message with optional workspace override from the client
         Ok(agent
             .process_message(
                 session_id,
                 message,
-                request.workspace.map(std::path::PathBuf::from),
+                workspace_override,
+                executor_target,
+                strict_executor_target,
+                remote_workspace_override,
             )
             .await?)
     }
@@ -5778,6 +5892,56 @@ impl Gateway {
             .unwrap())
     }
 
+    /// List registered remote executors with identity and capability details.
+    #[cfg(feature = "remote-exec")]
+    async fn handle_list_executors(
+        &self,
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        let executors = self.remote_exec_registry.list_executors().await;
+        let payload: Vec<serde_json::Value> = executors
+            .into_iter()
+            .map(|(conn_id, identity, caps)| {
+                let target_id = identity
+                    .client_uuid
+                    .clone()
+                    .unwrap_or_else(|| conn_id.clone());
+                let capabilities: Vec<String> = caps
+                    .capabilities
+                    .iter()
+                    .map(|cap| format!("{cap:?}").to_lowercase())
+                    .collect();
+                serde_json::json!({
+                    "conn_id": conn_id,
+                    "target_id": target_id,
+                    "client_uuid": identity.client_uuid,
+                    "hostname": identity.hostname,
+                    "label": identity.label,
+                    "client_type": caps.client_type,
+                    "working_dir": caps.working_dir,
+                    "capabilities": capabilities,
+                    "connected": true,
+                })
+            })
+            .collect();
+        let json = serde_json::to_string(&payload).unwrap_or_else(|_| "[]".to_string());
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(GatewayBody::Left(Full::new(json.into())))
+            .unwrap())
+    }
+
+    #[cfg(not(feature = "remote-exec"))]
+    async fn handle_list_executors(
+        &self,
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(GatewayBody::Left(Full::new("[]".into())))
+            .unwrap())
+    }
+
     // ==================== Certificate API Handlers ====================
 
     /// Handle POST /api/cert/sign — PSK-authenticated CSR signing
@@ -6122,7 +6286,7 @@ impl rockbot_tools::AgentInvoker for GatewayInvoker {
             .with_role(rockbot_config::message::MessageRole::User);
 
         match agent
-            .process_message(session_id.to_string(), msg, None)
+            .process_message(session_id.to_string(), msg, None, None, false, None)
             .await
         {
             Ok(response) => {
@@ -6179,6 +6343,12 @@ struct MessageRequest {
     message: String,
     /// Working directory override (e.g. TUI's cwd)
     workspace: Option<String>,
+    /// Explicit execution target: "gateway" or a client UUID/label/hostname.
+    #[serde(default)]
+    executor_target: Option<String>,
+    /// Whether the requesting active client should be used for tools by default.
+    #[serde(default)]
+    allow_active_client_tools: Option<bool>,
 }
 
 /// HTTP API error response
@@ -6247,7 +6417,10 @@ impl GatewayCronExecutor {
         let user_message = rockbot_config::message::Message::text(&message_text)
             .with_role(rockbot_config::message::MessageRole::User);
 
-        match agent.process_message(session_id, user_message, None).await {
+        match agent
+            .process_message(session_id, user_message, None, None, false, None)
+            .await
+        {
             Ok(response) => {
                 debug!(
                     "Cron job '{}' completed: {} tokens used",

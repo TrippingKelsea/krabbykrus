@@ -48,6 +48,15 @@ pub enum Message {
         reason: Option<String>,
     },
     WsLatencySample(u64),
+    NoiseStatusChanged {
+        registered: bool,
+        message: String,
+    },
+    RemoteExecutorsLoaded(Vec<RemoteExecutorInfo>),
+    RemoteExecutorsError(String),
+    ToolExecutionObserved {
+        locality: Option<String>,
+    },
 
     // Agents
     AgentsLoaded(Vec<AgentInfo>),
@@ -214,6 +223,8 @@ pub enum CardWidgetId {
     ClientStatus,
     ClientMessages,
     ClientResources,
+    NoiseStatus,
+    ExecutionTarget,
     AgentOverview,
     AgentSessions,
     AgentTools,
@@ -438,6 +449,28 @@ fn build_dashboard_slots() -> Vec<CardSlot> {
             kind: SlotKind::InfoCard,
         },
         CardSlot {
+            label: "Noise".to_string(),
+            icon: 'N',
+            badge: None,
+            views: vec![SlotView {
+                label: "Status".to_string(),
+                widget: CardWidgetId::NoiseStatus,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+        CardSlot {
+            label: "Exec".to_string(),
+            icon: 'X',
+            badge: None,
+            views: vec![SlotView {
+                label: "Target".to_string(),
+                widget: CardWidgetId::ExecutionTarget,
+            }],
+            active_view: 0,
+            kind: SlotKind::InfoCard,
+        },
+        CardSlot {
             label: "Agents".to_string(),
             icon: 'A',
             badge: None,
@@ -540,6 +573,30 @@ pub struct GatewayStatus {
     pub active_connections: usize,
     pub active_sessions: usize,
     pub pending_agents: usize,
+}
+
+/// A connected remote executor exposed by the gateway.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct RemoteExecutorInfo {
+    pub conn_id: String,
+    pub target_id: String,
+    pub client_uuid: Option<String>,
+    pub hostname: Option<String>,
+    pub label: Option<String>,
+    pub client_type: String,
+    pub working_dir: Option<String>,
+    pub capabilities: Vec<String>,
+    pub connected: bool,
+}
+
+impl RemoteExecutorInfo {
+    pub fn display_name(&self) -> String {
+        self.label
+            .clone()
+            .or_else(|| self.hostname.clone())
+            .or_else(|| self.client_uuid.clone())
+            .unwrap_or_else(|| self.conn_id.clone())
+    }
 }
 
 /// Agent information
@@ -1139,6 +1196,19 @@ pub struct AppState {
     pub ws_disconnect_count: u64,
     pub ws_reconnect_count: u64,
     pub ws_last_disconnect_reason: Option<String>,
+    pub noise_registered: bool,
+    pub noise_status_message: Option<String>,
+    pub remote_executors: Vec<RemoteExecutorInfo>,
+    pub remote_executors_loading: bool,
+    pub remote_executors_error: Option<String>,
+    pub allow_local_tool_execution: bool,
+    pub selected_executor_target: Option<String>,
+    pub selected_executor_index: usize,
+    pub local_hostname: Option<String>,
+    pub last_tool_locality: Option<String>,
+    pub local_tool_exec_count: u64,
+    pub gateway_tool_exec_count: u64,
+    pub remote_tool_exec_count: u64,
     // Settings card selection (General=0, Paths=1, About=2, Theme=3, Typography=4)
     pub selected_settings_card: usize,
     // Theme section field (0=preset, 1=animation, 2=token, 3=hue, 4=sat, 5=value, 6=alpha)
@@ -3007,6 +3077,21 @@ impl AppState {
             ws_disconnect_count: 0,
             ws_reconnect_count: 0,
             ws_last_disconnect_reason: None,
+            noise_registered: false,
+            noise_status_message: None,
+            remote_executors: Vec::new(),
+            remote_executors_loading: false,
+            remote_executors_error: None,
+            allow_local_tool_execution: true,
+            selected_executor_target: None,
+            selected_executor_index: 0,
+            local_hostname: std::env::var("HOSTNAME")
+                .ok()
+                .or_else(|| std::env::var("COMPUTERNAME").ok()),
+            last_tool_locality: None,
+            local_tool_exec_count: 0,
+            gateway_tool_exec_count: 0,
+            remote_tool_exec_count: 0,
             selected_settings_card: 0,
             selected_settings_field: 0,
             selected_theme_token: 0,
@@ -3090,6 +3175,7 @@ impl AppState {
                     }
                     self.ws_connected = false;
                     self.ws_last_disconnect_reason = reason;
+                    self.noise_registered = false;
                 }
             }
             Message::WsLatencySample(rtt_ms) => {
@@ -3097,6 +3183,51 @@ impl AppState {
                 self.ws_latency_history.push_back(rtt_ms);
                 while self.ws_latency_history.len() > 60 {
                     self.ws_latency_history.pop_front();
+                }
+            }
+            Message::NoiseStatusChanged {
+                registered,
+                message,
+            } => {
+                self.noise_registered = registered;
+                self.noise_status_message = Some(message);
+            }
+            Message::RemoteExecutorsLoaded(executors) => {
+                self.remote_executors = executors;
+                self.remote_executors_loading = false;
+                self.remote_executors_error = None;
+                if let Some(target) = self.selected_executor_target.as_ref() {
+                    if !self
+                        .remote_executors
+                        .iter()
+                        .any(|executor| &executor.target_id == target)
+                    {
+                        self.selected_executor_target = None;
+                    }
+                }
+                if self.selected_executor_index >= self.remote_executors.len() {
+                    self.selected_executor_index = self.remote_executors.len().saturating_sub(1);
+                }
+            }
+            Message::RemoteExecutorsError(err) => {
+                self.remote_executors_loading = false;
+                self.remote_executors_error = Some(err.clone());
+                self.push_alert(AlertSeverity::Warning, "remote-exec", err);
+            }
+            Message::ToolExecutionObserved { locality } => {
+                self.last_tool_locality = locality.clone();
+                match locality.as_deref() {
+                    Some("gateway") => {
+                        self.gateway_tool_exec_count =
+                            self.gateway_tool_exec_count.saturating_add(1)
+                    }
+                    Some("active_client") => {
+                        self.local_tool_exec_count = self.local_tool_exec_count.saturating_add(1)
+                    }
+                    Some(value) if value.starts_with("remote:") => {
+                        self.remote_tool_exec_count = self.remote_tool_exec_count.saturating_add(1)
+                    }
+                    _ => {}
                 }
             }
 

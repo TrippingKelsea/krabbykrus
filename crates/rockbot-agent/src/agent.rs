@@ -275,6 +275,12 @@ struct ProcessingContext {
     token_count: usize,
     /// Working directory override (e.g. from TUI's cwd)
     workspace_override: Option<std::path::PathBuf>,
+    /// Explicit remote executor target (client UUID/label/hostname/conn_id).
+    remote_executor_target: Option<String>,
+    /// When true, do not silently fall back to gateway execution.
+    remote_executor_strict: bool,
+    /// Client-side working directory for remote-dispatched tools.
+    remote_workspace_override: Option<String>,
 }
 
 /// Agent execution statistics
@@ -385,13 +391,17 @@ pub struct TokenUsage {
 pub enum AgentProgressEvent {
     /// A tool is about to be executed
     #[serde(rename = "tool_start")]
-    ToolStart { tool_name: String },
+    ToolStart {
+        tool_name: String,
+        locality: ToolExecutionLocality,
+    },
     /// A tool finished executing
     #[serde(rename = "tool_done")]
     ToolDone {
         tool_name: String,
         success: bool,
         duration_ms: u64,
+        locality: ToolExecutionLocality,
     },
     /// An LLM call is starting (with context size info)
     #[serde(rename = "llm_call")]
@@ -409,6 +419,7 @@ pub enum AgentProgressEvent {
         output: String,
         success: bool,
         duration_ms: u64,
+        locality: ToolExecutionLocality,
     },
     /// Token usage update after an LLM call
     #[serde(rename = "token_usage")]
@@ -429,6 +440,15 @@ pub enum AgentProgressEvent {
 
 /// Convenience type for a progress sender
 pub type ProgressSender = tokio::sync::mpsc::UnboundedSender<AgentProgressEvent>;
+
+/// Where a tool actually executed.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExecutionLocality {
+    Gateway,
+    ActiveClient,
+    RemoteClient(String),
+}
 
 impl Agent {
     /// Create a new agent with the given configuration
@@ -581,9 +601,20 @@ impl Agent {
         session_id: String,
         message: Message,
         workspace_override: Option<std::path::PathBuf>,
+        remote_executor_target: Option<String>,
+        remote_executor_strict: bool,
+        remote_workspace_override: Option<String>,
     ) -> Result<AgentResponse> {
-        self.process_message_inner(session_id, message, workspace_override, None)
-            .await
+        self.process_message_inner(
+            session_id,
+            message,
+            workspace_override,
+            remote_executor_target,
+            remote_executor_strict,
+            remote_workspace_override,
+            None,
+        )
+        .await
     }
 
     /// Like `process_message`, but sends real-time progress events to the
@@ -593,10 +624,21 @@ impl Agent {
         session_id: String,
         message: Message,
         workspace_override: Option<std::path::PathBuf>,
+        remote_executor_target: Option<String>,
+        remote_executor_strict: bool,
+        remote_workspace_override: Option<String>,
         progress_tx: ProgressSender,
     ) -> Result<AgentResponse> {
-        self.process_message_inner(session_id, message, workspace_override, Some(progress_tx))
-            .await
+        self.process_message_inner(
+            session_id,
+            message,
+            workspace_override,
+            remote_executor_target,
+            remote_executor_strict,
+            remote_workspace_override,
+            Some(progress_tx),
+        )
+        .await
     }
 
     async fn process_message_inner(
@@ -604,6 +646,9 @@ impl Agent {
         session_id: String,
         message: Message,
         workspace_override: Option<std::path::PathBuf>,
+        remote_executor_target: Option<String>,
+        remote_executor_strict: bool,
+        remote_workspace_override: Option<String>,
         progress_tx: Option<ProgressSender>,
     ) -> Result<AgentResponse> {
         let start_time = std::time::Instant::now();
@@ -678,6 +723,9 @@ impl Agent {
                 message,
                 available_tools,
                 workspace_override,
+                remote_executor_target,
+                remote_executor_strict,
+                remote_workspace_override,
             )
             .await?;
 
@@ -1032,6 +1080,9 @@ impl Agent {
                 message,
                 available_tools,
                 workspace_override,
+                None,
+                false,
+                None,
             )
             .await?;
 
@@ -1365,7 +1416,7 @@ impl Agent {
 
             let effective_workspace = self.resolve_workspace(context);
             let (tool_results, tool_messages, handoff_signal) = self
-                .execute_tool_calls(session_id, &current_response, &effective_workspace)
+                .execute_tool_calls(session_id, &current_response, &effective_workspace, context)
                 .await?;
 
             // If handoff detected in streaming path, break immediately
@@ -1522,6 +1573,9 @@ impl Agent {
         message: Message,
         available_tools: Vec<String>,
         workspace_override: Option<std::path::PathBuf>,
+        remote_executor_target: Option<String>,
+        remote_executor_strict: bool,
+        remote_workspace_override: Option<String>,
     ) -> Result<ProcessingContext> {
         // Check if we need to load history (context doesn't exist in memory yet)
         let needs_history = {
@@ -1566,12 +1620,18 @@ impl Agent {
                 available_tools: available_tools.clone(),
                 token_count: 0,
                 workspace_override: None,
+                remote_executor_target: None,
+                remote_executor_strict: false,
+                remote_workspace_override: None,
             });
 
         // Apply workspace override if provided
         if workspace_override.is_some() {
             context.workspace_override = workspace_override;
         }
+        context.remote_executor_target = remote_executor_target;
+        context.remote_executor_strict = remote_executor_strict;
+        context.remote_workspace_override = remote_workspace_override;
 
         // Add new message to context
         context.messages.push(message);
@@ -2746,6 +2806,13 @@ The user wants me to explore the codebase. I should start by listing the directo
                         if let Some(ref tx) = progress_tx {
                             let _ = tx.send(AgentProgressEvent::ToolStart {
                                 tool_name: tc.function.name.clone(),
+                                locality: if context.remote_workspace_override.is_some() {
+                                    ToolExecutionLocality::ActiveClient
+                                } else if let Some(ref target) = context.remote_executor_target {
+                                    ToolExecutionLocality::RemoteClient(target.clone())
+                                } else {
+                                    ToolExecutionLocality::Gateway
+                                },
                             });
                         }
                     }
@@ -2754,7 +2821,7 @@ The user wants me to explore the codebase. I should start by listing the directo
 
             let effective_workspace = self.resolve_workspace(context);
             let (tool_results, tool_messages, handoff_signal) = self
-                .execute_tool_calls(session_id, &current_response, &effective_workspace)
+                .execute_tool_calls(session_id, &current_response, &effective_workspace, context)
                 .await?;
 
             // Notify progress listener of completed tool calls with output
@@ -2766,6 +2833,13 @@ The user wants me to explore the codebase. I should start by listing the directo
                         output,
                         success: tr.success,
                         duration_ms: tr.execution_time_ms,
+                        locality: if context.remote_workspace_override.is_some() {
+                            ToolExecutionLocality::ActiveClient
+                        } else if let Some(ref target) = context.remote_executor_target {
+                            ToolExecutionLocality::RemoteClient(target.clone())
+                        } else {
+                            ToolExecutionLocality::Gateway
+                        },
                     });
                 }
             }
@@ -3286,6 +3360,7 @@ The user wants me to explore the codebase. I should start by listing the directo
                         WorkflowProgressEvent::NodeStarted { node_id, agent_id } => {
                             let _ = tx.send(AgentProgressEvent::ToolStart {
                                 tool_name: format!("workflow:{node_id}@{agent_id}"),
+                                locality: ToolExecutionLocality::Gateway,
                             });
                         }
                         WorkflowProgressEvent::NodeCompleted {
@@ -3297,6 +3372,7 @@ The user wants me to explore the codebase. I should start by listing the directo
                                 output: output_preview,
                                 success: true,
                                 duration_ms: 0,
+                                locality: ToolExecutionLocality::Gateway,
                             });
                         }
                         WorkflowProgressEvent::NodeFailed { node_id, error } => {
@@ -3381,6 +3457,7 @@ The user wants me to explore the codebase. I should start by listing the directo
         session_id: &str,
         llm_response: &ChatCompletionResponse,
         workspace: &std::path::Path,
+        _context: &ProcessingContext,
     ) -> Result<(
         Vec<ToolExecutionResult>,
         Vec<Message>,
@@ -3465,11 +3542,75 @@ The user wants me to explore the codebase. I should start by listing the directo
                     let tool_start = std::time::Instant::now();
                     let tool_timeout = Duration::from_secs(self.config.tool_timeout_secs);
 
+                    #[cfg(feature = "remote-exec")]
+                    let remote_workspace = _context
+                        .remote_workspace_override
+                        .clone()
+                        .unwrap_or_else(|| workspace.to_string_lossy().to_string());
+
                     // Try remote dispatch first if a capable client is connected
                     #[cfg(feature = "remote-exec")]
-                    let remote_result = {
+                    let remote_result: Option<(
+                        rockbot_client::remote_exec::RemoteToolResponse,
+                        ToolExecutionLocality,
+                    )> = {
                         if let Some(ref registry) = self.remote_exec_registry {
-                            if registry
+                            if let Some(ref target) = _context.remote_executor_target {
+                                info!(
+                                    "Dispatching tool '{}' to explicit remote executor '{}'",
+                                    tool_call.function.name, target
+                                );
+                                match registry
+                                    .dispatch_to_target(
+                                        target,
+                                        &tool_call.function.name,
+                                        &tool_call.function.arguments,
+                                        &self.config.id,
+                                        session_id,
+                                        &remote_workspace,
+                                        tool_timeout,
+                                    )
+                                    .await
+                                {
+                                    Some(resp) => {
+                                        let locality =
+                                            if _context.remote_workspace_override.is_some() {
+                                                ToolExecutionLocality::ActiveClient
+                                            } else {
+                                                ToolExecutionLocality::RemoteClient(target.clone())
+                                            };
+                                        Some((resp, locality))
+                                    }
+                                    None if _context.remote_executor_strict => {
+                                        let error_message = Message::tool_result(
+                                            tool_call.id.clone(),
+                                            tool_call.function.name.clone(),
+                                            format!(
+                                                "Requested executor '{}' is unavailable for tool '{}'",
+                                                target, tool_call.function.name
+                                            ),
+                                        )
+                                        .with_session_id(session_id);
+                                        tool_messages.push(error_message);
+                                        tool_results.push(ToolExecutionResult {
+                                            tool_name: tool_call.function.name.clone(),
+                                            result: ToolResult::Error {
+                                                message: format!(
+                                                    "Executor '{}' unavailable",
+                                                    target
+                                                ),
+                                                code: None,
+                                                details: None,
+                                            },
+                                            success: false,
+                                            execution_time_ms: tool_start.elapsed().as_millis()
+                                                as u64,
+                                        });
+                                        continue;
+                                    }
+                                    None => None,
+                                }
+                            } else if registry
                                 .find_executor(&tool_call.function.name)
                                 .await
                                 .is_some()
@@ -3484,10 +3625,16 @@ The user wants me to explore the codebase. I should start by listing the directo
                                         &tool_call.function.arguments,
                                         &self.config.id,
                                         session_id,
-                                        &workspace.to_string_lossy(),
+                                        &remote_workspace,
                                         tool_timeout,
                                     )
                                     .await
+                                    .map(|resp| {
+                                        (
+                                            resp,
+                                            ToolExecutionLocality::RemoteClient("auto".to_string()),
+                                        )
+                                    })
                             } else {
                                 None
                             }
@@ -3497,7 +3644,7 @@ The user wants me to explore the codebase. I should start by listing the directo
                     };
 
                     #[cfg(feature = "remote-exec")]
-                    if let Some(remote_resp) = remote_result {
+                    if let Some((remote_resp, _locality)) = remote_result {
                         let elapsed = tool_start.elapsed();
                         info!(
                             "Remote tool '{}' completed: success={}, time={}ms",
@@ -4257,6 +4404,9 @@ mod tests {
             available_tools: vec![],
             token_count: 0,
             workspace_override: None,
+            remote_executor_target: None,
+            remote_executor_strict: false,
+            remote_workspace_override: None,
         }
     }
 

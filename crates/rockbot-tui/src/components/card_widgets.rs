@@ -23,6 +23,8 @@ pub fn render_card_widget(id: &CardWidgetId, frame: &mut Frame, area: Rect, stat
         CardWidgetId::ClientStatus => render_client_status(frame, area, state),
         CardWidgetId::ClientMessages => render_client_messages(frame, area, state),
         CardWidgetId::ClientResources => render_client_resources(frame, area),
+        CardWidgetId::NoiseStatus => render_noise_status(frame, area, state),
+        CardWidgetId::ExecutionTarget => render_execution_target(frame, area, state),
         CardWidgetId::AgentOverview => render_agent_overview(frame, area, state),
         CardWidgetId::AgentSessions => render_agent_sessions(frame, area, state),
         CardWidgetId::AgentTools => render_agent_tools(frame, area),
@@ -189,6 +191,72 @@ fn render_client_messages(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let detail = Paragraph::new(Span::styled(
         format!("{} sessions", state.sessions.len()),
+        Style::default().fg(palette::text_secondary(&state.tui_config)),
+    ));
+    frame.render_widget(detail, rows[2]);
+}
+
+fn render_noise_status(frame: &mut Frame, area: Rect, state: &AppState) {
+    let rows = card_rows(area);
+    let label = Paragraph::new(Span::styled(
+        "Noise",
+        Style::default()
+            .fg(palette::text_secondary(&state.tui_config))
+            .add_modifier(Modifier::DIM),
+    ));
+    frame.render_widget(label, rows[0]);
+
+    let (text, color) = if state.noise_registered {
+        ("● Secured", Color::Green)
+    } else if state.ws_connected {
+        ("◌ Pending", Color::Yellow)
+    } else {
+        ("○ Offline", Color::DarkGray)
+    };
+    let value = Paragraph::new(Span::styled(text, Style::default().fg(color)));
+    frame.render_widget(value, rows[1]);
+
+    let detail = Paragraph::new(Span::styled(
+        format!("{} exec", state.remote_executors.len()),
+        Style::default().fg(palette::text_secondary(&state.tui_config)),
+    ));
+    frame.render_widget(detail, rows[2]);
+}
+
+fn render_execution_target(frame: &mut Frame, area: Rect, state: &AppState) {
+    let rows = card_rows(area);
+    let label = Paragraph::new(Span::styled(
+        "Exec",
+        Style::default()
+            .fg(palette::text_secondary(&state.tui_config))
+            .add_modifier(Modifier::DIM),
+    ));
+    frame.render_widget(label, rows[0]);
+
+    let target_label = if state.allow_local_tool_execution {
+        "Local".to_string()
+    } else if let Some(target) = state.selected_executor_target.as_deref() {
+        state
+            .remote_executors
+            .iter()
+            .find(|executor| executor.target_id == target)
+            .map(|executor| executor.display_name())
+            .unwrap_or_else(|| target.to_string())
+    } else {
+        "Gateway".to_string()
+    };
+
+    let value = Paragraph::new(Span::styled(
+        target_label,
+        Style::default().fg(palette::accent_primary(&state.tui_config)),
+    ));
+    frame.render_widget(value, rows[1]);
+
+    let detail = Paragraph::new(Span::styled(
+        state
+            .last_tool_locality
+            .clone()
+            .unwrap_or_else(|| "idle".to_string()),
         Style::default().fg(palette::text_secondary(&state.tui_config)),
     ));
     frame.render_widget(detail, rows[2]);

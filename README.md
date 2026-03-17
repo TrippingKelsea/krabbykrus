@@ -29,7 +29,7 @@ exposed to the agent.
 - **mTLS by default** — built-in PKI with CA, client certs, and enrollment
 - **Terminal UI + Web dashboard** — manage everything from either interface
 - **Multi-agent orchestration** — handoffs, swarm blackboards, graph workflows
-- **Remote tool execution** — Noise Protocol encrypted dispatch to clients
+- **Remote tool execution** — Noise-backed client registration and remote dispatch
 - **Modular crate architecture** — compile only what you need
 
 ## Quick Start

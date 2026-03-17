@@ -13,6 +13,7 @@ When TLS is configured (default), use `https://` and `wss://` schemes.
 |--------|----------|-------------|
 | GET | `/health` | Health check (returns `{"status":"ok"}`) |
 | GET | `/api/status` | Gateway status (version, uptime, connections, agents) |
+| GET | `/api/executors` | List connected remote executors and their advertised workdirs/capabilities |
 | GET | `/api/metrics` | Prometheus-style metrics |
 
 ### Agents
@@ -132,7 +133,7 @@ All messages are JSON with a `"type"` field.
 
 | Type | Description |
 |------|-------------|
-| `agent_message` | Send message to an agent (`agent_id`, `session_key`, `message`) |
+| `agent_message` | Send message to an agent (`agent_id`, `session_key`, `message`, optional `workspace`, `executor_target`, `allow_active_client_tools`) |
 | `health_check` | Request health status |
 | `ping` | Keepalive |
 | `client_identify` | Identify client with a label (for cron dispatch) |
@@ -147,8 +148,9 @@ All messages are JSON with a `"type"` field.
 | `stream_chunk` | Incremental streaming text delta |
 | `agent_response` | Final complete response |
 | `agent_error` | Processing error |
-| `tool_call` | Tool execution started |
-| `tool_result` | Tool execution completed |
+| `tool_call` | Tool execution started (`locality` may be `gateway`, `active_client`, or `remote:<target>`) |
+| `tool_result` | Tool execution completed (`locality` mirrors the execution site) |
+| `client_identity_assigned` | Confirms the gateway-side client UUID/label after `client_identify` |
 | `token_usage` | Token usage update |
 | `thinking_status` | Agent processing phase update |
 | `health_status` | Health status response |
