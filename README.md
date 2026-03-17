@@ -68,7 +68,8 @@ rockbot tui -g 192.168.1.10:18080
 
 ```bash
 cargo build --release                        # default features
-cargo build --release -F remote-exec         # + Noise Protocol remote execution
+cargo build --release -F noise               # + Noise transport primitives
+cargo build --release -F remote-exec         # + remote executor dispatch over Noise
 cargo build --release -F overseer            # + embedded local-model oversight
 cargo build --release -F http-insecure       # allow plain HTTP (TLS is default)
 cargo build --release -F all-providers       # all LLM backends

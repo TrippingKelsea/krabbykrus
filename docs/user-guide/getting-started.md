@@ -155,6 +155,13 @@ Build with the `remote-exec` feature to let the gateway dispatch tool calls
 cargo build --release -F remote-exec
 ```
 
+If you only want the Noise transport primitives without remote executor
+dispatch, build with:
+
+```bash
+cargo build --release -F noise
+```
+
 When the TUI connects, it automatically registers as a remote executor after
 the Noise handshake completes. The Dashboard also exposes Noise and execution
 target cards so you can verify registration state and choose whether tools run
@@ -190,7 +197,8 @@ rockbot credentials list
 | `conservative` | Default profile: bedrock + telegram + signal + built-in tool crates |
 | `enhanced` | Conservative plus overseer, doctor-ai, and vault replication |
 | `experimental` | Enhanced plus telemetry and S3/Route53 deployment helpers |
-| `remote-exec` | Noise Protocol remote tool dispatch |
+| `noise` | Noise handshake and transport primitives |
+| `remote-exec` | Remote tool dispatch built on Noise |
 | `overseer` | Embedded local-model agent oversight |
 | `doctor-ai` | Local AI-powered configuration diagnostics and repair |
 | `bedrock-deploy` | S3 CA distribution and Route53 DNS provisioning |

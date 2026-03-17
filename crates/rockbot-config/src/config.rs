@@ -626,6 +626,42 @@ pub struct SecurityConfig {
     /// Capability restrictions
     #[serde(default)]
     pub capabilities: CapabilityConfig,
+    /// Noise transport policy for future secure WS/stream encapsulation.
+    #[serde(default)]
+    pub noise: NoiseTransportConfig,
+}
+
+/// Policy for layering an application stream over Noise transport.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NoiseChannelMode {
+    /// Use the existing transport only.
+    #[default]
+    Disabled,
+    /// Attempt Noise encapsulation when both peers support it.
+    Preferred,
+    /// Refuse to continue unless Noise encapsulation is active.
+    Required,
+}
+
+/// Transport policy for Noise-backed channels.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoiseTransportConfig {
+    /// Whether to encapsulate the main WebSocket message channel inside Noise.
+    #[serde(default)]
+    pub websocket_mode: NoiseChannelMode,
+    /// Whether to encapsulate model streaming/progress channels inside Noise.
+    #[serde(default)]
+    pub stream_mode: NoiseChannelMode,
+}
+
+impl Default for NoiseTransportConfig {
+    fn default() -> Self {
+        Self {
+            websocket_mode: NoiseChannelMode::Disabled,
+            stream_mode: NoiseChannelMode::Disabled,
+        }
+    }
 }
 
 /// Credentials configuration
@@ -1288,6 +1324,7 @@ mod tests {
                     image: None,
                 },
                 capabilities: CapabilityConfig::default(),
+                noise: NoiseTransportConfig::default(),
             },
             credentials: CredentialsConfig::default(),
             providers: ProvidersConfig::default(),

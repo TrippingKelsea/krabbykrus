@@ -26,8 +26,10 @@ overseer = ["rockbot-core/overseer", "rockbot-tui/overseer"]
 doctor-ai = ["dep:rockbot-doctor", "rockbot-tui/doctor-ai"]
 # Embedded butler companion agent
 butler = ["dep:rockbot-butler", "rockbot-core/butler", "rockbot-tui/butler"]
+# Noise handshake and transport primitives
+noise = ["rockbot-core/noise", "rockbot-client/noise", "rockbot-tui/noise"]
 # Remote tool execution
-remote-exec = ["rockbot-core/remote-exec", "rockbot-client/remote-exec", "rockbot-tui/remote-exec"]
+remote-exec = ["noise", "rockbot-core/remote-exec", "rockbot-client/remote-exec", "rockbot-tui/remote-exec"]
 # S3 CA distribution + Route53 DNS
 bedrock-deploy = ["dep:rockbot-deploy", "rockbot-deploy/bedrock", "rockbot-core/bedrock-deploy"]
 # Allow plain-text HTTP/WS connections

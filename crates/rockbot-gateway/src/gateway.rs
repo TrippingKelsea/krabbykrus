@@ -3723,7 +3723,14 @@ impl Gateway {
                 msg = ws_source.next() => {
                     match msg {
                         Some(Ok(WsMessage::Text(text))) => {
-                            self.handle_ws_message(&conn_id, &outbound_tx, &text).await;
+                            let gateway = self.clone();
+                            let conn_id_clone = conn_id.clone();
+                            let outbound_clone = outbound_tx.clone();
+                            tokio::spawn(async move {
+                                gateway
+                                    .handle_ws_message(&conn_id_clone, &outbound_clone, &text)
+                                    .await;
+                            });
                         }
                         Some(Ok(WsMessage::Ping(data))) => {
                             let _ = outbound_tx.send(WsMessage::Pong(data));
@@ -6530,6 +6537,7 @@ mod tests {
                     image: None,
                 },
                 capabilities: Default::default(),
+                noise: rockbot_config::NoiseTransportConfig::default(),
             },
             credentials: CredentialsConfig::default(),
             providers: ProvidersConfig::default(),

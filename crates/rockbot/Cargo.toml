@@ -38,12 +38,14 @@ all-tools = ["tools-credentials", "tools-mcp", "tools-markdown"]
 otel = ["rockbot-core/otel"]
 # Embedded overseer
 overseer = ["rockbot-cli/overseer", "rockbot-core/overseer"]
-# Remote tool execution
-remote-exec = ["rockbot-cli/remote-exec", "rockbot-core/remote-exec"]
 # Embedded doctor AI for config diagnostics
 doctor-ai = ["rockbot-cli/doctor-ai"]
 # Embedded butler companion agent
 butler = ["rockbot-cli/butler", "rockbot-core/butler"]
+# Noise handshake and transport primitives
+noise = ["rockbot-cli/noise", "rockbot-core/noise"]
+# Remote tool execution
+remote-exec = ["noise", "rockbot-cli/remote-exec", "rockbot-core/remote-exec"]
 # Vault replication (OpenRaft)
 vault-replication = ["rockbot-credentials/vault-replication"]
 # S3 CA distribution + Route53 DNS

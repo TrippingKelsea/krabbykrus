@@ -163,7 +163,16 @@ max_request_size = 10485760    # 10 MB
 allowed_commands = ["git", "cargo", "npm"]
 blocked_commands = ["rm", "dd"]
 max_execution_time = 60
+
+[security.noise]
+websocket_mode = "disabled"   # "disabled", "preferred", "required"
+stream_mode = "disabled"      # "disabled", "preferred", "required"
 ```
+
+`[security.noise]` is transport-policy scaffolding for future hardening. It
+does not yet wrap the main WebSocket or streaming channels in Noise transport,
+but it provides the config surface for `ws-over-noise` / `stream-over-noise`
+enforcement modes.
 
 ---
 

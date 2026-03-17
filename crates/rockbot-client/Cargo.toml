@@ -6,8 +6,10 @@ description = "Gateway client library for RockBot (WS, ACP, remote execution)"
 license = "MIT"
 
 [features]
-# Remote tool execution over Noise Protocol
-remote-exec = ["dep:snow"]
+# Noise handshake and transport primitives
+noise = ["dep:snow"]
+# Remote tool execution builds on the Noise transport
+remote-exec = ["noise"]
 # Allow plain-text HTTP/WS connections (insecure; default is TLS-only)
 http-insecure = []
 

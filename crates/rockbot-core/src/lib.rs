@@ -80,7 +80,7 @@ pub mod chat_commands;
 pub mod web_ui {
     pub use rockbot_webui::*;
 }
-#[cfg(feature = "remote-exec")]
+#[cfg(feature = "noise")]
 pub mod remote_exec {
     pub use rockbot_client::remote_exec::*;
 }

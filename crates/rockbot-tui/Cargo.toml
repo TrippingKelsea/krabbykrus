@@ -26,8 +26,10 @@ overseer = ["rockbot-core/overseer"]
 doctor-ai = ["dep:rockbot-doctor"]
 # Embedded butler companion agent
 butler = ["dep:rockbot-butler", "rockbot-core/butler"]
+# Noise handshake and transport primitives
+noise = ["rockbot-core/noise", "rockbot-client/noise"]
 # Remote tool execution
-remote-exec = ["rockbot-core/remote-exec", "rockbot-client/remote-exec"]
+remote-exec = ["noise", "rockbot-core/remote-exec", "rockbot-client/remote-exec"]
 # Allow plain-text HTTP/WS connections
 http-insecure = ["rockbot-core/http-insecure", "rockbot-client/http-insecure"]
 

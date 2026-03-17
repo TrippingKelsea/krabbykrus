@@ -6,7 +6,7 @@
 
 pub mod acp;
 pub mod client;
-#[cfg(feature = "remote-exec")]
+#[cfg(feature = "noise")]
 pub mod remote_exec;
 
 pub use client::{

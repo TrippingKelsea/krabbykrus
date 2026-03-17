@@ -26,8 +26,10 @@ otel = ["rockbot-agent/otel"]
 overseer = ["dep:rockbot-overseer"]
 # Embedded butler companion agent
 butler = ["dep:rockbot-butler"]
-# Remote tool execution over Noise Protocol
-remote-exec = ["dep:snow", "rockbot-client/remote-exec"]
+# Noise handshake and transport primitives
+noise = ["dep:snow", "rockbot-client/noise"]
+# Remote tool execution builds on the Noise transport
+remote-exec = ["noise", "rockbot-client/remote-exec"]
 # S3 CA distribution + Route53 DNS
 bedrock-deploy = ["bedrock", "dep:rockbot-deploy", "rockbot-deploy/bedrock"]
 # Allow plain-text HTTP/WS connections (insecure; default requires TLS)

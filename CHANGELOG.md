@@ -11,6 +11,8 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
 ## [Unreleased]
 
 ### Added
+- **Config**: `[security.noise]` transport policy scaffolding for future
+  `ws-over-noise` and `stream-over-noise` enforcement modes
 - **Gateway API**: `GET /api/executors` for listing connected remote executors,
   their identities, advertised working directories, and capability sets
 - **Config**: Rich TUI theme token configuration via `[tui.theme]`
@@ -42,6 +44,9 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
   - Automatic save of `[tui]`, `[tui.theme]`, and `[tui.fonts]` changes to `rockbot.toml`
 
 ### Fixed
+- **Gateway WebSocket**: agent messages no longer block the connection read loop,
+  allowing remote tool responses to be processed immediately instead of timing
+  out and arriving later as unknown request IDs
 - **Remote execution**: TUI-originated shell/filesystem calls now default to the
   active client's current working directory instead of the gateway host cwd
 - **Remote execution**: Explicit remote executor selection no longer inherits the
@@ -56,6 +61,8 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
   text acceptance guarded to empty or Shift-only modifiers
 
 ### Changed
+- **Feature flags**: split `noise` transport primitives from `remote-exec`, with
+  `remote-exec` now layering on top of `noise`
 - **WebSocket protocol**: `agent_message`, `tool_call`, and `tool_result` now carry
   execution-locality metadata or executor-target hints for remote dispatch routing
 - **TUI**: Input architecture rewritten — replaced busy-loop `poll/read` inside `tokio::select!`

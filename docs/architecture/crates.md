@@ -124,7 +124,8 @@ features are compiled.
 
 | Feature | Default | Description |
 |---------|---------|-------------|
-| `remote-exec` | no | Noise Protocol encrypted remote tool dispatch |
+| `noise` | no | Noise handshake and transport primitives |
+| `remote-exec` | no | Remote tool dispatch built on the Noise transport |
 | `overseer` | no | Embedded local-model agent oversight |
 | `doctor-ai` | no | AI-powered config diagnostics and auto-repair |
 | `otel` | no | OpenTelemetry trace/metric export |
