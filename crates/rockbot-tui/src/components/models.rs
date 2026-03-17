@@ -23,7 +23,7 @@ pub fn render_models(frame: &mut Frame, area: Rect, state: &AppState, _effect_st
     render_provider_details(frame, area, state);
 }
 
-fn render_no_providers(frame: &mut Frame, area: Rect) {
+pub(crate) fn render_no_providers(frame: &mut Frame, area: Rect) {
     let body = super::render_detail_header(frame, area, "LLM Providers");
 
     let content = vec![
@@ -46,7 +46,7 @@ fn render_no_providers(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, body);
 }
 
-fn render_provider_details(frame: &mut Frame, area: Rect, state: &AppState) {
+pub(crate) fn render_provider_details(frame: &mut Frame, area: Rect, state: &AppState) {
     let body = super::render_detail_header(frame, area, "Provider Details");
 
     let idx = state

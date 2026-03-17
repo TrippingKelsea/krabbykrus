@@ -12,6 +12,7 @@ pub mod cron;
 pub mod dashboard;
 pub mod modals;
 pub mod models;
+pub mod overlays;
 pub mod sessions;
 pub mod settings;
 pub mod sidebar;

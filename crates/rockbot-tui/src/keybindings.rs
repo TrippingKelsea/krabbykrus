@@ -47,6 +47,10 @@ pub enum TuiAction {
     CardUp,            // Alt+Up: cycle card bar mode up
     CardDown,          // Alt+Down: cycle card bar mode down
     CardActivate,      // Alt+Enter: open card detail overlay
+    OpenVault,         // Alt+V: vault/credentials overlay
+    OpenSettings,      // Alt+S: settings overlay (note: not 's' which is StartGateway)
+    OpenModels,        // Alt+M: models overlay
+    OpenCron,          // Alt+C: cron jobs overlay
 }
 
 /// A parsed key specification, e.g. "q", "ctrl+c", "Left", "Shift+Tab"
@@ -338,6 +342,11 @@ impl Default for KeybindingConfig {
             KeyBinding::new(modified(Km::ALT, Up), TuiAction::CardUp),
             KeyBinding::new(modified(Km::ALT, Down), TuiAction::CardDown),
             KeyBinding::new(modified(Km::ALT, Enter), TuiAction::CardActivate),
+            // Overlay shortcuts
+            KeyBinding::new(modified(Km::ALT, Char('v')), TuiAction::OpenVault),
+            KeyBinding::new(modified(Km::ALT, Char('s')), TuiAction::OpenSettings),
+            KeyBinding::new(modified(Km::ALT, Char('m')), TuiAction::OpenModels),
+            KeyBinding::new(modified(Km::ALT, Char('c')), TuiAction::OpenCron),
         ];
 
         let chat = vec![
@@ -353,6 +362,11 @@ impl Default for KeybindingConfig {
             KeyBinding::new(modified(Km::ALT, Up), TuiAction::CardUp),
             KeyBinding::new(modified(Km::ALT, Down), TuiAction::CardDown),
             KeyBinding::new(modified(Km::ALT, Enter), TuiAction::CardActivate),
+            // Overlay shortcuts
+            KeyBinding::new(modified(Km::ALT, Char('v')), TuiAction::OpenVault),
+            KeyBinding::new(modified(Km::ALT, Char('s')), TuiAction::OpenSettings),
+            KeyBinding::new(modified(Km::ALT, Char('m')), TuiAction::OpenModels),
+            KeyBinding::new(modified(Km::ALT, Char('c')), TuiAction::OpenCron),
         ];
 
         Self { normal, chat }

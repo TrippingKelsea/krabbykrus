@@ -21,7 +21,7 @@ pub fn render_settings(
     render_settings_detail(frame, area, state);
 }
 
-fn render_settings_detail(frame: &mut Frame, area: Rect, state: &AppState) {
+pub(crate) fn render_settings_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     match state.selected_settings_card {
         0 => render_general(frame, area, state),
         1 => render_paths(frame, area, state),
@@ -30,7 +30,7 @@ fn render_settings_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 }
 
-fn render_general(frame: &mut Frame, area: Rect, state: &AppState) {
+pub(crate) fn render_general(frame: &mut Frame, area: Rect, state: &AppState) {
     let body = super::render_detail_header(frame, area, "General");
 
     let gateway_status = if state.gateway.connected {
@@ -75,7 +75,7 @@ fn render_general(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(paragraph, body);
 }
 
-fn render_paths(frame: &mut Frame, area: Rect, state: &AppState) {
+pub(crate) fn render_paths(frame: &mut Frame, area: Rect, state: &AppState) {
     let body = super::render_detail_header(frame, area, "Paths");
 
     let content = vec![
@@ -106,7 +106,7 @@ fn render_paths(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(paragraph, body);
 }
 
-fn render_about(frame: &mut Frame, area: Rect) {
+pub(crate) fn render_about(frame: &mut Frame, area: Rect) {
     let body = super::render_detail_header(frame, area, "About");
 
     let content = vec![

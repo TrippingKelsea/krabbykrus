@@ -25,6 +25,8 @@ pub struct EffectState {
     pub is_active: bool,
     /// Whether animations are enabled (from TuiConfig)
     pub animations_enabled: bool,
+    /// Animation style for modal transitions
+    pub animation_style: rockbot_core::AnimationStyle,
     /// tachyonfx effect: modal open animation
     modal_open: Option<Effect>,
     /// tachyonfx effect: modal close animation
@@ -39,6 +41,7 @@ impl Default for EffectState {
             start_time: Instant::now(),
             is_active: false,
             animations_enabled: true,
+            animation_style: rockbot_core::AnimationStyle::default(),
             modal_open: None,
             modal_close: None,
             page_transition: None,
@@ -52,6 +55,7 @@ impl std::fmt::Debug for EffectState {
         f.debug_struct("EffectState")
             .field("is_active", &self.is_active)
             .field("animations_enabled", &self.animations_enabled)
+            .field("animation_style", &self.animation_style)
             .field("modal_open", &self.modal_open.is_some())
             .field("modal_close", &self.modal_close.is_some())
             .field("page_transition", &self.page_transition.is_some())
@@ -87,31 +91,63 @@ impl EffectState {
         self.animations_enabled = enabled;
     }
 
-    /// Trigger a modal-open animation (coalesce effect)
+    /// Trigger a modal-open animation based on current animation style
     pub fn trigger_modal_open(&mut self) {
-        if !self.animations_enabled {
+        if !self.animations_enabled
+            || matches!(self.animation_style, rockbot_core::AnimationStyle::None)
+        {
             return;
         }
-        self.modal_open = Some(fx::coalesce(EffectTimer::from_ms(
-            600,
-            Interpolation::CubicOut,
-        )));
+        self.modal_open = Some(match self.animation_style {
+            rockbot_core::AnimationStyle::Coalesce => {
+                fx::coalesce(EffectTimer::from_ms(600, Interpolation::CubicOut))
+            }
+            rockbot_core::AnimationStyle::Fade => fx::fade_from_fg(
+                Color::Black,
+                EffectTimer::from_ms(400, Interpolation::CubicOut),
+            ),
+            rockbot_core::AnimationStyle::Slide => fx::slide_in(
+                tachyonfx::Motion::DownToUp,
+                3,
+                0,
+                Color::Black,
+                EffectTimer::from_ms(350, Interpolation::CubicOut),
+            ),
+            rockbot_core::AnimationStyle::None => return,
+        });
     }
 
-    /// Trigger a modal-close animation (dissolve effect)
+    /// Trigger a modal-close animation based on current animation style
     pub fn trigger_modal_close(&mut self) {
-        if !self.animations_enabled {
+        if !self.animations_enabled
+            || matches!(self.animation_style, rockbot_core::AnimationStyle::None)
+        {
             return;
         }
-        self.modal_close = Some(fx::dissolve(EffectTimer::from_ms(
-            300,
-            Interpolation::CubicIn,
-        )));
+        self.modal_close = Some(match self.animation_style {
+            rockbot_core::AnimationStyle::Coalesce => {
+                fx::dissolve(EffectTimer::from_ms(300, Interpolation::CubicIn))
+            }
+            rockbot_core::AnimationStyle::Fade => fx::fade_to_fg(
+                Color::Black,
+                EffectTimer::from_ms(250, Interpolation::CubicIn),
+            ),
+            rockbot_core::AnimationStyle::Slide => fx::slide_out(
+                tachyonfx::Motion::UpToDown,
+                3,
+                0,
+                Color::Black,
+                EffectTimer::from_ms(300, Interpolation::CubicIn),
+            ),
+            rockbot_core::AnimationStyle::None => return,
+        });
     }
 
     /// Trigger a page transition animation (fade from white)
     pub fn trigger_page_transition(&mut self) {
-        if !self.animations_enabled {
+        if !self.animations_enabled
+            || matches!(self.animation_style, rockbot_core::AnimationStyle::None)
+        {
             return;
         }
         self.page_transition = Some(fx::fade_from_fg(
@@ -198,26 +234,63 @@ impl EffectState {
 /// Color palette for the TUI
 pub mod palette {
     use ratatui::style::Color;
+    use rockbot_core::ColorTheme;
 
-    /// Active/focused element color (purple theme)
-    pub const ACTIVE_PRIMARY: Color = Color::Rgb(147, 112, 219); // Medium purple
-    pub const ACTIVE_SECONDARY: Color = Color::Rgb(186, 85, 211); // Medium orchid
-    pub const ACTIVE_GLOW: Color = Color::Rgb(218, 112, 214); // Orchid
+    /// Active/focused element color (default purple theme — used by const references)
+    pub const ACTIVE_PRIMARY: Color = Color::Rgb(147, 112, 219);
+    pub const ACTIVE_SECONDARY: Color = Color::Rgb(186, 85, 211);
+    pub const ACTIVE_GLOW: Color = Color::Rgb(218, 112, 214);
 
     /// Inactive element colors
-    pub const INACTIVE_BORDER: Color = Color::Rgb(88, 88, 88); // Dark gray
-    pub const INACTIVE_TEXT: Color = Color::Rgb(128, 128, 128); // Gray
+    pub const INACTIVE_BORDER: Color = Color::Rgb(88, 88, 88);
+    pub const INACTIVE_TEXT: Color = Color::Rgb(128, 128, 128);
 
     /// Status colors
-    pub const SUCCESS: Color = Color::Rgb(46, 204, 113); // Green
-    pub const WARNING: Color = Color::Rgb(241, 196, 15); // Yellow
-    pub const ERROR: Color = Color::Rgb(231, 76, 60); // Red
-    pub const INFO: Color = Color::Rgb(52, 152, 219); // Blue
+    pub const SUCCESS: Color = Color::Rgb(46, 204, 113);
+    pub const WARNING: Color = Color::Rgb(241, 196, 15);
+    pub const ERROR: Color = Color::Rgb(231, 76, 60);
+    pub const INFO: Color = Color::Rgb(52, 152, 219);
 
     /// Provider status colors
-    pub const CONFIGURED: Color = Color::Rgb(46, 204, 113); // Green
-    pub const UNCONFIGURED: Color = Color::Rgb(241, 196, 15); // Yellow/amber
-    pub const VAULT_HINT: Color = Color::Rgb(147, 112, 219); // Purple (vault action)
+    pub const CONFIGURED: Color = Color::Rgb(46, 204, 113);
+    pub const UNCONFIGURED: Color = Color::Rgb(241, 196, 15);
+    pub const VAULT_HINT: Color = Color::Rgb(147, 112, 219);
+
+    /// Theme-driven primary color
+    pub fn theme_primary(theme: &ColorTheme) -> Color {
+        match theme {
+            ColorTheme::Purple => Color::Rgb(147, 112, 219),
+            ColorTheme::Blue => Color::Rgb(65, 105, 225),
+            ColorTheme::Green => Color::Rgb(46, 204, 113),
+            ColorTheme::Rose => Color::Rgb(219, 112, 147),
+            ColorTheme::Amber => Color::Rgb(255, 191, 0),
+            ColorTheme::Mono => Color::Rgb(180, 180, 180),
+        }
+    }
+
+    /// Theme-driven secondary color
+    pub fn theme_secondary(theme: &ColorTheme) -> Color {
+        match theme {
+            ColorTheme::Purple => Color::Rgb(186, 85, 211),
+            ColorTheme::Blue => Color::Rgb(100, 149, 237),
+            ColorTheme::Green => Color::Rgb(80, 220, 140),
+            ColorTheme::Rose => Color::Rgb(255, 105, 180),
+            ColorTheme::Amber => Color::Rgb(255, 165, 0),
+            ColorTheme::Mono => Color::Rgb(200, 200, 200),
+        }
+    }
+
+    /// Theme-driven glow color
+    pub fn theme_glow(theme: &ColorTheme) -> Color {
+        match theme {
+            ColorTheme::Purple => Color::Rgb(218, 112, 214),
+            ColorTheme::Blue => Color::Rgb(135, 206, 250),
+            ColorTheme::Green => Color::Rgb(144, 238, 144),
+            ColorTheme::Rose => Color::Rgb(255, 182, 193),
+            ColorTheme::Amber => Color::Rgb(255, 215, 0),
+            ColorTheme::Mono => Color::Rgb(220, 220, 220),
+        }
+    }
 }
 
 /// Calculate a pulsing value for active element borders

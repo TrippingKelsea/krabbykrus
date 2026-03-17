@@ -9,12 +9,12 @@ pub mod message;
 
 // Re-export primary types at crate root for convenience
 pub use config::{
-    AgentConfig, AgentDefaults, AgentInstance, AgentToolConfig, AnthropicProviderConfig,
-    BedrockProviderConfig, CapabilityConfig, Config, ConfigWatcher, CredentialsConfig,
-    EdgeCondition, FilesystemCapabilities, GatewayConfig, McpServerEntry, NetworkCapabilities,
-    OllamaProviderConfig, OpenAiProviderConfig, PkiConfig, ProcessCapabilities, ProvidersConfig,
-    SandboxConfig, SecurityConfig, SeedModelConfig, ToolConfig, TuiConfig, WorkflowDefinition,
-    WorkflowEdge, WorkflowNode,
+    AgentConfig, AgentDefaults, AgentInstance, AgentToolConfig, AnimationStyle,
+    AnthropicProviderConfig, BedrockProviderConfig, CapabilityConfig, ColorTheme, Config,
+    ConfigWatcher, CredentialsConfig, EdgeCondition, FilesystemCapabilities, GatewayConfig,
+    McpServerEntry, NetworkCapabilities, OllamaProviderConfig, OpenAiProviderConfig, PkiConfig,
+    ProcessCapabilities, ProvidersConfig, SandboxConfig, SecurityConfig, SeedModelConfig,
+    ToolConfig, TuiConfig, WorkflowDefinition, WorkflowEdge, WorkflowNode,
 };
 
 pub use error::{

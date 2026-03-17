@@ -62,6 +62,12 @@ pub struct TuiConfig {
     /// Enable animated transitions and effects (default: true)
     #[serde(default = "default_true")]
     pub animations: bool,
+    /// Color theme for the TUI
+    #[serde(default)]
+    pub color_theme: ColorTheme,
+    /// Animation style for modal transitions
+    #[serde(default)]
+    pub animation_style: AnimationStyle,
 }
 
 impl Default for TuiConfig {
@@ -69,6 +75,109 @@ impl Default for TuiConfig {
         Self {
             floating_bar: true,
             animations: true,
+            color_theme: ColorTheme::default(),
+            animation_style: AnimationStyle::default(),
+        }
+    }
+}
+
+/// Color theme for the TUI accent colors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ColorTheme {
+    #[default]
+    Purple,
+    Blue,
+    Green,
+    Rose,
+    Amber,
+    Mono,
+}
+
+impl ColorTheme {
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::Purple,
+            Self::Blue,
+            Self::Green,
+            Self::Rose,
+            Self::Amber,
+            Self::Mono,
+        ]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Purple => "Purple",
+            Self::Blue => "Blue",
+            Self::Green => "Green",
+            Self::Rose => "Rose",
+            Self::Amber => "Amber",
+            Self::Mono => "Mono",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Purple => Self::Blue,
+            Self::Blue => Self::Green,
+            Self::Green => Self::Rose,
+            Self::Rose => Self::Amber,
+            Self::Amber => Self::Mono,
+            Self::Mono => Self::Purple,
+        }
+    }
+
+    pub fn prev(&self) -> Self {
+        match self {
+            Self::Purple => Self::Mono,
+            Self::Blue => Self::Purple,
+            Self::Green => Self::Blue,
+            Self::Rose => Self::Green,
+            Self::Amber => Self::Rose,
+            Self::Mono => Self::Amber,
+        }
+    }
+}
+
+/// Animation style for modal and page transitions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AnimationStyle {
+    #[default]
+    Coalesce,
+    Fade,
+    Slide,
+    None,
+}
+
+impl AnimationStyle {
+    pub fn all() -> &'static [Self] {
+        &[Self::Coalesce, Self::Fade, Self::Slide, Self::None]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Coalesce => "Coalesce",
+            Self::Fade => "Fade",
+            Self::Slide => "Slide",
+            Self::None => "None",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Coalesce => Self::Fade,
+            Self::Fade => Self::Slide,
+            Self::Slide => Self::None,
+            Self::None => Self::Coalesce,
+        }
+    }
+
+    pub fn prev(&self) -> Self {
+        match self {
+            Self::Coalesce => Self::None,
+            Self::Fade => Self::Coalesce,
+            Self::Slide => Self::Fade,
+            Self::None => Self::Slide,
         }
     }
 }

@@ -22,7 +22,7 @@ pub fn render_cron_jobs(
     render_cron_detail(frame, area, state);
 }
 
-fn render_cron_detail(frame: &mut Frame, area: Rect, state: &AppState) {
+pub(crate) fn render_cron_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     let body = super::render_detail_header(frame, area, "Cron Jobs");
 
     if state.cron_loading {

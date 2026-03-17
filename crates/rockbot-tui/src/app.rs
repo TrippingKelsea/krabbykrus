@@ -16,20 +16,18 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use crate::components::{
-    render_add_credential_modal, render_agents, render_confirm_modal, render_credentials,
-    render_cron_jobs, render_dashboard, render_edit_agent_modal, render_edit_context_file_modal,
-    render_edit_credential_modal, render_edit_permission_modal, render_edit_provider_modal,
-    render_models, render_password_modal, render_sessions, render_settings, render_slot_bar,
-    render_status_bar, render_view_context_files_modal, render_view_endpoint_modal,
-    render_view_model_list_modal, render_view_permission_modal, render_view_provider_modal,
-    render_view_session_modal,
+    render_add_credential_modal, render_confirm_modal, render_edit_agent_modal,
+    render_edit_context_file_modal, render_edit_credential_modal, render_edit_permission_modal,
+    render_edit_provider_modal, render_password_modal, render_slot_bar, render_status_bar,
+    render_view_context_files_modal, render_view_endpoint_modal, render_view_model_list_modal,
+    render_view_permission_modal, render_view_provider_modal, render_view_session_modal,
 };
 use crate::effects::EffectState;
 use crate::state::{
-    AddCredentialState, AppState, ChatMessage, ConfirmAction, ContextFileInfo, ContextMenuAction,
-    ContextMenuState, CreateSessionState, EditAgentState, EditCredentialState, EditProviderState,
-    EndpointInfo, InputMode, MenuItem, Message, PasswordAction, SessionMode, ToolCallInfo,
-    UnlockMethod, ViewContextFilesState,
+    AddCredentialState, AppState, ChatMessage, ChatTarget, ConfirmAction, ContextFileInfo,
+    ContextMenuAction, ContextMenuState, CreateSessionState, EditAgentState, EditCredentialState,
+    EditProviderState, EndpointInfo, InputMode, MenuItem, Message, PasswordAction, SessionMode,
+    ToolCallInfo, UnlockMethod, ViewContextFilesState,
 };
 
 /// Check if Claude Code OAuth credentials are available
@@ -104,8 +102,6 @@ pub struct App {
     was_modal_open: bool,
     /// Previous menu_item index (for page transition detection)
     prev_menu_index: usize,
-    /// Current tab within Models view (for future use)
-    models_tab: usize,
     /// Unlocked vault handle (None if locked or not initialized)
     vault: Option<rockbot_credentials::CredentialVault>,
     /// Gateway WebSocket client
@@ -157,7 +153,6 @@ impl App {
             last_frame: Instant::now(),
             was_modal_open: false,
             prev_menu_index: 0,
-            models_tab: 0,
             vault: None,
             gateway_client: None,
             gateway_events_rx: None,
@@ -172,42 +167,22 @@ impl App {
         }
     }
 
-    /// Get current credentials tab as enum
-    fn credentials_tab(&self) -> CredentialsTab {
-        CredentialsTab::from_index(self.state.credentials_tab)
-    }
-
     /// Navigate to previous content tab (Shift+[)
     fn prev_content_tab(&mut self) {
-        match self.state.menu_item {
-            MenuItem::Credentials => {
-                self.state.credentials_tab = if self.state.credentials_tab == 0 {
-                    3
-                } else {
-                    self.state.credentials_tab - 1
-                };
-            }
-            MenuItem::Models => {
-                self.models_tab = if self.models_tab == 0 {
-                    2
-                } else {
-                    self.models_tab - 1
-                };
-            }
-            _ => {}
+        // Tab cycling is now handled within overlay modes
+        if matches!(self.state.input_mode, InputMode::VaultOverlay) {
+            self.state.credentials_tab = if self.state.credentials_tab == 0 {
+                3
+            } else {
+                self.state.credentials_tab - 1
+            };
         }
     }
 
     /// Navigate to next content tab (Shift+])
     fn next_content_tab(&mut self) {
-        match self.state.menu_item {
-            MenuItem::Credentials => {
-                self.state.credentials_tab = (self.state.credentials_tab + 1) % 4;
-            }
-            MenuItem::Models => {
-                self.models_tab = (self.models_tab + 1) % 3;
-            }
-            _ => {}
+        if matches!(self.state.input_mode, InputMode::VaultOverlay) {
+            self.state.credentials_tab = (self.state.credentials_tab + 1) % 4;
         }
     }
 
@@ -221,6 +196,8 @@ impl App {
                         self.state.tui_config = tui_cfg;
                         self.effect_state
                             .set_animations_enabled(self.state.tui_config.animations);
+                        self.effect_state.animation_style =
+                            self.state.tui_config.animation_style.clone();
                     }
                 }
             }
@@ -644,6 +621,20 @@ impl App {
                 let detail = detail.clone();
                 self.handle_card_detail(key, detail)
             }
+            InputMode::VaultOverlay => self.handle_vault_overlay(key),
+            InputMode::SettingsOverlay => self.handle_settings_overlay(key),
+            InputMode::ModelsOverlay {
+                provider_index,
+                scroll,
+            } => {
+                let pi = *provider_index;
+                let s = *scroll;
+                self.handle_models_overlay(key, pi, s)
+            }
+            InputMode::CronOverlay { scroll } => {
+                let s = *scroll;
+                self.handle_cron_overlay(key, s)
+            }
         }
     }
 
@@ -792,27 +783,40 @@ impl App {
                     });
                 }
             }
-            JumpToSection(n) => {
-                let item = match n {
-                    1 => MenuItem::Dashboard,
-                    2 => MenuItem::Credentials,
-                    3 => MenuItem::Agents,
-                    4 => MenuItem::Sessions,
-                    5 => MenuItem::CronJobs,
-                    6 => MenuItem::Models,
-                    7 => MenuItem::Settings,
-                    _ => return,
-                };
-                self.state.menu_item = item;
-                self.state.menu_index = item.index();
-                self.state.slot_bar.mode = item.index();
-                self.state.slot_bar.slots[0].label = item.title().to_string();
-                let agents = self.state.agents.clone();
-                let sessions = self.state.sessions.clone();
-                self.state
-                    .slot_bar
-                    .rebuild_content_slots(&agents, &sessions);
-            }
+            JumpToSection(n) => match n {
+                1..=4 => {
+                    let item = match n {
+                        1 => MenuItem::Dashboard,
+                        2 => MenuItem::Agents,
+                        3 => MenuItem::Sessions,
+                        _ => MenuItem::CronJobs,
+                    };
+                    self.state.menu_item = item;
+                    self.state.menu_index = item.index();
+                    self.state.slot_bar.mode = item.index();
+                    self.state.slot_bar.slots[0].label = item.title().to_string();
+                    let agents = self.state.agents.clone();
+                    let sessions = self.state.sessions.clone();
+                    self.state
+                        .slot_bar
+                        .rebuild_content_slots(&agents, &sessions);
+                    // Update chat target
+                    self.sync_chat_target();
+                }
+                5 => {
+                    self.state.input_mode = InputMode::CronOverlay { scroll: 0 };
+                }
+                6 => {
+                    self.state.input_mode = InputMode::VaultOverlay;
+                }
+                7 => {
+                    self.state.input_mode = InputMode::ModelsOverlay {
+                        provider_index: 0,
+                        scroll: 0,
+                    };
+                }
+                _ => {}
+            },
             PrevTab => {
                 self.prev_content_tab();
             }
@@ -915,6 +919,21 @@ impl App {
                 let menu = self.state.build_context_menu();
                 self.state.input_mode = InputMode::ContextMenu(menu);
             }
+            OpenVault => {
+                self.state.input_mode = InputMode::VaultOverlay;
+            }
+            OpenSettings => {
+                self.state.input_mode = InputMode::SettingsOverlay;
+            }
+            OpenModels => {
+                self.state.input_mode = InputMode::ModelsOverlay {
+                    provider_index: 0,
+                    scroll: 0,
+                };
+            }
+            OpenCron => {
+                self.state.input_mode = InputMode::CronOverlay { scroll: 0 };
+            }
         }
     }
 
@@ -984,6 +1003,183 @@ impl App {
         Ok(())
     }
 
+    fn handle_vault_overlay(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Tab => {
+                self.state.credentials_tab = (self.state.credentials_tab + 1) % 4;
+            }
+            KeyCode::Char(c @ '1'..='4') => {
+                self.state.credentials_tab = (c as usize - '1' as usize).min(3);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.state.credential_list_prev();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.state.credential_list_next();
+            }
+            KeyCode::Enter => match self.state.credentials_tab {
+                0 if !self.state.endpoints.is_empty() => {
+                    self.state.input_mode = InputMode::ViewEndpoint {
+                        endpoint_index: self.state.selected_endpoint,
+                    };
+                }
+                1 => {
+                    self.state.input_mode = InputMode::ViewProvider {
+                        provider_index: self.state.selected_provider_index,
+                    };
+                }
+                2 if !self.state.permissions.is_empty() => {
+                    self.state.input_mode = InputMode::ViewPermission {
+                        permission_index: self.state.selected_permission,
+                    };
+                }
+                _ => {}
+            },
+            KeyCode::Char('a') => {
+                self.handle_add_action();
+            }
+            KeyCode::Char('d') => {
+                self.handle_delete_action();
+            }
+            KeyCode::Char('i') => {
+                self.handle_init_action();
+            }
+            KeyCode::Char('u') => {
+                self.handle_unlock_action();
+            }
+            KeyCode::Char('l') => {
+                self.handle_lock_action();
+            }
+            KeyCode::Char('p') => {
+                self.handle_permission_action();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_settings_overlay(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('s') => {
+                self.handle_start_action();
+            }
+            KeyCode::Char('S') => {
+                self.handle_stop_action();
+            }
+            KeyCode::Char('r') => {
+                self.handle_refresh_action();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.state.selected_settings_card =
+                    self.state.selected_settings_card.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.state.selected_settings_card < 2 {
+                    self.state.selected_settings_card += 1;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_models_overlay(
+        &mut self,
+        key: KeyEvent,
+        mut provider_index: usize,
+        mut scroll: usize,
+    ) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+                return Ok(());
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                provider_index = provider_index.saturating_sub(1);
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if !self.state.providers.is_empty() {
+                    provider_index =
+                        (provider_index + 1).min(self.state.providers.len().saturating_sub(1));
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                scroll = scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                scroll = scroll.saturating_add(1);
+            }
+            KeyCode::Enter if !self.state.providers.is_empty() => {
+                self.state.input_mode = InputMode::ViewModelList {
+                    provider_index,
+                    scroll: 0,
+                };
+                return Ok(());
+            }
+            KeyCode::Char('e') if !self.state.providers.is_empty() => {
+                self.state.selected_provider = provider_index;
+                self.handle_edit_action();
+                return Ok(());
+            }
+            _ => {}
+        }
+        self.state.input_mode = InputMode::ModelsOverlay {
+            provider_index,
+            scroll,
+        };
+        Ok(())
+    }
+
+    fn handle_cron_overlay(&mut self, key: KeyEvent, mut scroll: usize) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+                return Ok(());
+            }
+            KeyCode::Tab => {
+                self.state.selected_cron_card = (self.state.selected_cron_card + 1) % 3;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if !self.state.cron_jobs.is_empty() {
+                    self.state.selected_cron_job = if self.state.selected_cron_job == 0 {
+                        self.state.cron_jobs.len() - 1
+                    } else {
+                        self.state.selected_cron_job - 1
+                    };
+                }
+                scroll = scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if !self.state.cron_jobs.is_empty() {
+                    self.state.selected_cron_job =
+                        (self.state.selected_cron_job + 1) % self.state.cron_jobs.len();
+                }
+                scroll = scroll.saturating_add(1);
+            }
+            KeyCode::Char('e') => {
+                self.handle_edit_action();
+            }
+            KeyCode::Char('d') => {
+                self.handle_delete_action();
+            }
+            KeyCode::Char('t') => {
+                self.handle_test_action();
+            }
+            KeyCode::Char('r') => {
+                self.handle_refresh_action();
+            }
+            _ => {}
+        }
+        self.state.input_mode = InputMode::CronOverlay { scroll };
+        Ok(())
+    }
+
     /// Sync per-mode `selected_*` index from slot_bar.active_slot (after CardLeft/CardRight)
     fn sync_selection_from_slot_bar(&mut self) {
         let idx = self.state.slot_bar.active_slot.saturating_sub(1);
@@ -999,22 +1195,11 @@ impl App {
                     self.on_session_selection_changed();
                 }
             }
-            MenuItem::Models => {
-                if !self.state.providers.is_empty() {
-                    self.state.selected_provider = idx.min(self.state.providers.len() - 1);
-                }
-            }
-            MenuItem::Credentials => {
-                self.state.credentials_tab = idx.min(3);
-            }
-            MenuItem::Settings => {
-                self.state.selected_settings_card = idx.min(2);
-            }
-            MenuItem::CronJobs => {
-                self.state.selected_cron_card = idx.min(2);
-            }
-            MenuItem::Dashboard => {}
+            MenuItem::CronJobs | MenuItem::Dashboard => {}
+            // Legacy modes (now overlays) — no-op
+            MenuItem::Credentials | MenuItem::Models | MenuItem::Settings => {}
         }
+        self.sync_chat_target();
     }
 
     /// Sync slot_bar.active_slot from per-mode `selected_*` index (after NavLeft/NavRight)
@@ -1022,16 +1207,34 @@ impl App {
         let idx = match self.state.menu_item {
             MenuItem::Agents => self.state.selected_agent,
             MenuItem::Sessions => self.state.selected_session,
-            MenuItem::Models => self.state.selected_provider,
-            MenuItem::Credentials => self.state.credentials_tab,
-            MenuItem::Settings => self.state.selected_settings_card,
-            MenuItem::CronJobs => self.state.selected_cron_card,
-            MenuItem::Dashboard => return,
+            MenuItem::CronJobs | MenuItem::Dashboard => return,
+            MenuItem::Credentials | MenuItem::Models | MenuItem::Settings => return,
         };
         // slot 0 is the mode selector; data slots start at 1
         let slot = idx + 1;
         let max_slot = self.state.slot_bar.slots.len().saturating_sub(1);
         self.state.slot_bar.active_slot = slot.min(max_slot);
+        self.sync_chat_target();
+    }
+
+    /// Update chat_target based on current mode and selection
+    fn sync_chat_target(&mut self) {
+        self.state.chat_target = match self.state.menu_item {
+            MenuItem::Dashboard => ChatTarget::Butler,
+            MenuItem::Agents => self
+                .state
+                .agents
+                .get(self.state.selected_agent)
+                .map(|a| ChatTarget::Agent(a.id.clone()))
+                .unwrap_or(ChatTarget::Butler),
+            MenuItem::Sessions => self
+                .state
+                .sessions
+                .get(self.state.selected_session)
+                .map(|s| ChatTarget::Session(s.key.clone()))
+                .unwrap_or(ChatTarget::Butler),
+            _ => self.state.chat_target.clone(),
+        };
     }
 
     fn dispatch_context_action(&mut self, action: ContextMenuAction) {
@@ -3679,47 +3882,9 @@ impl App {
         // Render status strip (contextual info between cards and content)
         self.render_card_status_strip(frame, strip_area);
 
-        // Main content area: show page content based on current mode
-        let active_section = self.state.slot_bar.current_mode();
-        let show_butler_chat = active_section == MenuItem::Dashboard;
-
-        let detail_area = if show_butler_chat {
-            // Butler/Dashboard only — chat fills the whole main area
-            render_butler_main(frame, main_area, &self.state, &self.effect_state);
-            main_area
-        } else {
-            // Non-butler page: render the page detail in the full main area
-            let border_block = Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::DarkGray));
-            let inner = border_block.inner(main_area);
-            frame.render_widget(border_block, main_area);
-
-            match active_section {
-                MenuItem::Dashboard => {
-                    render_dashboard(frame, inner, &self.state, &self.effect_state)
-                }
-                MenuItem::Credentials => render_credentials(
-                    frame,
-                    inner,
-                    &self.state,
-                    self.state.credentials_tab,
-                    &self.effect_state,
-                ),
-                MenuItem::Agents => render_agents(frame, inner, &self.state, &self.effect_state),
-                MenuItem::Sessions => {
-                    render_sessions(frame, inner, &self.state, &self.effect_state)
-                }
-                MenuItem::CronJobs => {
-                    render_cron_jobs(frame, inner, &self.state, &self.effect_state)
-                }
-                MenuItem::Models => render_models(frame, inner, &self.state, &self.effect_state),
-                MenuItem::Settings => {
-                    render_settings(frame, inner, &self.state, &self.effect_state)
-                }
-            }
-            inner
-        };
+        // Chat-first: always render chat in the main area
+        self.render_unified_chat(frame, main_area);
+        let detail_area = main_area;
 
         // Apply page transition effect
         let elapsed = self.last_frame.elapsed();
@@ -3835,6 +4000,44 @@ impl App {
             InputMode::CardDetail(detail) => {
                 self.render_card_detail_modal(frame, detail);
             }
+            InputMode::VaultOverlay => {
+                super::components::overlays::render_vault_overlay(
+                    frame,
+                    frame.area(),
+                    &self.state,
+                    &self.effect_state,
+                );
+            }
+            InputMode::SettingsOverlay => {
+                super::components::overlays::render_settings_overlay(
+                    frame,
+                    frame.area(),
+                    &self.state,
+                    &self.effect_state,
+                );
+            }
+            InputMode::ModelsOverlay {
+                provider_index,
+                scroll,
+            } => {
+                super::components::overlays::render_models_overlay(
+                    frame,
+                    frame.area(),
+                    &self.state,
+                    *provider_index,
+                    *scroll,
+                    &self.effect_state,
+                );
+            }
+            InputMode::CronOverlay { scroll } => {
+                super::components::overlays::render_cron_overlay(
+                    frame,
+                    frame.area(),
+                    &self.state,
+                    *scroll,
+                    &self.effect_state,
+                );
+            }
             _ => {}
         }
 
@@ -3849,70 +4052,129 @@ impl App {
         }
     }
 
-    /// Render the contextual status strip between the card bar and main content.
+    /// Render the unified chat area based on current chat_target.
+    ///
+    /// Chat is always visible — butler, session, or agent ad-hoc.
+    fn render_unified_chat(&self, frame: &mut Frame, area: Rect) {
+        match &self.state.chat_target {
+            ChatTarget::Butler => {
+                render_butler_main(frame, area, &self.state, &self.effect_state);
+            }
+            ChatTarget::Session(key) => {
+                if let Some(chat) = self.state.session_chats.get(key) {
+                    self.render_session_chat(frame, area, chat);
+                } else {
+                    render_butler_main(frame, area, &self.state, &self.effect_state);
+                }
+            }
+            ChatTarget::Agent(id) => {
+                let agent_key = format!("agent:{id}");
+                if let Some(chat) = self.state.session_chats.get(&agent_key) {
+                    self.render_session_chat(frame, area, chat);
+                } else {
+                    // Show agent welcome screen
+                    let lines = vec![
+                        Line::from(""),
+                        Line::from(""),
+                        Line::from(Span::styled(
+                            format!("@{id}"),
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(""),
+                        Line::from(Span::styled(
+                            "Press 'c' to start chatting with this agent.",
+                            Style::default().fg(Color::DarkGray),
+                        )),
+                    ];
+                    let welcome = Paragraph::new(lines).alignment(Alignment::Center);
+                    frame.render_widget(welcome, area);
+                }
+            }
+        }
+    }
+
+    /// Render a session chat (messages + input box) in the given area.
+    fn render_session_chat(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        chat: &crate::state::SessionChatState,
+    ) {
+        use super::components::{render_chat_input, render_chat_messages};
+
+        let is_chat_mode = matches!(self.state.input_mode, InputMode::ChatInput);
+
+        // Calculate input height
+        let inner_width = area.width.saturating_sub(3).max(1) as usize;
+        let visual_lines: usize = self
+            .state
+            .input_buffer
+            .split('\n')
+            .map(|line| {
+                let char_count = (line.len() + 1).max(1);
+                (char_count + inner_width - 1) / inner_width
+            })
+            .sum();
+        let input_line_count = visual_lines.clamp(1, 10);
+        let input_height = (input_line_count as u16) + 2;
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Fill(1), Constraint::Length(input_height)])
+            .split(area);
+
+        if !chat.messages.is_empty() || chat.loading {
+            render_chat_messages(
+                frame,
+                chunks[0],
+                &self.state,
+                &chat.messages,
+                chat.loading,
+                chat.scroll,
+                chat.auto_scroll,
+            );
+        } else {
+            let hint = Paragraph::new(vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "No messages yet. Press 'c' to chat.",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ])
+            .alignment(Alignment::Center);
+            frame.render_widget(hint, chunks[0]);
+        }
+
+        render_chat_input(frame, chunks[1], &self.state, is_chat_mode);
+    }
+
+    /// Render the global persistent status strip between the card bar and main content.
     fn render_card_status_strip(&self, frame: &mut Frame, area: Rect) {
         let bg = Color::Rgb(20, 20, 40);
         let strip_style = Style::default().fg(Color::DarkGray).bg(bg);
 
-        let text = match self.state.menu_item {
-            MenuItem::Dashboard => {
-                let status = if self.state.gateway.connected {
-                    "online"
-                } else {
-                    "offline"
-                };
-                let agents = self.state.agents.len();
-                let sessions = self.state.sessions.len();
-                format!(" \u{25b8} Gateway {status} \u{00b7} {agents} agents \u{00b7} {sessions} sessions")
-            }
-            MenuItem::Agents => {
-                if let Some(agent) = self.state.agents.get(self.state.selected_agent) {
-                    let model = agent.model.as_deref().unwrap_or("default");
-                    format!(
-                        " \u{25b8} {} \u{00b7} {} \u{00b7} {:?}",
-                        agent.id, model, agent.status
-                    )
-                } else {
-                    " \u{25b8} No agents configured".to_string()
-                }
-            }
-            MenuItem::Sessions => {
-                if let Some(session) = self.state.sessions.get(self.state.selected_session) {
-                    format!(
-                        " \u{25b8} {} \u{00b7} {} messages",
-                        session.key, session.message_count
-                    )
-                } else {
-                    " \u{25b8} No active sessions".to_string()
-                }
-            }
-            MenuItem::Credentials => {
-                if !self.state.vault.initialized {
-                    " \u{25b8} Vault not initialized \u{00b7} press 'i' to initialize".to_string()
-                } else if self.state.vault.locked {
-                    " \u{25b8} Vault locked \u{00b7} press 'u' to unlock".to_string()
-                } else {
-                    let tab = self.credentials_tab().label();
-                    let count = match self.state.credentials_tab {
-                        0 => self.state.endpoints.len(),
-                        1 => self.state.credential_schemas.len(),
-                        2 => self.state.permissions.len(),
-                        _ => 0,
-                    };
-                    format!(" \u{25b8} {tab} \u{00b7} {count} items")
-                }
-            }
-            MenuItem::CronJobs => {
-                let total = self.state.cron_jobs.len();
-                let enabled = self.state.cron_jobs.iter().filter(|j| j.enabled).count();
-                format!(" \u{25b8} {enabled}/{total} jobs enabled")
-            }
-            MenuItem::Models => {
-                let count = self.state.providers.len();
-                format!(" \u{25b8} {count} providers")
-            }
-            MenuItem::Settings => " \u{25b8} Settings".to_string(),
+        let gw = if self.state.gateway.connected {
+            "gw:online"
+        } else {
+            "gw:offline"
         };
+        let agents = format!("{}ag", self.state.agents.len());
+        let sessions = format!("{}sess", self.state.sessions.len());
+        let vault = if !self.state.vault.initialized {
+            "vault:none"
+        } else if self.state.vault.locked {
+            "vault:locked"
+        } else {
+            "vault:open"
+        };
+        let chat_ctx = match &self.state.chat_target {
+            ChatTarget::Butler => "butler".to_string(),
+            ChatTarget::Session(k) => format!("->{k}"),
+            ChatTarget::Agent(id) => format!("->@{id}"),
+        };
+        let text = format!(" {gw} | {agents} | {sessions} | {vault} | {chat_ctx}");
 
         let paragraph = Paragraph::new(text).style(strip_style);
         frame.render_widget(paragraph, area);
@@ -4404,32 +4666,21 @@ impl App {
             InputMode::Normal => {
                 match self.state.menu_item {
                     MenuItem::Dashboard => {
-                        "Alt+←→:Cards │ r:Refresh │ 1-7:Jump │ Alt+Enter:Detail".to_string()
-                    }
-                    MenuItem::Credentials => {
-                        let tab_help = match self.state.credentials_tab {
-                            0 => "Enter:View │ a:Add │ d:Delete │ p:Permission",
-                            1 => "Enter:View │ a:Configure",
-                            2 => "Enter:View │ p:Add Rule │ ↑↓:Navigate",
-                            _ => "Enter:View",
-                        };
-                        format!("Alt+←→:Tab │ {tab_help} │ ↑↓:Navigate")
+                        "Alt+←→:Cards │ c:Chat │ Alt+V:Vault │ Alt+S:Settings │ 1-4:Jump"
+                            .to_string()
                     }
                     MenuItem::Agents => {
-                        "Alt+←→:Select │ Enter:Detail │ a:Add │ e:Edit │ d:Disable │ f:Files".to_string()
+                        "Alt+←→:Agent │ c:Chat │ a:Add │ e:Edit │ f:Files │ Alt+Enter:Detail"
+                            .to_string()
                     }
                     MenuItem::Sessions => {
-                        "Alt+←→:Session │ n:New │ c:Chat │ k:Kill │ Alt+Enter:Detail".to_string()
+                        "Alt+←→:Session │ c:Chat │ n:New │ k:Kill │ Alt+Enter:Detail".to_string()
                     }
                     MenuItem::CronJobs => {
-                        "Alt+←→:Filter │ ↑↓:Select │ e:Enable/Disable │ d:Delete │ t:Trigger │ r:Refresh".to_string()
+                        "Alt+C:Manage │ Alt+←→:Job │ e:Toggle │ d:Delete".to_string()
                     }
-                    MenuItem::Models => {
-                        "Alt+←→:Provider │ Enter:Models │ e:Configure │ Alt+Enter:Detail".to_string()
-                    }
-                    MenuItem::Settings => {
-                        "Alt+←→:Section │ s:Start │ S:Stop │ r:Restart".to_string()
-                    }
+                    // Legacy modes (shouldn't appear, but handle gracefully)
+                    _ => "Alt+V:Vault │ Alt+S:Settings │ Alt+M:Models │ Alt+C:Cron".to_string(),
                 }
             }
             InputMode::PasswordInput { .. } => "Enter:Submit │ Esc:Cancel".to_string(),
@@ -4467,6 +4718,16 @@ impl App {
             InputMode::EditContextFile(_) => "Ctrl+S:Save │ ↑↓←→:Move │ Esc:Back".to_string(),
             InputMode::ContextMenu(_) => "↑↓/jk:Navigate │ Enter:Select │ Esc:Close".to_string(),
             InputMode::CardDetail(_) => "↑↓:Scroll │ Esc/Alt+Enter:Close".to_string(),
+            InputMode::VaultOverlay => {
+                "Tab:Section │ a:Add │ d:Delete │ Enter:View │ Esc:Close".to_string()
+            }
+            InputMode::SettingsOverlay => "s:Start │ S:Stop │ r:Restart │ Esc:Close".to_string(),
+            InputMode::ModelsOverlay { .. } => {
+                "←→:Provider │ Enter:Models │ e:Configure │ Esc:Close".to_string()
+            }
+            InputMode::CronOverlay { .. } => {
+                "Tab:Filter │ ↑↓:Select │ e:Toggle │ d:Delete │ t:Trigger │ Esc:Close".to_string()
+            }
         }
     }
 }

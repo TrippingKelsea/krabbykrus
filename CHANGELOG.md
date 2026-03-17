@@ -11,14 +11,26 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
 ## [Unreleased]
 
 ### Changed
-- **TUI layout unification**: Removed inner page_split card strip from all modes
-  - SlottedCardBar (Row 0) is now the single source of card navigation
-  - All modes get the full `main_area` as their content area (+5 rows gained)
-  - Sessions grouped by agent in card bar (one card per agent, badge = session count)
-  - Vault init/locked errors now shown in status strip, not as full content takeover
-  - Card detail overlay (`Alt+Enter`) now has per-mode rendering with sparklines
-  - Updated help text to reflect `Alt+←/→` as primary card navigation
-  - Updated `docs/user-guide/tui-guide.md` with unified navigation docs
+- **Chat-first TUI architecture**: Chat is always visible; other views are overlays
+  - Main content area always renders chat (butler, session, or agent)
+  - Card bar reduced to 4 modes: Dashboard, Agents, Sessions, Cron Jobs
+  - Credentials, Models, Settings are now overlay modals (Alt+V/M/S)
+  - Global persistent status strip: gateway / agents / sessions / vault / chat target
+  - Models overlay uses dynamic provider tabs from gateway (no more hardcoded Bedrock/Anthropic/OpenAI/Ollama cards)
+  - Cron filter (All/Active/Disabled) moved to inline toggle in cron overlay
+  - Number keys 1-4 switch modes, 5-7 open overlays
+  - Updated `docs/user-guide/tui-guide.md` and `docs/user-guide/configuration.md`
+
+### Added
+- **Color themes**: Purple (default), Blue, Green, Rose, Amber, Mono
+  - Configure via `[tui] color_theme` in `rockbot.toml`
+  - Theme-driven palette functions in `effects::palette`
+- **Animation styles**: Coalesce (default), Fade, Slide, None
+  - Configure via `[tui] animation_style` in `rockbot.toml`
+  - Setting to `None` disables all overlay transitions
+- **Overlay keybindings**: Alt+V (Vault), Alt+S (Settings), Alt+M (Models), Alt+C (Cron)
+  - Available in both normal and chat modes
+- **ChatTarget**: Butler, Session, or Agent — determines what the chat area shows
 
 ### Added
 - **Butler agent** (`rockbot-butler`): Embedded queer sassy companion agent

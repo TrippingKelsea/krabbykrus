@@ -99,9 +99,10 @@ pub use rockbot_agent::skills::{
 pub use rockbot_agent::telemetry::{init_telemetry, TelemetryConfig};
 pub use rockbot_agent::trajectory::{Trajectory, TrajectoryEntry, TrajectoryEvent};
 pub use rockbot_config::{
-    AgentConfig, AnthropicProviderConfig, BedrockProviderConfig, Config, EdgeCondition,
-    GatewayConfig, McpServerEntry, OllamaProviderConfig, OpenAiProviderConfig, PkiConfig,
-    ProvidersConfig, SeedModelConfig, TuiConfig, WorkflowDefinition, WorkflowEdge, WorkflowNode,
+    AgentConfig, AnimationStyle, AnthropicProviderConfig, BedrockProviderConfig, ColorTheme,
+    Config, EdgeCondition, GatewayConfig, McpServerEntry, OllamaProviderConfig,
+    OpenAiProviderConfig, PkiConfig, ProvidersConfig, SeedModelConfig, TuiConfig,
+    WorkflowDefinition, WorkflowEdge, WorkflowNode,
 };
 pub use rockbot_config::{ContentPart, Message, MessageContent, MessageMetadata};
 pub use rockbot_gateway::{CronExecutor, CronJob, CronPayload, CronSchedule, CronScheduler};

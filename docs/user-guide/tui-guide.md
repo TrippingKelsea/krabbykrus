@@ -8,145 +8,160 @@ RockBot includes a full-featured terminal UI for managing your AI agents, creden
 rockbot tui
 ```
 
-## Navigation
+## Chat-First Architecture
+
+The TUI is **chat-first**: the chat interface is always visible in the main content area. Other views (vault, settings, models, cron) are overlays that appear on top of the chat when triggered.
 
 ### Layout
 
-The TUI uses a unified card bar layout:
-
 ```
-Row 0: SlottedCardBar (top)  — mode selector + per-mode info cards
-Row 1: Status strip          — contextual info line
-Row 2: Main content area     — full-height page content
-Row 3: Status bar            — help text / errors
+Row 0: SlottedCardBar (top)  -- chat target selector (Dashboard/Agents/Sessions/Cron)
+Row 1: Status strip          -- global: gateway / agents / sessions / vault status
+Row 2: Chat area (fill)      -- ALWAYS renders chat (butler, session, or agent)
+Row 3: Status bar            -- help text / errors
 ```
 
-All card navigation lives in the top card bar. There are no inner card strips — each page gets the full content area.
+Switching between modes changes **what you're chatting with**, not the content area.
 
 ### Global Keys
 
 | Key | Action |
 |-----|--------|
 | `q` | Quit |
+| `c` | Enter chat mode |
 | `?` | Context menu |
-| `Alt+←` / `Alt+→` | Navigate cards in top bar |
-| `Alt+↑` / `Alt+↓` | Switch section (mode) |
+| `Alt+Left/Right` | Navigate cards in top bar |
+| `Alt+Up/Down` | Switch mode (Dashboard/Agents/Sessions/Cron) |
 | `Alt+Enter` | Open card detail overlay |
-| `↑` / `↓` | Navigate lists |
-| `←` / `→` | Navigate per-mode items |
-| `1-7` | Jump to section |
+| `1-4` | Jump to mode |
+| `5-7` | Open overlay (Cron / Vault / Models) |
 | `Enter` | Select / Confirm |
-| `Esc` | Cancel / Back |
+| `Esc` | Cancel / Close overlay |
 
-### Sections
+### Overlay Shortcuts
 
-The card bar mode selector provides seven sections:
+| Key | Overlay |
+|-----|---------|
+| `Alt+V` | Vault / Credentials |
+| `Alt+S` | Settings |
+| `Alt+M` | Models / LLM Providers |
+| `Alt+C` | Cron Jobs |
 
-| # | Section | Description |
-|---|---------|-------------|
-| 1 | Dashboard | Butler chat + status overview |
-| 2 | Credentials | Manage secure credential vault |
-| 3 | Agents | View and control agents |
-| 4 | Sessions | Chat sessions (grouped by agent) |
-| 5 | Cron Jobs | Scheduled task management |
-| 6 | Models | Configure LLM providers |
-| 7 | Settings | Application settings |
+### Modes
 
-## Screens
+The card bar mode selector provides four navigation targets:
 
-### Dashboard
+| # | Mode | Description |
+|---|------|-------------|
+| 1 | Dashboard | Butler chat + status overview cards |
+| 2 | Agents | One card per agent; selecting changes chat target |
+| 3 | Sessions | Sessions grouped by agent; selecting changes active chat |
+| 4 | Cron Jobs | Cron overview card |
 
-Shows system status at a glance:
-- Gateway connection status
-- Active sessions count
-- Vault status (locked/unlocked)
-- Recent activity
+## Chat
 
-### Credentials
+Chat is always visible. The chat target depends on the current mode:
 
-Manage your secure credential vault.
+- **Dashboard**: Chat with Butler (local companion agent)
+- **Agents**: Chat with the selected agent (ad-hoc)
+- **Sessions**: Chat within the selected session
 
-**Key bindings:**
+Press `c` to focus the chat input. In chat mode:
+
 | Key | Action |
 |-----|--------|
-| `a` | Add new credential |
-| `d` | Delete selected credential |
+| `Enter` | Send message |
+| `Alt+Enter` | Insert newline |
+| `PgUp/PgDn` | Scroll history |
+| `Ctrl+R` | Retry last message |
+| `Esc` | Exit chat mode |
+
+## Overlays
+
+### Vault (Alt+V)
+
+Manage your secure credential vault. Has four tabs:
+
+| Tab | Description |
+|-----|-------------|
+| Endpoints | Configured credential endpoints |
+| Providers | Available credential providers (from gateway) |
+| Permissions | Credential access rules |
+| Audit | Audit log |
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `1-4` | Switch tab |
+| `a` | Add credential |
+| `d` | Delete selected |
+| `i` | Initialize vault |
 | `u` | Unlock vault |
 | `l` | Lock vault |
-| `↑` / `↓` | Select credential |
+| `Enter` | View details |
+| `Esc` | Close overlay |
 
-**Add Credential Modal:**
+### Settings (Alt+S)
 
-When adding a credential, the form fields change based on the selected endpoint type:
+Application configuration with sub-sections: General, Paths, About.
 
-| Type | Fields |
-|------|--------|
-| Home Assistant | URL, Long-Lived Access Token |
-| Generic REST API | Base URL, Bearer Token |
-| OAuth2 Service | Base URL, Auth URL, Token URL, Client ID, Client Secret, Scopes, Redirect URI |
-| API Key Service | Base URL, API Key, Header Name |
-| Basic Auth | Base URL, Username, Password |
-| Bearer Token | Base URL, Token |
-
-**Modal navigation:**
 | Key | Action |
 |-----|--------|
-| `Tab` / `↑` / `↓` | Move between fields |
-| `←` / `→` | Change endpoint type (when on type selector) |
-| `Enter` | Next field / Submit |
-| `Esc` | Cancel |
+| `s` | Start gateway |
+| `S` | Stop gateway |
+| `r` | Restart gateway |
+| `Up/Down` | Select section |
+| `Esc` | Close overlay |
 
-### Agents
+### Models (Alt+M)
 
-View configured agents and their status. Agents are shown as cards in the top bar; the full content area shows the selected agent's details.
+LLM provider configuration. Dynamic tab bar built from actual gateway providers (not hardcoded).
 
-**Key bindings:**
 | Key | Action |
 |-----|--------|
-| `Alt+←/→` | Select agent (card bar) |
-| `Enter` | View agent details |
+| `Left/Right` | Select provider |
+| `Enter` | View model list |
+| `e` | Configure provider |
+| `Esc` | Close overlay |
+
+### Cron Jobs (Alt+C)
+
+Scheduled task management with inline filter toggle.
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Cycle filter (All/Active/Disabled) |
+| `Up/Down` | Select job |
+| `e` | Enable/disable |
+| `d` | Delete |
+| `t` | Trigger now |
+| `r` | Refresh |
+| `Esc` | Close overlay |
+
+## Agents Mode
+
+Agents are shown as cards in the top bar. Selecting an agent changes the chat target.
+
+| Key | Action |
+|-----|--------|
+| `Alt+Left/Right` | Select agent (card bar) |
+| `c` | Chat with selected agent |
 | `a` | Add new agent |
 | `e` | Edit selected agent |
 | `d` | Disable agent |
 | `f` | Browse context files |
-| `r` | Reload agent list |
+| `Alt+Enter` | Agent detail overlay |
 
-### Sessions
+## Sessions Mode
 
-Chat sessions grouped by agent in the card bar. The content area shows the chat interface for the selected session.
+Chat sessions grouped by agent in the card bar. Selecting changes the active chat.
 
-**Key bindings:**
 | Key | Action |
 |-----|--------|
-| `Alt+←/→` | Select session (card bar) |
-| `n` | Create new session |
+| `Alt+Left/Right` | Select session |
 | `c` | Enter chat mode |
+| `n` | Create new session |
 | `k` | Kill session |
 | `Alt+Enter` | Session detail overlay |
-
-### Models
-
-LLM provider configuration. Providers shown in the card bar; details in the content area.
-
-**Key bindings:**
-| Key | Action |
-|-----|--------|
-| `Alt+←/→` | Select provider |
-| `Enter` | View model list |
-| `e` | Configure provider |
-| `Alt+Enter` | Provider detail overlay |
-
-### Settings
-
-Application configuration with sub-sections: General, Paths, About.
-
-**Key bindings:**
-| Key | Action |
-|-----|--------|
-| `Alt+←/→` | Select section |
-| `s` | Start gateway |
-| `S` | Stop gateway |
-| `r` | Restart gateway |
 
 ## Vault Unlock Flow
 
@@ -158,27 +173,29 @@ When accessing credentials with a locked vault:
    - Press `Enter` to submit
    - Press `Esc` to cancel
 
-The vault status is shown in the sidebar:
-- 🔓 Unlocked (green)
-- 🔒 Locked (yellow)
-- ❌ Not initialized (red)
+## Color Themes
+
+Configure the color theme in `rockbot.toml`:
+
+```toml
+[tui]
+color_theme = "Purple"       # Purple, Blue, Green, Rose, Amber, Mono
+animation_style = "Coalesce"  # Coalesce, Fade, Slide, None
+```
 
 ## Tips
 
 ### Quick Navigation
 
-- Press number keys `1-6` to jump directly to sections
-- `g` then `d` for Dashboard, `g` then `c` for Credentials, etc.
+- Press `1-4` to jump directly to modes
+- Press `5-7` to open overlays (Cron/Vault/Models)
+- Use `Alt+V/S/M/C` for overlay shortcuts from any mode
 
 ### Responsive Design
 
 The TUI adapts to your terminal size. For best experience:
 - Minimum: 80x24
 - Recommended: 120x40+
-
-### Color Themes
-
-The TUI respects your terminal's color scheme. For best contrast, use a dark terminal theme.
 
 ## Troubleshooting
 
@@ -194,12 +211,3 @@ Ensure your terminal emulator supports:
 - Unicode (for icons)
 - 256 colors (for styling)
 - Mouse input (optional, for clicking)
-
-### Fields Not Rendering
-
-If form fields appear blank, this was likely a layout bug (now fixed). Update to the latest version:
-
-```bash
-git pull
-cargo build --release
-```

@@ -45,7 +45,7 @@ pub fn render_credentials(
 }
 
 /// Render a compact vault status hint centered in the content area
-fn render_vault_hint(frame: &mut Frame, area: Rect, message: &str, action: &str) {
+pub(crate) fn render_vault_hint(frame: &mut Frame, area: Rect, message: &str, action: &str) {
     let content = vec![
         Line::from(""),
         Line::from(Span::styled(
@@ -66,7 +66,7 @@ fn render_vault_hint(frame: &mut Frame, area: Rect, message: &str, action: &str)
 }
 
 /// Render the Endpoints tab as a selectable vertical list
-fn render_endpoints_list(frame: &mut Frame, area: Rect, state: &AppState) {
+pub(crate) fn render_endpoints_list(frame: &mut Frame, area: Rect, state: &AppState) {
     let body = super::render_detail_header(frame, area, "Endpoints (Enter:View  a:Add  d:Delete)");
 
     if state.endpoints.is_empty() {
@@ -151,7 +151,7 @@ fn render_endpoints_list(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 /// Render the Providers tab as a selectable vertical list
-fn render_providers_list(frame: &mut Frame, area: Rect, state: &AppState) {
+pub(crate) fn render_providers_list(frame: &mut Frame, area: Rect, state: &AppState) {
     let body = super::render_detail_header(frame, area, "Providers (Enter:View  e:Configure)");
 
     if state.credential_schemas.is_empty() {
@@ -229,7 +229,7 @@ fn render_providers_list(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_stateful_widget(list, body, &mut list_state);
 }
 
-fn render_permissions_list(frame: &mut Frame, area: Rect, state: &AppState) {
+pub(crate) fn render_permissions_list(frame: &mut Frame, area: Rect, state: &AppState) {
     let body = super::render_detail_header(frame, area, "Permissions (Enter:View  p:Add Rule)");
 
     if state.permissions.is_empty() {
@@ -324,7 +324,7 @@ fn render_permissions_list(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_stateful_widget(list, body, &mut list_state);
 }
 
-fn render_audit_list(frame: &mut Frame, area: Rect) {
+pub(crate) fn render_audit_list(frame: &mut Frame, area: Rect) {
     let body = super::render_detail_header(frame, area, "Audit Log");
 
     let content = vec![

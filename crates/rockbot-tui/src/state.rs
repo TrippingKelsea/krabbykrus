@@ -141,15 +141,13 @@ pub enum MenuItem {
 }
 
 impl MenuItem {
+    /// Card bar modes — only 4 navigation targets (others are overlays).
     pub fn all() -> Vec<Self> {
         vec![
             Self::Dashboard,
-            Self::Credentials,
             Self::Agents,
             Self::Sessions,
             Self::CronJobs,
-            Self::Models,
-            Self::Settings,
         ]
     }
 
@@ -167,37 +165,33 @@ impl MenuItem {
 
     pub fn icon(&self) -> &'static str {
         match self {
-            Self::Dashboard => "📊",
-            Self::Credentials => "🔐",
-            Self::Agents => "🤖",
-            Self::Sessions => "💬",
-            Self::CronJobs => "🕐",
-            Self::Models => "🧠",
-            Self::Settings => "⚙️",
+            Self::Dashboard => "\u{1f4ca}",
+            Self::Credentials => "\u{1f510}",
+            Self::Agents => "\u{1f916}",
+            Self::Sessions => "\u{1f4ac}",
+            Self::CronJobs => "\u{1f550}",
+            Self::Models => "\u{1f9e0}",
+            Self::Settings => "\u{2699}\u{fe0f}",
         }
     }
 
     pub fn index(&self) -> usize {
         match self {
             Self::Dashboard => 0,
-            Self::Credentials => 1,
-            Self::Agents => 2,
-            Self::Sessions => 3,
-            Self::CronJobs => 4,
-            Self::Models => 5,
-            Self::Settings => 6,
+            Self::Agents => 1,
+            Self::Sessions => 2,
+            Self::CronJobs => 3,
+            // Legacy variants map to 0
+            Self::Credentials | Self::Models | Self::Settings => 0,
         }
     }
 
     pub fn from_index(idx: usize) -> Self {
-        match idx % 7 {
+        match idx % 4 {
             0 => Self::Dashboard,
-            1 => Self::Credentials,
-            2 => Self::Agents,
-            3 => Self::Sessions,
-            4 => Self::CronJobs,
-            5 => Self::Models,
-            _ => Self::Settings,
+            1 => Self::Agents,
+            2 => Self::Sessions,
+            _ => Self::CronJobs,
         }
     }
 }
@@ -369,10 +363,11 @@ impl SlottedCardBar {
             MenuItem::Dashboard => build_dashboard_slots(),
             MenuItem::Agents => build_agents_slots_from(agents),
             MenuItem::Sessions => build_sessions_slots_from(sessions),
-            MenuItem::Credentials => build_credentials_slots(),
             MenuItem::CronJobs => build_cron_slots(),
-            MenuItem::Models => build_models_slots(),
-            MenuItem::Settings => build_settings_slots(),
+            // Legacy modes (now overlays) — show dashboard slots
+            MenuItem::Credentials | MenuItem::Models | MenuItem::Settings => {
+                build_dashboard_slots()
+            }
         };
         self.slots.extend(new_slots);
         // Pinned alerts card — always rightmost
@@ -517,156 +512,18 @@ fn build_sessions_slots_from(sessions: &[SessionInfo]) -> Vec<CardSlot> {
         .collect()
 }
 
-fn build_credentials_slots() -> Vec<CardSlot> {
-    vec![
-        CardSlot {
-            label: "Endpoints".to_string(),
-            icon: 'E',
-            badge: None,
-            views: vec![SlotView {
-                label: "Status".to_string(),
-                widget: CardWidgetId::VaultStatus,
-            }],
-            active_view: 0,
-            kind: SlotKind::InfoCard,
-        },
-        CardSlot {
-            label: "Providers".to_string(),
-            icon: 'P',
-            badge: None,
-            views: vec![SlotView {
-                label: "Status".to_string(),
-                widget: CardWidgetId::GatewayStatus,
-            }],
-            active_view: 0,
-            kind: SlotKind::InfoCard,
-        },
-    ]
-}
-
 fn build_cron_slots() -> Vec<CardSlot> {
-    vec![
-        CardSlot {
-            label: "All Jobs".to_string(),
-            icon: 'A',
-            badge: None,
-            views: vec![SlotView {
-                label: "Overview".to_string(),
-                widget: CardWidgetId::CronOverview,
-            }],
-            active_view: 0,
-            kind: SlotKind::InfoCard,
-        },
-        CardSlot {
-            label: "Active".to_string(),
-            icon: '+',
-            badge: None,
-            views: vec![SlotView {
-                label: "Active".to_string(),
-                widget: CardWidgetId::CronOverview,
-            }],
-            active_view: 0,
-            kind: SlotKind::InfoCard,
-        },
-        CardSlot {
-            label: "Disabled".to_string(),
-            icon: 'o',
-            badge: None,
-            views: vec![SlotView {
-                label: "Disabled".to_string(),
-                widget: CardWidgetId::CronOverview,
-            }],
-            active_view: 0,
-            kind: SlotKind::InfoCard,
-        },
-    ]
-}
-
-fn build_models_slots() -> Vec<CardSlot> {
-    vec![
-        CardSlot {
-            label: "Bedrock".to_string(),
-            icon: 'B',
-            badge: None,
-            views: vec![SlotView {
-                label: "Status".to_string(),
-                widget: CardWidgetId::ModelsOverview,
-            }],
-            active_view: 0,
-            kind: SlotKind::InfoCard,
-        },
-        CardSlot {
-            label: "Anthropic".to_string(),
-            icon: 'A',
-            badge: None,
-            views: vec![SlotView {
-                label: "Status".to_string(),
-                widget: CardWidgetId::ModelsOverview,
-            }],
-            active_view: 0,
-            kind: SlotKind::InfoCard,
-        },
-        CardSlot {
-            label: "OpenAI".to_string(),
-            icon: 'O',
-            badge: None,
-            views: vec![SlotView {
-                label: "Status".to_string(),
-                widget: CardWidgetId::ModelsOverview,
-            }],
-            active_view: 0,
-            kind: SlotKind::InfoCard,
-        },
-        CardSlot {
-            label: "Ollama".to_string(),
-            icon: 'L',
-            badge: None,
-            views: vec![SlotView {
-                label: "Status".to_string(),
-                widget: CardWidgetId::ModelsOverview,
-            }],
-            active_view: 0,
-            kind: SlotKind::InfoCard,
-        },
-    ]
-}
-
-fn build_settings_slots() -> Vec<CardSlot> {
-    vec![
-        CardSlot {
-            label: "General".to_string(),
-            icon: 'G',
-            badge: None,
-            views: vec![SlotView {
-                label: "General".to_string(),
-                widget: CardWidgetId::SettingsGeneral,
-            }],
-            active_view: 0,
-            kind: SlotKind::InfoCard,
-        },
-        CardSlot {
-            label: "Paths".to_string(),
-            icon: 'P',
-            badge: None,
-            views: vec![SlotView {
-                label: "Paths".to_string(),
-                widget: CardWidgetId::SettingsGeneral,
-            }],
-            active_view: 0,
-            kind: SlotKind::InfoCard,
-        },
-        CardSlot {
-            label: "About".to_string(),
-            icon: 'i',
-            badge: None,
-            views: vec![SlotView {
-                label: "About".to_string(),
-                widget: CardWidgetId::SettingsGeneral,
-            }],
-            active_view: 0,
-            kind: SlotKind::InfoCard,
-        },
-    ]
+    vec![CardSlot {
+        label: "Cron".to_string(),
+        icon: 'C',
+        badge: None,
+        views: vec![SlotView {
+            label: "Overview".to_string(),
+            widget: CardWidgetId::CronOverview,
+        }],
+        active_view: 0,
+        kind: SlotKind::InfoCard,
+    }]
 }
 
 /// Gateway connection status
@@ -1109,6 +966,9 @@ pub struct AppState {
     pub should_exit: bool,
     pub tick_count: usize,
 
+    // Chat target (what the user is chatting with)
+    pub chat_target: ChatTarget,
+
     // Input modes (for modals, text input, etc.)
     pub input_mode: InputMode,
     pub input_buffer: String,
@@ -1120,6 +980,15 @@ pub struct AppState {
 
     // Message sender for async updates
     pub tx: mpsc::UnboundedSender<Message>,
+}
+
+/// What the user is currently chatting with.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ChatTarget {
+    #[default]
+    Butler,
+    Session(String),
+    Agent(String),
 }
 
 /// Input modes for capturing text/modal interactions
@@ -1175,6 +1044,17 @@ pub enum InputMode {
     ContextMenu(ContextMenuState),
     /// Card detail overlay (Alt+Enter on a card slot)
     CardDetail(CardDetailState),
+    /// Vault/credentials overlay (Alt+V)
+    VaultOverlay,
+    /// Settings overlay (Alt+S)
+    SettingsOverlay,
+    /// Models overlay (Alt+M)
+    ModelsOverlay {
+        provider_index: usize,
+        scroll: usize,
+    },
+    /// Cron jobs overlay (Alt+C)
+    CronOverlay { scroll: usize },
 }
 
 /// State for a card detail overlay modal.
@@ -2933,6 +2813,8 @@ impl AppState {
             should_exit: false,
             tick_count: 0,
 
+            chat_target: ChatTarget::Butler,
+
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
             input_cursor: 0,
@@ -3485,17 +3367,7 @@ impl AppState {
     /// Move selection up in current list
     pub fn select_prev(&mut self) {
         match self.menu_item {
-            MenuItem::Dashboard => {
-                // Dashboard left/right navigation handled via slot_bar; no-op here
-            }
-            MenuItem::Credentials => {
-                // Left/Right navigates the tab cards
-                self.credentials_tab = if self.credentials_tab == 0 {
-                    3
-                } else {
-                    self.credentials_tab - 1
-                };
-            }
+            MenuItem::Dashboard => {}
             MenuItem::Agents => {
                 if !self.agents.is_empty() {
                     self.selected_agent = if self.selected_agent == 0 {
@@ -3514,41 +3386,16 @@ impl AppState {
                     };
                 }
             }
-            MenuItem::CronJobs => {
-                self.selected_cron_card = if self.selected_cron_card == 0 {
-                    2
-                } else {
-                    self.selected_cron_card - 1
-                };
-            }
-            MenuItem::Models => {
-                let count = self.model_provider_count();
-                self.selected_provider = if self.selected_provider == 0 {
-                    count - 1
-                } else {
-                    self.selected_provider - 1
-                };
-            }
-            MenuItem::Settings => {
-                self.selected_settings_card = if self.selected_settings_card == 0 {
-                    2
-                } else {
-                    self.selected_settings_card - 1
-                };
-            }
+            MenuItem::CronJobs => {}
+            // Legacy modes — no-op
+            MenuItem::Credentials | MenuItem::Models | MenuItem::Settings => {}
         }
     }
 
     /// Move selection down in current list
     pub fn select_next(&mut self) {
         match self.menu_item {
-            MenuItem::Dashboard => {
-                // Dashboard left/right navigation handled via slot_bar; no-op here
-            }
-            MenuItem::Credentials => {
-                // Left/Right navigates the tab cards
-                self.credentials_tab = (self.credentials_tab + 1) % 4;
-            }
+            MenuItem::Dashboard => {}
             MenuItem::Agents => {
                 if !self.agents.is_empty() {
                     self.selected_agent = (self.selected_agent + 1) % self.agents.len();
@@ -3559,16 +3406,8 @@ impl AppState {
                     self.selected_session = (self.selected_session + 1) % self.sessions.len();
                 }
             }
-            MenuItem::CronJobs => {
-                self.selected_cron_card = (self.selected_cron_card + 1) % 3;
-            }
-            MenuItem::Models => {
-                let count = self.model_provider_count();
-                self.selected_provider = (self.selected_provider + 1) % count;
-            }
-            MenuItem::Settings => {
-                self.selected_settings_card = (self.selected_settings_card + 1) % 3;
-            }
+            MenuItem::CronJobs => {}
+            MenuItem::Credentials | MenuItem::Models | MenuItem::Settings => {}
         }
     }
 

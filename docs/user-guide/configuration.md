@@ -301,14 +301,18 @@ Syntax: `${VAR}` (required) or `${VAR:default}` (with fallback).
 
 ```toml
 [tui]
-floating_bar = true     # Show top bar as floating overlay (default: true)
-animations = true       # Enable animated transitions and effects (default: true)
+floating_bar = true         # Show top bar as floating overlay (default: true)
+animations = true           # Enable animated transitions and effects (default: true)
+color_theme = "Purple"      # Color theme: Purple, Blue, Green, Rose, Amber, Mono
+animation_style = "Coalesce" # Animation style: Coalesce, Fade, Slide, None
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `floating_bar` | bool | `true` | Render the top navigation bar as a floating overlay above page content |
 | `animations` | bool | `true` | Enable tachyonfx-powered transitions (modal open/close, page transitions, glow) |
+| `color_theme` | string | `"Purple"` | Accent color theme. Options: `Purple`, `Blue`, `Green`, `Rose`, `Amber`, `Mono` |
+| `animation_style` | string | `"Coalesce"` | Modal transition style. Options: `Coalesce`, `Fade`, `Slide`, `None` |
 
 ## `[seed_model]`
 
