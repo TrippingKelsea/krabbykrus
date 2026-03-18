@@ -1194,10 +1194,11 @@ impl Agent {
         stream_tx: &tokio::sync::mpsc::Sender<StreamingChunk>,
     ) -> Result<(ChatCompletionResponse, String)> {
         let model = request.model.clone();
+        let request_for_fallback = request.clone();
         let llm_timeout = Duration::from_secs(self.config.llm_timeout_secs);
 
         // Timeout on initial stream connection
-        let mut stream =
+        let stream_result =
             tokio::time::timeout(llm_timeout, self.llm_provider.stream_completion(request))
                 .await
                 .map_err(|_| {
@@ -1212,7 +1213,24 @@ impl Agent {
                     crate::error::Error::Agent(AgentError::ModelError {
                         message: format!("LLM streaming connection failed: {e}"),
                     })
-                })?;
+                });
+
+        let mut stream = match stream_result {
+            Ok(stream) => stream,
+            Err(error) => {
+                warn!(
+                    "LLM streaming unavailable for model '{}' in tool loop, falling back to non-streaming: {}",
+                    model, error
+                );
+                let response = self.call_llm_with_retry(request_for_fallback).await?;
+                let accumulated_text = response
+                    .choices
+                    .first()
+                    .map(|choice| choice.message.content.clone())
+                    .unwrap_or_default();
+                return Ok((response, accumulated_text));
+            }
+        };
 
         let mut accumulated_text = String::new();
         let mut accumulated_tool_calls: Vec<rockbot_llm::ToolCall> = Vec::new();
@@ -1267,12 +1285,17 @@ impl Agent {
             && accumulated_tool_calls.is_empty()
             && response_id.is_empty()
         {
-            return Err(crate::error::Error::Agent(AgentError::ModelError {
-                message: format!(
-                    "LLM streaming stalled — no data received for {}s",
-                    self.config.llm_timeout_secs * 2
-                ),
-            }));
+            warn!(
+                "LLM streaming stalled for model '{}' in tool loop, falling back to non-streaming",
+                model
+            );
+            let response = self.call_llm_with_retry(request_for_fallback).await?;
+            let accumulated_text = response
+                .choices
+                .first()
+                .map(|choice| choice.message.content.clone())
+                .unwrap_or_default();
+            return Ok((response, accumulated_text));
         }
 
         // Assemble the response as if it were a non-streaming response
@@ -2462,12 +2485,21 @@ The user wants me to explore the codebase. I should start by listing the directo
             "LLM streaming failed after {} retries: {}",
             retry_config.max_retries, last_error_message
         );
-        Err(crate::error::Error::Agent(AgentError::ModelError {
-            message: format!(
-                "LLM streaming failed after {} retries: {}",
-                retry_config.max_retries, last_error_message
-            ),
-        }))
+        warn!(
+            "Falling back to non-streaming completion for model '{}' after streaming retries were exhausted",
+            request.model
+        );
+        let response = self.call_llm_with_retry(request).await?;
+        if let Some(ptx) = progress_tx.as_ref() {
+            if let Some(choice) = response.choices.first() {
+                if !choice.message.content.is_empty() {
+                    let _ = ptx.send(AgentProgressEvent::TextDelta {
+                        text: choice.message.content.clone(),
+                    });
+                }
+            }
+        }
+        Ok(response)
     }
 
     /// Classify an LLM error for retry decisions

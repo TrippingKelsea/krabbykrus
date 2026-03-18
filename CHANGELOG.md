@@ -93,6 +93,9 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
   - Automatic save of `[tui]`, `[tui.theme]`, and `[tui.fonts]` changes to `rockbot.toml`
 
 ### Fixed
+- **Bedrock fallback**: agent chat and tool-loop LLM calls now fall back to
+  non-streaming completions when Bedrock streaming repeatedly returns service
+  errors, instead of failing the request outright
 - **Tool streaming**: remote tool stdout/stderr chunks now travel as distinct
   WebSocket `tool_output` events end-to-end instead of being mislabeled as final
   `tool_result` payloads, so native clients can render incremental output
