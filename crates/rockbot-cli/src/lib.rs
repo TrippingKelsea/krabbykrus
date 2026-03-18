@@ -1,7 +1,7 @@
 //! Command-line interface for RockBot
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use rockbot_config::Config;
 use std::path::PathBuf;
 use tracing::info;
@@ -91,6 +91,22 @@ pub enum Commands {
         #[command(subcommand)]
         command: MigrateCommands,
     },
+
+    /// Generate shell completion scripts
+    Completion {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: CompletionShell,
+    },
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+pub enum CompletionShell {
+    Bash,
+    Elvish,
+    Fish,
+    PowerShell,
+    Zsh,
 }
 
 /// Gateway server commands
@@ -748,6 +764,18 @@ pub async fn run(cli: Cli) -> Result<()> {
             .await
         }
         Commands::Migrate { command } => commands::migrate::run(command).await,
+        Commands::Completion { shell } => {
+            let mut command = Cli::command();
+            let shell = match shell {
+                CompletionShell::Bash => clap_complete::Shell::Bash,
+                CompletionShell::Elvish => clap_complete::Shell::Elvish,
+                CompletionShell::Fish => clap_complete::Shell::Fish,
+                CompletionShell::PowerShell => clap_complete::Shell::PowerShell,
+                CompletionShell::Zsh => clap_complete::Shell::Zsh,
+            };
+            clap_complete::generate(shell, &mut command, "rockbot", &mut std::io::stdout());
+            Ok(())
+        }
     }
 }
 

@@ -4318,20 +4318,37 @@ impl App {
             return self.handle_normal_mode(key);
         }
 
+        match key.code {
+            KeyCode::Tab => {
+                if self.apply_slash_completion(false) {
+                    return Ok(());
+                }
+            }
+            KeyCode::BackTab => {
+                if self.apply_slash_completion(true) {
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+
         // Normalize the key event into a text-input action
         match normalize_for_text_input(key) {
             InputAction::Newline => {
+                self.reset_slash_completion();
                 self.insert_chat_newline();
             }
             InputAction::Submit => {
                 self.send_chat_buffer();
             }
             InputAction::Cancel => {
+                self.reset_slash_completion();
                 self.state.input_mode = InputMode::Normal;
             }
             InputAction::Text(c) => {
                 self.state.input_buffer.insert(self.state.input_cursor, c);
                 self.state.input_cursor += c.len_utf8();
+                self.reset_slash_completion();
             }
             InputAction::Backspace => {
                 if self.state.input_cursor > 0 {
@@ -4342,11 +4359,13 @@ impl App {
                     self.state.input_buffer.remove(prev);
                     self.state.input_cursor = prev;
                 }
+                self.reset_slash_completion();
             }
             InputAction::Delete => {
                 if self.state.input_cursor < self.state.input_buffer.len() {
                     self.state.input_buffer.remove(self.state.input_cursor);
                 }
+                self.reset_slash_completion();
             }
             InputAction::NavLeft => {
                 if self.state.input_cursor > 0 {
@@ -4426,6 +4445,7 @@ impl App {
         if !matches!(self.state.input_mode, InputMode::ChatInput) {
             return;
         }
+        self.reset_slash_completion();
         for c in text.chars() {
             if c == '\n' {
                 self.insert_chat_newline();
@@ -4449,6 +4469,76 @@ impl App {
                 .insert(self.state.input_cursor, '\n');
             self.state.input_cursor += 1;
         }
+    }
+
+    fn reset_slash_completion(&mut self) {
+        self.state.slash_completion_index = 0;
+    }
+
+    fn slash_command_matches(&self) -> Vec<rockbot_chat::CommandInfo> {
+        self.command_registry
+            .matching_commands(&self.state.input_buffer)
+    }
+
+    fn slash_completion_hint(&self) -> Option<String> {
+        let matches = self.slash_command_matches();
+        if matches.is_empty() || !self.state.input_buffer.trim_start().starts_with('/') {
+            return None;
+        }
+
+        let selected = self.state.slash_completion_index % matches.len();
+        let labels = matches
+            .iter()
+            .take(4)
+            .enumerate()
+            .map(|(idx, info)| {
+                if idx == selected {
+                    format!("[/{}]", info.name)
+                } else {
+                    format!("/{}", info.name)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        Some(format!(
+            "Tab/Shift+Tab:Complete {labels} │ Enter:Send │ Ctrl+J:Newline │ Esc:Back"
+        ))
+    }
+
+    fn apply_slash_completion(&mut self, backwards: bool) -> bool {
+        if !self.state.input_buffer.starts_with('/') {
+            return false;
+        }
+
+        let matches = self.slash_command_matches();
+        if matches.is_empty() {
+            return false;
+        }
+
+        if backwards {
+            if self.state.slash_completion_index == 0 {
+                self.state.slash_completion_index = matches.len() - 1;
+            } else {
+                self.state.slash_completion_index -= 1;
+            }
+        }
+
+        let selected = self.state.slash_completion_index % matches.len();
+        let command_name = matches[selected].name;
+        let rest = self
+            .state
+            .input_buffer[1..]
+            .split_once(char::is_whitespace)
+            .map(|(_, args)| args.trim_start().to_string());
+
+        self.state.input_buffer = match rest {
+            Some(args) if !args.is_empty() => format!("/{command_name} {args}"),
+            _ => format!("/{command_name} "),
+        };
+        self.state.input_cursor = self.state.input_buffer.len();
+        self.state.slash_completion_index = (selected + 1) % matches.len();
+        true
     }
 
     fn send_chat_buffer(&mut self) {
@@ -5083,7 +5173,14 @@ impl App {
         }
 
         // Input box — always visible
-        render_chat_input(frame, chunks[1], &self.state, is_chat_mode);
+        let slash_completion_hint = self.slash_completion_hint();
+        render_chat_input(
+            frame,
+            chunks[1],
+            &self.state,
+            is_chat_mode,
+            slash_completion_hint.as_deref(),
+        );
     }
 
     /// Render session messages (without input box) into the given area.

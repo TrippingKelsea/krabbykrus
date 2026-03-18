@@ -125,7 +125,7 @@ pub fn render_chat_area(
         frame.render_widget(content, chunks[0]);
     }
 
-    render_chat_input(frame, chunks[1], state, is_chat_mode);
+    render_chat_input(frame, chunks[1], state, is_chat_mode, None);
 }
 
 pub fn render_chat_messages(
@@ -358,14 +358,22 @@ pub fn render_chat_messages(
     }
 }
 
-pub fn render_chat_input(frame: &mut Frame, area: Rect, state: &AppState, is_active: bool) {
+pub fn render_chat_input(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    is_active: bool,
+    slash_completion_hint: Option<&str>,
+) {
     let border_style = if is_active {
         Style::default().fg(palette::ACTIVE_PRIMARY)
     } else {
         Style::default().fg(Color::DarkGray)
     };
 
-    let title = if is_active {
+    let title = if let Some(hint) = slash_completion_hint.filter(|_| is_active) {
+        hint
+    } else if is_active {
         "Enter:Send │ Shift+Enter / Ctrl+J:Newline │ PgUp/Dn:Scroll │ Ctrl+R:Retry │ Esc:Back"
     } else {
         "Press 'c' to chat │ 'd' to archive"

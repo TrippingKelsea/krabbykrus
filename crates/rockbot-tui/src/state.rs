@@ -1267,6 +1267,7 @@ pub struct AppState {
     pub input_buffer: String,
     /// Cursor byte position within input_buffer
     pub input_cursor: usize,
+    pub slash_completion_index: usize,
 
     // TUI display preferences
     pub tui_config: rockbot_config::TuiConfig,
@@ -3352,6 +3353,7 @@ impl AppState {
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
             input_cursor: 0,
+            slash_completion_index: 0,
 
             tui_config: rockbot_config::TuiConfig::default(),
 
@@ -3993,6 +3995,7 @@ impl AppState {
     pub fn clear_input(&mut self) {
         self.input_buffer.clear();
         self.input_cursor = 0;
+        self.slash_completion_index = 0;
     }
 
     /// Move selection up in current list

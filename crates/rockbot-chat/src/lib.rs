@@ -114,6 +114,32 @@ impl ChatCommandRegistry {
     pub fn list_commands(&self) -> Vec<CommandInfo> {
         self.commands.iter().map(|c| c.info()).collect()
     }
+
+    /// Find commands matching the current slash-command prefix.
+    pub fn matching_commands(&self, input: &str) -> Vec<CommandInfo> {
+        let input = input.trim_start();
+        if !input.starts_with('/') {
+            return Vec::new();
+        }
+
+        let command_part = input[1..]
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+
+        self.list_commands()
+            .into_iter()
+            .filter(|info| {
+                command_part.is_empty()
+                    || info.name.starts_with(&command_part)
+                    || info
+                        .aliases
+                        .iter()
+                        .any(|alias| alias.starts_with(&command_part))
+            })
+            .collect()
+    }
 }
 
 /// Parse `$@agent-id message` syntax for direct agent routing.
@@ -196,5 +222,19 @@ mod tests {
             registry.dispatch("not a command", &ctx),
             CommandResult::NotHandled
         ));
+    }
+
+    #[test]
+    fn test_matching_commands() {
+        let mut registry = ChatCommandRegistry::new();
+        registry.register(Box::new(TestCmd));
+
+        let matches = registry.matching_commands("/te");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].name, "test");
+
+        let alias_matches = registry.matching_commands("/t");
+        assert_eq!(alias_matches.len(), 1);
+        assert_eq!(alias_matches[0].name, "test");
     }
 }
