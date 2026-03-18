@@ -44,7 +44,11 @@ impl StorageRuntime {
     }
 
     pub async fn new_with_root(config: &Config, storage_root: PathBuf) -> Result<Self> {
-        tokio::fs::create_dir_all(&storage_root).await?;
+        Self::new_with_root_sync(config, storage_root)
+    }
+
+    pub fn new_with_root_sync(config: &Config, storage_root: PathBuf) -> Result<Self> {
+        std::fs::create_dir_all(&storage_root)?;
         let disk_path = Store::default_disk_path(&storage_root);
         let pki_manager = open_pki_for_storage(config)?.map(Arc::new);
         Ok(Self {
@@ -176,6 +180,22 @@ impl StorageRuntime {
     }
 
     pub async fn open_vault_volume(&self, data_dir: &Path) -> Result<OpenedStore> {
+        self.open_vault_volume_sync(data_dir)
+    }
+
+    pub fn open_vault_volume_sync(&self, data_dir: &Path) -> Result<OpenedStore> {
+        let store = self.open_vault_store_sync(data_dir)?;
+        Ok(OpenedStore {
+            store: Arc::new(store),
+            descriptor: format!(
+                "virtual disk {} volume 'vault' (plaintext)",
+                self.disk_path.display()
+            ),
+            mode: StoreMode::Persistent,
+        })
+    }
+
+    pub fn open_vault_store_sync(&self, data_dir: &Path) -> Result<Store> {
         let legacy_path = data_dir.join("vault.db");
         if legacy_path.exists() {
             let should_import = match rockbot_vdisk::volume_info(&self.disk_path, "vault")? {
@@ -199,12 +219,11 @@ impl StorageRuntime {
             }
         }
 
-        let store = Store::open_volume(&self.disk_path, "vault", 256 * 1024 * 1024, None)?;
-        Ok(OpenedStore {
-            store: Arc::new(store),
-            descriptor: format!("virtual disk {} volume 'vault' (plaintext)", self.disk_path.display()),
-            mode: StoreMode::Persistent,
-        })
+        Store::open_volume(&self.disk_path, "vault", 256 * 1024 * 1024, None)
+    }
+
+    pub async fn open_agents_watch_store(&self, vault_path: &Path) -> Result<OpenedStore> {
+        self.open_agents_store(vault_path).await
     }
 
     async fn open_recovery_store(

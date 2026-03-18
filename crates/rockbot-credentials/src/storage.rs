@@ -30,6 +30,7 @@ use crate::types::{
 
 use rockbot_storage::tables;
 use rockbot_storage::Store;
+use rockbot_storage_runtime::StorageRuntime;
 
 /// Wraps a master key with an Age public key.
 /// Returns base64-encoded ciphertext.
@@ -331,24 +332,33 @@ impl CredentialVault {
     /// they are automatically migrated into the redb database.
     pub fn open<P: AsRef<Path>>(data_dir: P) -> Result<Self> {
         let data_dir = data_dir.as_ref().to_path_buf();
-        let disk_path = Self::disk_path_for_dir(&data_dir);
-
-        Self::migrate_legacy_redb_volume(&data_dir, &disk_path, "vault")?;
-
-        let store = match catch_unwind(AssertUnwindSafe(|| {
-            Store::open_volume(&disk_path, "vault", 256 * 1024 * 1024, None)
-        })) {
-            Ok(Ok(store)) => store,
-            Ok(Err(e)) => {
-                return Err(CredentialError::Internal(format!(
-                    "Failed to open store: {e}"
-                )))
-            }
-            Err(_) => {
-                return Err(CredentialError::Internal(
-                    "Failed to open store: redb panicked while opening the vault volume"
-                        .to_string(),
-                ))
+        let storage_root = data_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| data_dir.clone());
+        let runtime = StorageRuntime::new_with_root_sync(&rockbot_config::Config::default(), storage_root).ok();
+        let store = if let Some(runtime) = runtime {
+            runtime
+                .open_vault_store_sync(&data_dir)
+                .map_err(|e| CredentialError::Internal(format!("Failed to open store: {e}")))?
+        } else {
+            let disk_path = Self::disk_path_for_dir(&data_dir);
+            Self::migrate_legacy_redb_volume(&data_dir, &disk_path, "vault")?;
+            match catch_unwind(AssertUnwindSafe(|| {
+                Store::open_volume(&disk_path, "vault", 256 * 1024 * 1024, None)
+            })) {
+                Ok(Ok(store)) => store,
+                Ok(Err(e)) => {
+                    return Err(CredentialError::Internal(format!(
+                        "Failed to open store: {e}"
+                    )))
+                }
+                Err(_) => {
+                    return Err(CredentialError::Internal(
+                        "Failed to open store: redb panicked while opening the vault volume"
+                            .to_string(),
+                    ))
+                }
             }
         };
 
@@ -499,13 +509,24 @@ impl CredentialVault {
             verification_nonce: hex_encode(&verification_nonce),
         };
 
-        let store = Store::open_volume(
-            &Self::disk_path_for_dir(&data_dir),
-            "vault",
-            256 * 1024 * 1024,
-            None,
-        )
-        .map_err(|e| CredentialError::Internal(format!("Failed to open store: {e}")))?;
+        let storage_root = data_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| data_dir.clone());
+        let runtime = StorageRuntime::new_with_root_sync(&rockbot_config::Config::default(), storage_root).ok();
+        let store = if let Some(runtime) = runtime {
+            runtime
+                .open_vault_store_sync(&data_dir)
+                .map_err(|e| CredentialError::Internal(format!("Failed to open store: {e}")))?
+        } else {
+            Store::open_volume(
+                &Self::disk_path_for_dir(&data_dir),
+                "vault",
+                256 * 1024 * 1024,
+                None,
+            )
+            .map_err(|e| CredentialError::Internal(format!("Failed to open store: {e}")))?
+        };
 
         let vault = Self {
             data_dir,

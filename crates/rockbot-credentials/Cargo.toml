@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 rockbot-chat = { path = "../rockbot-chat" }
+rockbot-config = { path = "../rockbot-config" }
 
 # Age encryption
 age = { version = "0.10", features = ["armor"] }
@@ -48,6 +49,7 @@ base64 = "0.22"
 
 # Unified storage backend
 rockbot-storage = { path = "../rockbot-storage" }
+rockbot-storage-runtime = { path = "../rockbot-storage-runtime" }
 rockbot-vdisk = { path = "../rockbot-vdisk" }
 
 # Logging

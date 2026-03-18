@@ -502,16 +502,22 @@ impl App {
         let vault_path = self.state.vault_path.clone();
         let tx = self.state.tx.clone();
         tokio::spawn(async move {
-            let storage_root = vault_path
-                .parent()
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or(vault_path.clone());
-            let disk_path = rockbot_storage::Store::default_disk_path(&storage_root);
-            let Ok(store) =
-                rockbot_storage::Store::open_volume(&disk_path, "agents", 128 * 1024 * 1024, None)
-            else {
+            let storage_root = vault_path.parent().map(std::path::Path::to_path_buf);
+            let Some(storage_root) = storage_root else {
                 return;
             };
+            let runtime = rockbot_storage_runtime::StorageRuntime::new_with_root(
+                &rockbot_config::Config::default(),
+                storage_root,
+            )
+            .await;
+            let Ok(runtime) = runtime else {
+                return;
+            };
+            let Ok(opened) = runtime.open_agents_watch_store(&vault_path).await else {
+                return;
+            };
+            let store = opened.store;
             let mut last_hash: Option<u64> = None;
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;

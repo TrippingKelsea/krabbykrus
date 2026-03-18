@@ -79,6 +79,12 @@ pub enum Commands {
         command: Option<DoctorCommands>,
     },
 
+    /// Storage planning and repair
+    Storage {
+        #[command(subcommand)]
+        command: StorageCommands,
+    },
+
     /// Interactive TUI dashboard
     Tui {
         /// Gateway address (e.g. 172.30.200.146:18181, https://host:port)
@@ -656,6 +662,22 @@ pub enum DoctorCommands {
     Tui,
 }
 
+#[derive(Subcommand)]
+pub enum StorageCommands {
+    /// Show the current storage resolution plan
+    Plan {
+        /// Path to config file (defaults to standard location)
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+    /// Repair/import known stores from legacy sources when possible
+    Repair {
+        /// Path to config file (defaults to standard location)
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+}
+
 /// Migration commands
 #[derive(Subcommand)]
 pub enum MigrateCommands {
@@ -771,6 +793,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Cert { command } => commands::cert::run(command, &config_path).await,
         Commands::Doctor { command } => commands::doctor::run(command, &config_path).await,
+        Commands::Storage { command } => commands::storage::run(command, &config_path).await,
         Commands::Tui { gateway } => {
             // Load config to get vault path
             let config = load_config(&config_path).await?;

@@ -53,6 +53,7 @@ rockbot-pki = { path = "../rockbot-pki" }
 rockbot-doctor = { path = "../rockbot-doctor", optional = true }
 rockbot-butler = { path = "../rockbot-butler", optional = true }
 rockbot-storage = { path = "../rockbot-storage" }
+rockbot-storage-runtime = { path = "../rockbot-storage-runtime" }
 rockbot-chat = { path = "../rockbot-chat" }
 rockbot-editor = { path = "../rockbot-editor" }
 rockbot-shell = { path = "../rockbot-shell" }
