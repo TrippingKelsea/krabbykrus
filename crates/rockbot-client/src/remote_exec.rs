@@ -298,6 +298,8 @@ pub struct RemoteExecutorRegistry {
     sessions: RwLock<HashMap<String, Arc<tokio::sync::Mutex<NoiseSession>>>>,
     /// Pending response channels keyed by request ID.
     pending: Arc<RwLock<HashMap<String, PendingRemoteToolCall>>>,
+    /// Recently completed request IDs kept briefly to tolerate trailing output chunks.
+    recently_completed: Arc<RwLock<HashSet<String>>>,
 }
 
 struct PendingRemoteToolCall {
@@ -332,6 +334,7 @@ impl RemoteExecutorRegistry {
         Self {
             sessions: RwLock::new(HashMap::new()),
             pending: Arc::new(RwLock::new(HashMap::new())),
+            recently_completed: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -451,7 +454,11 @@ impl RemoteExecutorRegistry {
 
         match result {
             Ok(Ok(response)) => {
-                Self::schedule_pending_cleanup(Arc::clone(&self.pending), request_id);
+                Self::schedule_pending_cleanup(
+                    Arc::clone(&self.pending),
+                    Arc::clone(&self.recently_completed),
+                    request_id,
+                );
                 Some(response)
             }
             Ok(Err(_)) => {
@@ -557,6 +564,17 @@ impl RemoteExecutorRegistry {
             }
             return;
         }
+        drop(pending);
+
+        let recently_completed = self.recently_completed.read().await;
+        if recently_completed.contains(&output.request_id) {
+            debug!(
+                "Ignoring trailing tool output for recently completed request: {}",
+                output.request_id
+            );
+            return;
+        }
+        drop(recently_completed);
 
         warn!(
             "Received tool output for unknown request: {}",
@@ -566,11 +584,14 @@ impl RemoteExecutorRegistry {
 
     fn schedule_pending_cleanup(
         pending: Arc<RwLock<HashMap<String, PendingRemoteToolCall>>>,
+        recently_completed: Arc<RwLock<HashSet<String>>>,
         request_id: String,
     ) {
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            recently_completed.write().await.insert(request_id.clone());
+            tokio::time::sleep(Duration::from_secs(2)).await;
             pending.write().await.remove(&request_id);
+            recently_completed.write().await.remove(&request_id);
         });
     }
 

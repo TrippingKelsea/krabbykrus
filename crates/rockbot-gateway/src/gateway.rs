@@ -267,13 +267,12 @@ pub struct Gateway {
 
 /// Stable identity for a connected WebSocket client.
 ///
-/// `client_uuid` is the primary key for dispatch — it is globally unique even
-/// when two hosts share the same hostname or multiple client instances run on
-/// the same machine. `hostname` is the machine's self-reported hostname (human
+/// `client_uuid` is assigned by the gateway for the lifetime of the current
+/// connection. `hostname` is the machine's self-reported hostname (human
 /// readable). `label` is an optional user-chosen alias (e.g. "laptop-1").
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ClientIdentity {
-    /// Globally unique client ID (UUID v4, generated or supplied by the client).
+    /// Connection-scoped client ID assigned by the gateway.
     client_uuid: String,
     /// Machine hostname (self-reported by the client).
     hostname: String,
@@ -4360,8 +4359,21 @@ impl Gateway {
                 hostname,
                 label,
             } => {
-                // Use the client-provided UUID or generate one
-                let uuid = client_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let previous_uuid = {
+                    let conns = self.ws_connections.read().await;
+                    conns.get(conn_id)
+                        .and_then(|conn| conn.identity.as_ref())
+                        .map(|identity| identity.client_uuid.clone())
+                };
+                let uuid = previous_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                if client_uuid.as_ref().is_some_and(|claimed| claimed != &uuid) {
+                    warn!(
+                        "Ignoring self-reported client UUID '{}' for {} and using gateway-assigned '{}'",
+                        client_uuid.as_deref().unwrap_or_default(),
+                        conn_id,
+                        uuid
+                    );
+                }
                 info!(
                     "WebSocket client {} identified: uuid={}, hostname='{}', label={:?}",
                     conn_id, uuid, hostname, label
