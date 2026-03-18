@@ -127,6 +127,7 @@ pub fn extract_symbols(content: &str, language: Language) -> Vec<Symbol> {
     }
 }
 
+#[allow(clippy::expect_used)]
 fn extract_rust_symbols(content: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();
     let fn_re = Regex::new(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)").expect("valid regex");
@@ -216,6 +217,7 @@ fn extract_rust_symbols(content: &str) -> Vec<Symbol> {
     symbols
 }
 
+#[allow(clippy::expect_used)]
 fn extract_python_symbols(content: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();
     let class_re = Regex::new(r"^class\s+(\w+)").expect("valid regex");
@@ -259,6 +261,7 @@ fn extract_python_symbols(content: &str) -> Vec<Symbol> {
     symbols
 }
 
+#[allow(clippy::expect_used)]
 fn extract_js_ts_symbols(content: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();
     let fn_re = Regex::new(r"^(?:export\s+)?(?:async\s+)?function\s+(\w+)").expect("valid regex");
@@ -311,6 +314,7 @@ fn extract_js_ts_symbols(content: &str) -> Vec<Symbol> {
     symbols
 }
 
+#[allow(clippy::expect_used)]
 fn extract_go_symbols(content: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();
     let fn_re = Regex::new(r"^func\s+(?:\([^)]+\)\s+)?(\w+)").expect("valid regex");
@@ -343,6 +347,7 @@ fn extract_go_symbols(content: &str) -> Vec<Symbol> {
     symbols
 }
 
+#[allow(clippy::expect_used)]
 fn extract_java_like_symbols(content: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();
     let class_re =
@@ -383,6 +388,7 @@ fn extract_java_like_symbols(content: &str) -> Vec<Symbol> {
     symbols
 }
 
+#[allow(clippy::expect_used)]
 fn extract_ruby_symbols(content: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();
     let class_re = Regex::new(r"^class\s+(\w+)").expect("valid regex");
@@ -444,9 +450,8 @@ pub async fn index_workspace(root: &Path) -> Vec<IndexedFile> {
     let mut stack = vec![root.to_path_buf()];
 
     while let Some(dir) = stack.pop() {
-        let mut entries = match tokio::fs::read_dir(&dir).await {
-            Ok(e) => e,
-            Err(_) => continue,
+        let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
+            continue;
         };
 
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -467,9 +472,8 @@ pub async fn index_workspace(root: &Path) -> Vec<IndexedFile> {
             }
 
             let language = Language::from_extension(ext);
-            let metadata = match tokio::fs::metadata(&path).await {
-                Ok(m) => m,
-                Err(_) => continue,
+            let Ok(metadata) = tokio::fs::metadata(&path).await else {
+                continue;
             };
 
             // Skip very large files (> 1MB)
@@ -477,9 +481,8 @@ pub async fn index_workspace(root: &Path) -> Vec<IndexedFile> {
                 continue;
             }
 
-            let content = match tokio::fs::read_to_string(&path).await {
-                Ok(c) => c,
-                Err(_) => continue,
+            let Ok(content) = tokio::fs::read_to_string(&path).await else {
+                continue;
             };
 
             let symbols = extract_symbols(&content, language);

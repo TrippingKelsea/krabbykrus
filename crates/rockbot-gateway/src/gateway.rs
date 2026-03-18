@@ -2,6 +2,16 @@
 //!
 //! This module provides the main gateway server that handles WebSocket connections,
 //! HTTP API endpoints, and coordinates agent execution.
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::single_match_else,
+    clippy::redundant_closure_for_method_calls,
+    clippy::unnecessary_map_or,
+    clippy::uninlined_format_args,
+    clippy::manual_let_else,
+    clippy::let_and_return
+)]
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -239,17 +249,12 @@ struct ClientIdentity {
 
 /// WebSocket connection information
 struct WsConnection {
-    #[allow(dead_code)]
-    id: String,
     sender: tokio::sync::mpsc::UnboundedSender<WsMessage>,
-    #[allow(dead_code)]
-    user_id: Option<String>,
     /// Client identity for targeted cron dispatch and human-readable display.
     /// Set by the client sending a `client_identify` WS message after connecting.
     identity: Option<ClientIdentity>,
     listener_kind: ListenerKind,
     browser_auth: BrowserAuthState,
-    #[allow(dead_code)]
     connected_at: std::time::Instant,
 }
 
@@ -1046,15 +1051,12 @@ impl Gateway {
         &self.cron_scheduler
     }
 
-    /// Get the gateway bind configuration (crate-visible for slash_commands).
-
     /// Start the cron scheduler background loop. Call this after agent registration
     /// so the executor can find agents to invoke.
     pub async fn start_cron_scheduler(&self) {
         let executor = Arc::new(GatewayCronExecutor {
             agents: Arc::clone(&self.agents),
             ws_connections: Arc::clone(&self.ws_connections),
-            session_manager: Arc::clone(&self.session_manager),
         });
         self.cron_scheduler.start(executor).await;
         info!("Cron scheduler started (jobs will execute via GatewayCronExecutor)");
@@ -4061,9 +4063,7 @@ impl Gateway {
             conns.insert(
                 conn_id.clone(),
                 WsConnection {
-                    id: conn_id.clone(),
                     sender: outbound_tx.clone(),
-                    user_id: None,
                     identity: None,
                     listener_kind,
                     browser_auth: BrowserAuthState::default(),
@@ -4136,6 +4136,10 @@ impl Gateway {
 
         // Capture identity before removing so we can include it in the log
         let disconnect_host = self.client_hostname(&conn_id).await;
+        let connected_for = {
+            let conns = self.ws_connections.read().await;
+            conns.get(&conn_id).map(|conn| conn.connected_at.elapsed())
+        };
 
         // Cleanup
         {
@@ -4154,9 +4158,10 @@ impl Gateway {
         }
         writer_handle.abort();
         info!(
-            "WebSocket disconnected: {} [{}] (remaining: {})",
+            "WebSocket disconnected: {} [{}] after {:.1?} (remaining: {})",
             conn_id,
             disconnect_host,
+            connected_for.unwrap_or_default(),
             self.ws_connections.read().await.len()
         );
     }
@@ -4171,20 +4176,22 @@ impl Gateway {
             .read()
             .await
             .get(conn_id)
-            .map(|conn| {
-                if let Some(id) = conn.identity.as_ref() {
-                    if let Some(ref label) = id.label {
-                        format!("{}({})", id.hostname, label)
+            .map_or_else(
+                || conn_id[..8.min(conn_id.len())].to_string(),
+                |conn| {
+                    if let Some(id) = conn.identity.as_ref() {
+                        if let Some(ref label) = id.label {
+                            format!("{}({})", id.hostname, label)
+                        } else {
+                            id.hostname.clone()
+                        }
+                    } else if let Some(cert_name) = conn.browser_auth.cert_name.as_ref() {
+                        format!("browser:{cert_name}")
                     } else {
-                        id.hostname.clone()
+                        conn_id[..8.min(conn_id.len())].to_string()
                     }
-                } else if let Some(cert_name) = conn.browser_auth.cert_name.as_ref() {
-                    format!("browser:{cert_name}")
-                } else {
-                    conn_id[..8.min(conn_id.len())].to_string()
-                }
-            })
-            .unwrap_or_else(|| conn_id[..8.min(conn_id.len())].to_string())
+                },
+            )
     }
 
     async fn ws_listener_kind(&self, conn_id: &str) -> Option<ListenerKind> {
@@ -4200,11 +4207,10 @@ impl Gateway {
             .read()
             .await
             .get(conn_id)
-            .map(|conn| match conn.listener_kind {
+            .is_some_and(|conn| match conn.listener_kind {
                 ListenerKind::Client => true,
                 ListenerKind::Public => conn.browser_auth.authenticated,
             })
-            .unwrap_or(false)
     }
 
     async fn begin_browser_web_auth(
@@ -4801,6 +4807,7 @@ impl Gateway {
     /// Runs the agent through the proven non-streaming `process_message` path
     /// and sends the result back over the WebSocket. This avoids issues with
     /// providers that don't fully support streaming (e.g. some Bedrock models).
+    #[allow(clippy::too_many_arguments)]
     async fn handle_ws_agent_message(
         &self,
         conn_id: &str,
@@ -6471,7 +6478,7 @@ impl Gateway {
             .unwrap())
     }
 
-    /// `POST /a2a` — JSON-RPC 2.0 dispatch for A2A protocol.
+    // `POST /a2a` — JSON-RPC 2.0 dispatch for A2A protocol.
     // -----------------------------------------------------------------------
     // Cron API handlers
     // -----------------------------------------------------------------------
@@ -6670,8 +6677,8 @@ impl Gateway {
     ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
         let conns = self.ws_connections.read().await;
         let clients: Vec<serde_json::Value> = conns
-            .values()
-            .map(|c| {
+            .iter()
+            .map(|(conn_id, c)| {
                 let (client_uuid, hostname, label) = match &c.identity {
                     Some(id) => (
                         Some(id.client_uuid.as_str()),
@@ -6681,7 +6688,7 @@ impl Gateway {
                     None => (None, None, None),
                 };
                 serde_json::json!({
-                    "id": c.id,
+                    "id": conn_id,
                     "client_uuid": client_uuid,
                     "hostname": hostname,
                     "label": label,
@@ -7169,8 +7176,6 @@ struct ErrorResponse {
 struct GatewayCronExecutor {
     agents: Arc<RwLock<HashMap<String, Arc<Agent>>>>,
     ws_connections: Arc<RwLock<HashMap<String, WsConnection>>>,
-    #[allow(dead_code)]
-    session_manager: Arc<SessionManager>,
 }
 
 #[async_trait::async_trait]
@@ -7292,7 +7297,7 @@ impl GatewayCronExecutor {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
-    use rockbot_config::config::NoiseTransportConfig;
+    use rockbot_config::config::{GatewayPublicConfig, NoiseTransportConfig};
     use rockbot_config::{
         AgentConfig, AgentDefaults, PkiConfig, ProvidersConfig, SandboxConfig, SecurityConfig,
         ToolConfig,
@@ -7314,6 +7319,7 @@ mod tests {
                 request_timeout: 30,
                 require_api_key: None,
                 pki: PkiConfig::default(),
+                public: GatewayPublicConfig::default(),
             },
             pki: PkiConfig::default(),
             agents: AgentConfig {

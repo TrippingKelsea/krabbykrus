@@ -164,6 +164,7 @@ impl Default for PiiGuardrail {
 }
 
 impl PiiGuardrail {
+    #[allow(clippy::unwrap_used)]
     pub fn new() -> Self {
         // These patterns are intentionally broad — better to over-warn than leak PII
         let patterns = vec![
@@ -232,6 +233,7 @@ impl Default for PromptInjectionGuardrail {
 }
 
 impl PromptInjectionGuardrail {
+    #[allow(clippy::unwrap_used)]
     pub fn new() -> Self {
         let patterns = vec![
             ("Role override", regex::Regex::new(

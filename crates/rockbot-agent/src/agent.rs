@@ -127,7 +127,9 @@ impl ToolLoopDetector {
             };
         }
 
-        let latest = self.history.last().expect("checked non-empty");
+        let Some(latest) = self.history.last() else {
+            return LoopVerdict::Ok;
+        };
 
         // --- Same call repetition (no-progress variant) ---
         let mut no_progress_streak = 0usize;
@@ -226,8 +228,7 @@ pub struct Agent {
     /// Tool registry
     tool_registry: Arc<ToolRegistry>,
     /// Memory manager
-    #[allow(dead_code)]
-    memory_manager: Arc<MemoryManager>,
+    _memory_manager: Arc<MemoryManager>,
     /// Security manager
     security_manager: Arc<SecurityManager>,
     /// Session manager
@@ -453,6 +454,7 @@ pub enum ToolExecutionLocality {
 
 impl Agent {
     /// Create a new agent with the given configuration
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         config: AgentInstance,
         llm_provider: Arc<dyn LlmProvider>,
@@ -511,7 +513,7 @@ impl Agent {
             match name.as_str() {
                 "pii" => guardrail_pipeline.add(Arc::new(PiiGuardrail::new())),
                 "prompt_injection" => {
-                    guardrail_pipeline.add(Arc::new(PromptInjectionGuardrail::new()))
+                    guardrail_pipeline.add(Arc::new(PromptInjectionGuardrail::new()));
                 }
                 other => {
                     warn!("Unknown guardrail '{}', skipping", other);
@@ -539,13 +541,13 @@ impl Agent {
             .config
             .get("swarm_id")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
 
         Ok(Self {
             config,
             llm_provider,
             tool_registry,
-            memory_manager,
+            _memory_manager: memory_manager,
             security_manager,
             session_manager,
             credential_accessor,
@@ -620,6 +622,7 @@ impl Agent {
 
     /// Like `process_message`, but sends real-time progress events to the
     /// provided channel as tool calls execute and LLM calls are made.
+    #[allow(clippy::too_many_arguments)]
     pub async fn process_message_with_progress(
         &self,
         session_id: String,
@@ -642,6 +645,7 @@ impl Agent {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn process_message_inner(
         &self,
         session_id: String,
@@ -954,8 +958,8 @@ impl Agent {
             &self.config.id,
             model_label,
             start_time.elapsed(),
-            token_usage.prompt_tokens as u64,
-            token_usage.completion_tokens as u64,
+            token_usage.prompt_tokens,
+            token_usage.completion_tokens,
         );
 
         // Store episodic memory entry if enabled and tool work was done
@@ -1105,7 +1109,7 @@ impl Agent {
             TrajectoryEvent::LlmRequest {
                 model: llm_request.model.clone(),
                 message_count: llm_request.messages.len(),
-                tools_available: llm_request.tools.as_ref().map_or(0, |t| t.len()),
+                tools_available: llm_request.tools.as_ref().map_or(0, std::vec::Vec::len),
             },
             0,
             0,
@@ -1144,7 +1148,7 @@ impl Agent {
                 tokens: token_usage.clone(),
             },
             1,
-            token_usage.total_tokens as u64,
+            token_usage.total_tokens,
         );
 
         self.session_manager
@@ -1172,8 +1176,8 @@ impl Agent {
             &self.config.id,
             model_label,
             start_time.elapsed(),
-            token_usage.prompt_tokens as u64,
-            token_usage.completion_tokens as u64,
+            token_usage.prompt_tokens,
+            token_usage.completion_tokens,
         );
 
         // Fire PostMessage hook
@@ -1192,7 +1196,7 @@ impl Agent {
                 duration_ms: processing_time_ms,
             },
             1,
-            token_usage.total_tokens as u64,
+            token_usage.total_tokens,
         );
 
         {
@@ -1641,6 +1645,7 @@ impl Agent {
     }
 
     /// Update processing context with new message
+    #[allow(clippy::too_many_arguments)]
     async fn update_processing_context(
         &self,
         session_id: String,
@@ -1838,7 +1843,7 @@ impl Agent {
                             .extra
                             .get("tool_name")
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
+                            .map(std::string::ToString::to_string)
                     })
                     .collect();
                 let unique_tools: Vec<String> = tool_names
@@ -1916,7 +1921,7 @@ impl Agent {
                 .extra
                 .get("tool_call_id")
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
 
             let role = match message.metadata.role {
                 MessageRole::User => rockbot_llm::MessageRole::User,
@@ -2772,8 +2777,7 @@ The user wants me to explore the codebase. I should start by listing the directo
                 let response_text = current_response
                     .choices
                     .first()
-                    .map(|c| c.message.content.as_str())
-                    .unwrap_or("");
+                    .map_or("", |c| c.message.content.as_str());
 
                 // Strip <think> blocks from final output
                 let clean_text = Self::strip_think_blocks(response_text);
@@ -3386,8 +3390,7 @@ The user wants me to explore the codebase. I should start by listing the directo
         let reflection_text = llm_response
             .choices
             .first()
-            .map(|c| c.message.content.as_str())
-            .unwrap_or("");
+            .map_or("", |c| c.message.content.as_str());
 
         // If reflection says LGTM (or similar), no corrections needed
         let clean = reflection_text.to_uppercase();
@@ -4462,7 +4465,7 @@ mod tests {
         }
         match detector.check() {
             LoopVerdict::Warning { repetitions, .. } => assert_eq!(repetitions, 5),
-            other => panic!("Expected Warning, got {:?}", other),
+            other => panic!("Expected Warning, got {other:?}"),
         }
     }
 
@@ -4475,7 +4478,7 @@ mod tests {
         }
         match detector.check() {
             LoopVerdict::Critical { repetitions, .. } => assert_eq!(repetitions, 10),
-            other => panic!("Expected Critical, got {:?}", other),
+            other => panic!("Expected Critical, got {other:?}"),
         }
     }
 
@@ -4515,7 +4518,7 @@ mod tests {
             LoopVerdict::Critical { message, .. } => {
                 assert!(message.contains("circuit breaker"));
             }
-            other => panic!("Expected circuit breaker Critical, got {:?}", other),
+            other => panic!("Expected circuit breaker Critical, got {other:?}"),
         }
     }
 

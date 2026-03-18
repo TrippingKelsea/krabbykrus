@@ -14,10 +14,13 @@ static TOKENIZER: OnceLock<CoreBPE> = OnceLock::new();
 /// first call.
 fn get_tokenizer() -> Option<&'static CoreBPE> {
     TOKENIZER
-        .get_or_init(|| {
-            tiktoken_rs::cl100k_base().expect("cl100k_base tokenizer must be available")
-        })
+        .get_or_init(init_tokenizer)
         .into()
+}
+
+#[allow(clippy::expect_used)]
+fn init_tokenizer() -> CoreBPE {
+    tiktoken_rs::cl100k_base().expect("cl100k_base tokenizer must be available")
 }
 
 /// Count the number of tokens in `text` using the cl100k_base BPE tokenizer.

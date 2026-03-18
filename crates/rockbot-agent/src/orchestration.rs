@@ -296,7 +296,7 @@ impl WorkflowExecutor {
             workflow
                 .nodes
                 .iter()
-                .filter(|n| out_edges.get(&n.id).is_none_or(|e| e.is_empty()))
+                .filter(|n| out_edges.get(&n.id).is_none_or(std::vec::Vec::is_empty))
                 .map(|n| n.id.clone())
                 .collect::<Vec<_>>()
         } else {

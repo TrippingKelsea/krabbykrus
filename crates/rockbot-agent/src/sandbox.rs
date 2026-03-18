@@ -34,7 +34,7 @@ pub async fn is_docker_available() -> bool {
             .status(),
     )
     .await
-    .map_or(false, |r| r.is_ok_and(|s| s.success()))
+    .is_ok_and(|r| r.is_ok_and(|s| s.success()))
 }
 
 /// Execute a command inside a Docker container sandbox.

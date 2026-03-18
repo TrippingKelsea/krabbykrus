@@ -9,7 +9,7 @@ impl Gateway {
     pub async fn handle_slash_commands(&self, message: &str) -> Option<String> {
         let trimmed = message.trim();
         if trimmed == "/help" || trimmed.starts_with("/help ") {
-            return Some(self.handle_help_command(trimmed));
+            return Some(Self::handle_help_command(trimmed));
         }
         if let Some(out) = self.handle_gateway_command(trimmed).await {
             return Some(out);
@@ -37,7 +37,7 @@ impl Gateway {
         None
     }
 
-    fn handle_help_command(&self, trimmed: &str) -> String {
+    fn handle_help_command(trimmed: &str) -> String {
         let sub = trimmed.strip_prefix("/help").unwrap_or("").trim();
         if !sub.is_empty() {
             return format!("Unknown help topic: `{sub}`. Try `/help`.");
@@ -80,8 +80,7 @@ impl Gateway {
                 match self.reload_agents().await {
                     Ok((created, pending)) => {
                         format!(
-                            "Config reloaded. {} agent(s) created, {} still pending.",
-                            created, pending
+                            "Config reloaded. {created} agent(s) created, {pending} still pending."
                         )
                     }
                     Err(e) => format!("Reload failed: {e}"),

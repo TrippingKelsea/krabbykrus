@@ -305,8 +305,7 @@ impl SkillManager {
         let name = frontmatter
             .get("name")
             .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| {
+            .map_or_else(|| {
                 let fname = path
                     .file_stem()
                     .and_then(|f| f.to_str())
@@ -322,7 +321,7 @@ impl SkillManager {
                 } else {
                     base.to_string()
                 }
-            });
+            }, String::from);
 
         let description = frontmatter
             .get("description")
@@ -332,7 +331,7 @@ impl SkillManager {
 
         let always = frontmatter
             .get("always")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
         let skill_key = frontmatter
@@ -363,11 +362,11 @@ impl SkillManager {
         let policy = SkillInvocationPolicy {
             user_invocable: frontmatter
                 .get("user_invocable")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true),
             disable_model_invocation: frontmatter
                 .get("disable_model_invocation")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
         };
 
@@ -710,9 +709,8 @@ fn parse_md_frontmatter(content: &str) -> (HashMap<String, serde_json::Value>, &
 
     // Find end of frontmatter
     let after_open = &trimmed[3..];
-    let end_pos = match after_open.find("\n---") {
-        Some(pos) => pos,
-        None => return (HashMap::new(), content),
+    let Some(end_pos) = after_open.find("\n---") else {
+        return (HashMap::new(), content);
     };
 
     let yaml_str = &after_open[..end_pos];
@@ -773,8 +771,8 @@ mod tests {
     fn make_skill(name: &str, always: bool) -> Skill {
         Skill {
             name: name.to_string(),
-            description: format!("{} skill", name),
-            content: format!("Instructions for {}", name),
+            description: format!("{name} skill"),
+            content: format!("Instructions for {name}"),
             metadata: Some(SkillMetadata {
                 always,
                 skill_key: Some(name.to_lowercase()),
