@@ -23,7 +23,7 @@ tools-markdown = ["rockbot-gateway/tools-markdown", "rockbot-tui/tools-markdown"
 # Telemetry
 otel = ["rockbot-gateway/otel"]
 # Embedded overseer
-overseer = ["rockbot-gateway/overseer", "rockbot-tui/overseer"]
+overseer = ["dep:rockbot-overseer", "rockbot-gateway/overseer", "rockbot-tui/overseer"]
 # Embedded doctor AI for config diagnostics
 doctor-ai = ["dep:rockbot-doctor", "rockbot-tui/doctor-ai"]
 # Embedded butler companion agent
@@ -54,6 +54,7 @@ rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
 rockbot-llm = { path = "../rockbot-llm", default-features = false }
 rockbot-pki = { path = "../rockbot-pki" }
 rockbot-doctor = { path = "../rockbot-doctor", optional = true }
+rockbot-overseer = { path = "../rockbot-overseer", optional = true }
 rockbot-deploy = { path = "../rockbot-deploy", optional = true }
 rockbot-butler = { path = "../rockbot-butler", optional = true }
 rockbot-store = { path = "../rockbot-store" }
