@@ -7,3 +7,7 @@ license = "MIT"
 
 [lints]
 workspace = true
+
+[dependencies]
+leptos = { workspace = true }
+rockbot-ui-model = { path = "../rockbot-ui-model" }

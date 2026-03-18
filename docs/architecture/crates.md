@@ -1,6 +1,6 @@
 # Crate Structure
 
-RockBot is a Cargo workspace with 32 crates organized by responsibility.
+RockBot is a Cargo workspace with 33 crates organized by responsibility.
 
 ## Workspace Layout
 
@@ -14,7 +14,8 @@ rockbot/
 │   ├── rockbot-agent/             # Agent execution engine
 │   ├── rockbot-client/            # Gateway client, ACP, remote exec
 │   ├── rockbot-gateway/           # HTTP/WS server, A2A, cron, routing
-│   ├── rockbot-webui/             # Embedded web dashboard assets
+│   ├── rockbot-ui-model/          # Shared UI-facing view models and semantic tokens
+│   ├── rockbot-webui/             # Leptos-rendered web bootstrap shell + embedded assets
 │   ├── rockbot-tui/               # Terminal UI application
 │   ├── rockbot-chat/              # Shared chat primitives/UI-facing types
 │   ├── rockbot-editor/            # Text editor helpers for interactive clients
@@ -49,7 +50,8 @@ The crate hierarchy follows a strict DAG — no cycles.
 ```
 rockbot-config             (leaf: config, message, error types)
 rockbot-credentials-schema (leaf: shared schema types)
-rockbot-webui              (leaf: embedded static assets)
+rockbot-ui-model           (leaf: shared UI-facing view models)
+rockbot-webui              → rockbot-ui-model
 rockbot-chat               (leaf: shared chat types)
 rockbot-editor             (leaf-ish: editor helpers)
 rockbot-shell              (leaf-ish: shell helpers)

@@ -1,0 +1,12 @@
+[package]
+name = "rockbot-ui-model"
+version.workspace = true
+edition.workspace = true
+description = "Shared UI-facing view models for RockBot renderers"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }

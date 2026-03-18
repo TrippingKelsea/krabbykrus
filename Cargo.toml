@@ -31,6 +31,7 @@ members = [
     "crates/rockbot-pki",
     "crates/rockbot-doctor",
     "crates/rockbot-store",
+    "crates/rockbot-ui-model",
     "crates/rockbot-deploy",
     "crates/rockbot-butler",
     "crates/rockbot-tui",
@@ -106,6 +107,9 @@ cron = "0.13"
 
 # Directory utilities
 dirs = "5.0"
+
+# Web UI
+leptos = { version = "0.8", default-features = false, features = ["ssr"] }
 
 # Logging - simple, minimal
 tracing = "0.1"
@@ -184,7 +188,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 # Package metadata for all crates
 [workspace.package]
-version = "0.3.80"
+version = "0.3.81"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"

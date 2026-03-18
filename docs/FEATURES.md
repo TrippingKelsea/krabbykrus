@@ -348,14 +348,12 @@ This document tracks feature implementation status and helps identify gaps betwe
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Embedded HTML SPA | ✅ | Vanilla JS, no framework (~1645 lines) |
-| Dashboard | ✅ | |
-| Credentials page | ✅ | 4 sub-tabs, schema-driven |
-| Agents page | ✅ | CRUD, subagents |
-| Sessions page | ✅ | Chat |
-| Models page | ✅ | Test, configure |
-| Settings page | 🚧 | |
-| Real-time updates | ✅ | Via gateway WebSocket events |
+| Leptos-rendered bootstrap shell | ✅ | Public `/` and `/static/*` now serve a structured Leptos-rendered shell |
+| Shared UI-model layer | ✅ | `rockbot-ui-model` separates UI-facing domain models from renderers |
+| Browser identity import | ✅ | PEM cert/key import with IndexedDB persistence |
+| Browser WS auth bootstrap | ✅ | Challenge/response auth over public WebSocket |
+| Responsive layout | ✅ | Mobile/desktop bootstrap shell with accessible structure |
+| Full authenticated app surfaces | 🚧 | Sessions/agents/providers/credentials still planned as WS-driven WASM app views |
 
 ---
 

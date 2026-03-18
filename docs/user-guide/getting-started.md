@@ -106,8 +106,8 @@ You can still override it with `-g host:port` when needed.
 
 Native clients use the client-listener WebSocket for both chat traffic and
 gateway control-plane requests such as provider, agent, and session management.
-The public HTTPS listener is intentionally minimal: browser bootstrap shell,
-`/static/*`, health, CA publication, and optional enrollment.
+The public HTTPS listener is intentionally minimal: a Leptos-rendered browser
+bootstrap shell, `/static/*`, health, CA publication, and optional enrollment.
 
 ### Credential Management UI
 

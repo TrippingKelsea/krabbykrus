@@ -11,6 +11,9 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
 ## [Unreleased]
 
 ### Added
+- **Web UI**: new `rockbot-ui-model` crate for shared UI-facing view models and semantic state
+- **Web UI**: `rockbot-webui` now renders the public bootstrap shell through Leptos components instead of a single hand-built HTML blob
+- **Web UI**: responsive bootstrap shell architecture that keeps browser rendering separate from shared domain/view state
 - **Completions**: shell completion generation via `rockbot completion <bash|zsh|fish|powershell|elvish>`
 - **TUI**: slash command autocompletion with `Tab` / `Shift+Tab`
 - **Tools**: new `rockbot-tools-system` crate for system-facing tools such as read/write/exec/browser
