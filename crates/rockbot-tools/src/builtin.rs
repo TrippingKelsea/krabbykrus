@@ -20,6 +20,22 @@ struct DetectedCommand {
 
 const MAX_EXEC_TIMEOUT_SECS: u64 = 600;
 
+impl std::fmt::Display for DetectedCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.args.is_empty() {
+            write!(f, "{}", self.program)
+        } else {
+            write!(f, "{} {}", self.program, self.args.join(" "))
+        }
+    }
+}
+
+impl PartialEq<&str> for DetectedCommand {
+    fn eq(&self, other: &&str) -> bool {
+        self.to_string() == *other
+    }
+}
+
 fn validate_runner_filter(filter: &str) -> Result<()> {
     if filter.is_empty() {
         return Err(crate::ToolError::InvalidParameters {
@@ -3146,13 +3162,10 @@ mod tests {
         let tool = BrowserTool::new();
         let params = serde_json::json!({ "url": "ftp://example.com/file" });
         let context = make_context(std::path::PathBuf::from("/tmp"));
-        let result = tool.execute(params, context).await.unwrap();
-        match result {
-            ToolResult::Error { message, .. } => {
-                assert!(message.contains("http://") || message.contains("https://"));
-            }
-            other => panic!("Expected Error result for non-http URL, got: {other:?}"),
-        }
+        let error = tool.execute(params, context).await.unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("Unsupported URL scheme"));
+        assert!(message.contains("ftp"));
     }
 
     #[test]

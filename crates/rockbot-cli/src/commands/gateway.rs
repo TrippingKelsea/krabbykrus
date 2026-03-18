@@ -548,12 +548,6 @@ fn ensure_default_overseer_config(config: &mut Config, store: &Store) -> Result<
     Ok(())
 }
 
-/// Get the service name based on whether it's user or system level
-#[allow(dead_code)]
-fn get_service_name(_system: bool) -> &'static str {
-    "rockbot-gateway"
-}
-
 /// Start the gateway service
 async fn start_service() -> Result<()> {
     // Try user service first, then system
@@ -670,14 +664,15 @@ async fn show_status(config_path: &Path) -> Result<()> {
                 .add_root_certificate(ca_cert)
                 .build()?
         } else {
-            reqwest::Client::builder()
-                .danger_accept_invalid_certs(true)
-                .build()?
+            println!(
+                "Gateway health check skipped: configured CA file not found at {}",
+                ca_path.display()
+            );
+            return Ok(());
         }
     } else {
-        reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .build()?
+        println!("Gateway health check skipped: no CA configured in [pki].tls_ca");
+        return Ok(());
     };
     match client
         .get(format!("{gateway_url}/health"))

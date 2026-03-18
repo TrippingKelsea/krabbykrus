@@ -119,8 +119,7 @@ pub struct App {
     last_ws_ping_sent_at: Option<Instant>,
     /// Local tool registry for remote tool execution (TUI executes tools on behalf of gateway)
     #[cfg(feature = "remote-exec")]
-    #[allow(dead_code)]
-    local_tool_registry: Option<std::sync::Arc<rockbot_tools::ToolRegistry>>,
+    _local_tool_registry: Option<std::sync::Arc<rockbot_tools::ToolRegistry>>,
     /// Keybinding configuration (data-driven, replaces hardcoded key matching)
     keybindings: super::keybindings::KeybindingConfig,
     /// Chat command registry for slash command dispatch
@@ -165,7 +164,7 @@ impl App {
             gateway_events_rx: None,
             last_ws_ping_sent_at: None,
             #[cfg(feature = "remote-exec")]
-            local_tool_registry: None,
+            _local_tool_registry: None,
             keybindings: super::keybindings::KeybindingConfig::default(),
             command_registry: build_command_registry(),
             bootstrapped_chat_session: false,
