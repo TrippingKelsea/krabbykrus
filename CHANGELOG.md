@@ -19,6 +19,11 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
   - `docs/architecture/webui-wasm-migration-plan.md`
   - `docs/architecture/browser-plugin-architecture-plan.md`
   - `docs/architecture/tooling-gap-analysis.md`
+  - WebUI WASM migration plan now includes:
+    - WCAG/ADA usability requirements
+    - frontend stack comparison across Leptos, Dioxus, Yew, Sycamore, and Ratzilla
+    - a Ratzilla contender assessment
+    - a shared TUI/Web UI abstraction strategy
 - **Public listener policy**: `gateway.public` now controls whether the public
   HTTPS listener serves the browser bootstrap shell, CA bundle, and enrollment
 - **Web bootstrap shell**: `/` and `/static/*` now serve a minimal browser
