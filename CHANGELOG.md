@@ -93,6 +93,10 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
   - Automatic save of `[tui]`, `[tui.theme]`, and `[tui.fonts]` changes to `rockbot.toml`
 
 ### Fixed
+- **Tool streaming**: remote tool stdout/stderr chunks now travel as distinct
+  WebSocket `tool_output` events end-to-end instead of being mislabeled as final
+  `tool_result` payloads, so native clients can render incremental output
+  without duplicating the final completion text
 - **Bootstrap workflow**: generated config no longer seeds agent definitions by
   default; bootstrap TOML is now connection-focused instead of embedding runtime
   agent state

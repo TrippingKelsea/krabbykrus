@@ -400,6 +400,13 @@ enum WsResponseType {
         duration_ms: u64,
         locality: Option<String>,
     },
+    #[serde(rename = "tool_output")]
+    ToolOutput {
+        session_key: String,
+        tool_name: String,
+        output: String,
+        locality: Option<String>,
+    },
     #[serde(rename = "agent_response")]
     AgentResponseMsg {
         session_key: String,
@@ -4560,18 +4567,13 @@ impl Gateway {
                     rockbot_agent::agent::AgentProgressEvent::ToolOutput {
                         ref tool_name,
                         ref output,
-                        success,
-                        duration_ms,
                         ref locality,
+                        ..
                     } => {
-                        // Send structured tool result (not injected into chat stream)
-                        let truncated = truncate_utf8(output, 500);
-                        vec![WsResponseType::ToolResult {
+                        vec![WsResponseType::ToolOutput {
                             session_key: progress_sk.clone(),
                             tool_name: tool_name.clone(),
-                            result: truncated,
-                            success,
-                            duration_ms,
+                            output: output.clone(),
                             locality: Some(tool_locality_label(locality)),
                         }]
                     }

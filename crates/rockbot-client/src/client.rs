@@ -55,6 +55,13 @@ pub enum GatewayEvent {
         duration_ms: u64,
         locality: Option<String>,
     },
+    /// Incremental streamed output from a running tool.
+    ToolOutput {
+        session_key: String,
+        tool_name: String,
+        output: String,
+        locality: Option<String>,
+    },
     /// Token usage update.
     TokenUsage {
         session_key: String,
@@ -614,6 +621,35 @@ impl GatewayClient {
                         .to_string(),
                     success,
                     duration_ms,
+                    locality: json
+                        .get("locality")
+                        .and_then(serde_json::Value::as_str)
+                        .map(String::from),
+                }
+            }
+            "tool_output" => {
+                let session_key = json
+                    .get("session_key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let tool_name = json
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let output = json
+                    .get("output")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if session_key.is_empty() || output.is_empty() {
+                    return;
+                }
+                GatewayEvent::ToolOutput {
+                    session_key,
+                    tool_name,
+                    output,
                     locality: json
                         .get("locality")
                         .and_then(serde_json::Value::as_str)

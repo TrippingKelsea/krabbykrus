@@ -6414,6 +6414,14 @@ async fn handle_gateway_event(
                 false,
             ));
         }
+        GatewayEvent::ToolOutput {
+            session_key,
+            tool_name: _,
+            output,
+            locality: _,
+        } => {
+            let _ = tx.send(Message::ChatStreamChunk(format!("{session_key}:{output}")));
+        }
         GatewayEvent::ToolResult {
             session_key,
             tool_name,
@@ -6434,15 +6442,12 @@ async fn handle_gateway_event(
             let _ = tx.send(Message::ToolExecutionObserved {
                 locality: locality.clone(),
             });
-            if !result.is_empty() && !session_key.is_empty() {
+            if !result.is_empty() && !session_key.is_empty() && !*success {
                 let prefix = locality
                     .as_ref()
                     .map(|value| format!("\n[{tool_name} | executed on: {value}]\n"))
                     .unwrap_or_else(|| format!("\n[{tool_name}]\n"));
-                let _ = tx.send(Message::ChatStreamChunk(format!(
-                    "{session_key}:{}{result}",
-                    prefix
-                )));
+                let _ = tx.send(Message::ChatStreamChunk(format!("{session_key}:{}{result}", prefix)));
             }
         }
         GatewayEvent::AgentResponse {
