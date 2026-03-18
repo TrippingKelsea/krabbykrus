@@ -125,6 +125,10 @@ pub struct App {
     keybindings: super::keybindings::KeybindingConfig,
     /// Chat command registry for slash command dispatch
     command_registry: rockbot_chat::ChatCommandRegistry,
+    /// Ensure one fresh default chat session is created per app launch.
+    bootstrapped_chat_session: bool,
+    /// Session id to select after the next sessions refresh.
+    pending_created_session_id: Option<String>,
 }
 
 /// Build the unified command registry from all crates.
@@ -164,6 +168,8 @@ impl App {
             local_tool_registry: None,
             keybindings: super::keybindings::KeybindingConfig::default(),
             command_registry: build_command_registry(),
+            bootstrapped_chat_session: false,
+            pending_created_session_id: None,
         }
     }
 
@@ -624,6 +630,16 @@ impl App {
             tracing::info!("Keybindings reloaded from vault");
         }
 
+        if let Message::SessionCreated(ref id) = msg {
+            self.pending_created_session_id = Some(id.clone());
+            self.state.chat_target = ChatTarget::Session(id.clone());
+            self.state.session_chats.entry(id.clone()).or_default();
+            self.state.input_mode = InputMode::ChatInput;
+            self.state.clear_input();
+            self.state.update(msg);
+            return;
+        }
+
         if let Message::AgentsLoaded(ref agents) = msg {
             let current_target_is_butler = matches!(self.state.chat_target, ChatTarget::Butler);
             let agents_empty = agents.is_empty();
@@ -640,6 +656,23 @@ impl App {
                 }
             } else if agents_empty {
                 self.state.chat_target = ChatTarget::Butler;
+            }
+            self.ensure_bootstrap_chat_session();
+            return;
+        }
+
+        if let Message::SessionsLoaded(_) = msg {
+            self.state.update(msg);
+            if let Some(ref pending_id) = self.pending_created_session_id {
+                if let Some(idx) = self
+                    .state
+                    .sessions
+                    .iter()
+                    .position(|s| &s.key == pending_id)
+                {
+                    self.state.selected_session = idx;
+                }
+                self.pending_created_session_id = None;
             }
             return;
         }
@@ -1938,6 +1971,29 @@ impl App {
             })
     }
 
+    fn spawn_fresh_bound_session(&mut self, agent_id: String, model: Option<String>) {
+        self.state.chat_agent_id = Some(agent_id.clone());
+        self.state.chat_model = model.clone();
+        self.spawn_create_session(Some(agent_id), model);
+    }
+
+    fn ensure_bootstrap_chat_session(&mut self) {
+        if self.bootstrapped_chat_session {
+            return;
+        }
+        let Some(idx) = self.preferred_agent_index() else {
+            return;
+        };
+        let Some(agent) = self.state.agents.get(idx) else {
+            return;
+        };
+        if !agent.enabled {
+            return;
+        }
+        self.bootstrapped_chat_session = true;
+        self.spawn_fresh_bound_session(agent.id.clone(), agent.model.clone());
+    }
+
     /// Update chat_target based on current mode and selection
     fn sync_chat_target(&mut self) {
         self.state.chat_target = match self.state.menu_item {
@@ -2257,6 +2313,17 @@ impl App {
         // Navigate to sessions if not there
         if self.state.menu_item != MenuItem::Sessions {
             self.state.menu_item = MenuItem::Sessions;
+        }
+
+        if let ChatTarget::Agent(agent_id) = &self.state.chat_target {
+            let agent_model = self
+                .state
+                .agents
+                .iter()
+                .find(|a| a.id == *agent_id)
+                .and_then(|a| a.model.clone());
+            self.spawn_fresh_bound_session(agent_id.clone(), agent_model);
+            return;
         }
 
         // If there's a selected session, set chat_model from it and open chat
@@ -3437,11 +3504,7 @@ impl App {
                                 .iter()
                                 .find(|a| a.id == agent_id)
                                 .and_then(|a| a.model.clone());
-                            self.spawn_create_session(Some(agent_id.clone()), agent_model.clone());
-                            self.state.chat_model = agent_model;
-                            self.state.chat_agent_id = Some(agent_id);
-                            self.state.input_mode = InputMode::ChatInput;
-                            self.state.clear_input();
+                            self.spawn_fresh_bound_session(agent_id, agent_model);
                         } else {
                             self.state.status_message =
                                 Some(("No agent available".to_string(), true));
@@ -4641,7 +4704,14 @@ impl App {
     /// Spawn an async task to send a chat message via the gateway
     fn spawn_chat_request(&self, user_message: &str) {
         let tx = self.state.tx.clone();
-        let session_key = self.state.active_session_key().unwrap_or_default();
+        let Some(session_key) = self.state.active_session_key() else {
+            let _ = tx.send(Message::ChatError(
+                "pending-session".to_string(),
+                "No active chat session yet. Press 'c' again in a moment or create a session."
+                    .to_string(),
+            ));
+            return;
+        };
         // Resolve agent_id: chat_target > chat_agent_id > selected session's agent
         let agent_id = match &self.state.chat_target {
             ChatTarget::Agent(id) => Some(id.clone()),
@@ -4974,29 +5044,23 @@ impl App {
                 }
             }
             ChatTarget::Agent(id) => {
-                let agent_key = format!("agent:{id}");
-                if let Some(chat) = self.state.session_chats.get(&agent_key) {
-                    self.render_session_messages(frame, chunks[0], chat);
-                } else {
-                    // Show agent welcome screen
-                    let lines = vec![
-                        Line::from(""),
-                        Line::from(""),
-                        Line::from(Span::styled(
-                            format!("@{id}"),
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD),
-                        )),
-                        Line::from(""),
-                        Line::from(Span::styled(
-                            "Type a message below to start chatting.",
-                            Style::default().fg(Color::DarkGray),
-                        )),
-                    ];
-                    let welcome = Paragraph::new(lines).alignment(Alignment::Center);
-                    frame.render_widget(welcome, chunks[0]);
-                }
+                let lines = vec![
+                    Line::from(""),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        format!("@{id}"),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "Press 'c' to start a fresh chat session.",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ];
+                let welcome = Paragraph::new(lines).alignment(Alignment::Center);
+                frame.render_widget(welcome, chunks[0]);
             }
         }
 

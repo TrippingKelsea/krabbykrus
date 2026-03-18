@@ -687,9 +687,7 @@ pub struct ThinkingState {
 impl ThinkingState {
     /// Average completion tokens per second since processing started
     pub fn tokens_per_second(&self) -> f64 {
-        let elapsed = self
-            .started_at
-            .map_or(0.0, |s| s.elapsed().as_secs_f64());
+        let elapsed = self.started_at.map_or(0.0, |s| s.elapsed().as_secs_f64());
         if elapsed > 0.5 {
             self.completion_tokens as f64 / elapsed
         } else {
@@ -1317,18 +1315,26 @@ pub enum InputMode {
     /// Chat input
     ChatInput,
     /// View session details
-    ViewSession { session_key: String },
+    ViewSession {
+        session_key: String,
+    },
     /// View endpoint details (read-only modal, 'e' to edit)
-    ViewEndpoint { endpoint_index: usize },
+    ViewEndpoint {
+        endpoint_index: usize,
+    },
     /// View provider details (read-only modal, 'e' to edit)
-    ViewProvider { provider_index: usize },
+    ViewProvider {
+        provider_index: usize,
+    },
     /// View full model list for a provider
     ViewModelList {
         provider_index: usize,
         scroll: usize,
     },
     /// View permission rule details (read-only, 'e' to edit, +/- to reorder)
-    ViewPermission { permission_index: usize },
+    ViewPermission {
+        permission_index: usize,
+    },
     /// Edit permission for a credential endpoint
     EditPermission(EditPermissionState),
     /// Browse context files for an agent
@@ -1351,7 +1357,9 @@ pub enum InputMode {
     },
     AgentLauncher(AgentLauncherState),
     /// Cron jobs overlay (Alt+C)
-    CronOverlay { scroll: usize },
+    CronOverlay {
+        scroll: usize,
+    },
 }
 
 /// State for a card detail overlay modal.
@@ -1944,9 +1952,7 @@ impl EditAgentState {
             temperature: agent
                 .temperature
                 .map_or_else(|| "0.5".to_string(), |n| format!("{n}")),
-            max_tokens: agent
-                .max_tokens
-                .map_or_else(String::new, |n| n.to_string()),
+            max_tokens: agent.max_tokens.map_or_else(String::new, |n| n.to_string()),
             system_prompt: agent.system_prompt.clone().unwrap_or_default(),
             enabled: agent.enabled,
             available_models: Vec::new(),
@@ -1983,12 +1989,15 @@ impl EditAgentState {
     pub fn filtered_model_indices(&self) -> Vec<usize> {
         crate::search::fuzzy_indices(
             &self.model_query,
-            self.available_models.iter().enumerate().map(|(idx, model)| {
-                (
-                    idx,
-                    format!("{} {} {}", model.label, model.value, model.provider),
-                )
-            }),
+            self.available_models
+                .iter()
+                .enumerate()
+                .map(|(idx, model)| {
+                    (
+                        idx,
+                        format!("{} {} {}", model.label, model.value, model.provider),
+                    )
+                }),
         )
     }
 
@@ -2031,7 +2040,11 @@ impl EditAgentState {
     }
 
     pub fn select_model_value(&mut self, value: &str) {
-        if let Some(index) = self.available_models.iter().position(|model| model.value == value) {
+        if let Some(index) = self
+            .available_models
+            .iter()
+            .position(|model| model.value == value)
+        {
             self.selected_model_index = Some(index);
             self.model = self.available_models[index].value.clone();
             self.model_query.clear();
@@ -2571,12 +2584,15 @@ impl CreateSessionState {
     pub fn filtered_model_indices(&self) -> Vec<usize> {
         crate::search::fuzzy_indices(
             &self.model_query,
-            self.available_models.iter().enumerate().map(|(idx, model)| {
-                (
-                    idx,
-                    format!("{} {} {}", model.label, model.value, model.provider),
-                )
-            }),
+            self.available_models
+                .iter()
+                .enumerate()
+                .map(|(idx, model)| {
+                    (
+                        idx,
+                        format!("{} {} {}", model.label, model.value, model.provider),
+                    )
+                }),
         )
     }
 
@@ -3777,7 +3793,7 @@ impl AppState {
         match &self.chat_target {
             ChatTarget::Butler => Some("butler".to_string()),
             ChatTarget::Session(key) => Some(key.clone()),
-            ChatTarget::Agent(id) => Some(format!("agent:{id}")),
+            ChatTarget::Agent(_) => None,
         }
     }
 
@@ -3786,7 +3802,7 @@ impl AppState {
         match &self.chat_target {
             ChatTarget::Butler => Some(&self.butler_chat),
             ChatTarget::Session(key) => self.session_chats.get(key),
-            ChatTarget::Agent(id) => self.session_chats.get(&format!("agent:{id}")),
+            ChatTarget::Agent(_) => None,
         }
     }
 
@@ -3798,10 +3814,7 @@ impl AppState {
                 let key = key.clone();
                 Some(self.session_chats.entry(key).or_default())
             }
-            ChatTarget::Agent(id) => {
-                let key = format!("agent:{id}");
-                Some(self.session_chats.entry(key).or_default())
-            }
+            ChatTarget::Agent(_) => None,
         }
     }
 
