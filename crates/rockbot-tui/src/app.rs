@@ -366,7 +366,7 @@ impl App {
     fn ws_connected(&self) -> bool {
         self.gateway_client
             .as_ref()
-            .is_some_and(|c| c.is_connected())
+            .is_some_and(rockbot_client::GatewayClient::is_connected)
     }
 
     /// Spawn a task to check gateway status
@@ -501,9 +501,8 @@ impl App {
         tokio::spawn(async move {
             let store_path = vault_path.join("agents.redb");
             // Open the store once; if it doesn't exist yet, we just do nothing.
-            let store = match rockbot_store::Store::open(&store_path) {
-                Ok(s) => s,
-                Err(_) => return,
+            let Ok(store) = rockbot_store::Store::open(&store_path) else {
+                return;
             };
             let mut last_hash: Option<u64> = None;
             loop {
@@ -1227,9 +1226,7 @@ impl App {
                         "Tool execution target: {}",
                         self.state
                             .remote_executors
-                            .get(self.state.selected_executor_index)
-                            .map(RemoteExecutorInfo::display_name)
-                            .unwrap_or_else(|| "gateway".to_string())
+                            .get(self.state.selected_executor_index).map_or_else(|| "gateway".to_string(), RemoteExecutorInfo::display_name)
                     ),
                     false,
                 ));
@@ -1934,20 +1931,17 @@ impl App {
             MenuItem::Dashboard => self
                 .preferred_agent_index()
                 .and_then(|idx| self.state.agents.get(idx))
-                .map(|a| ChatTarget::Agent(a.id.clone()))
-                .unwrap_or(ChatTarget::Butler),
+                .map_or(ChatTarget::Butler, |a| ChatTarget::Agent(a.id.clone())),
             MenuItem::Agents => self
                 .state
                 .agents
                 .get(self.state.selected_agent)
-                .map(|a| ChatTarget::Agent(a.id.clone()))
-                .unwrap_or(ChatTarget::Butler),
+                .map_or(ChatTarget::Butler, |a| ChatTarget::Agent(a.id.clone())),
             MenuItem::Sessions => self
                 .state
                 .sessions
                 .get(self.state.selected_session)
-                .map(|s| ChatTarget::Session(s.key.clone()))
-                .unwrap_or(ChatTarget::Butler),
+                .map_or(ChatTarget::Butler, |s| ChatTarget::Session(s.key.clone())),
             _ => self.state.chat_target.clone(),
         };
     }
@@ -2476,17 +2470,17 @@ impl App {
                 self.state.input_mode = InputMode::EditPermission(state);
             }
             KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.save_permission(state);
+                self.save_permission(&state);
             }
             KeyCode::Enter => {
-                self.save_permission(state);
+                self.save_permission(&state);
             }
             _ => {}
         }
         Ok(())
     }
 
-    fn save_permission(&mut self, state: super::state::EditPermissionState) {
+    fn save_permission(&mut self, state: &super::state::EditPermissionState) {
         if state.is_edit {
             // Update existing rule: find by endpoint+source combo and update access
             if let Some(rule) = self.state.permissions.iter_mut().find(|r| {
@@ -2695,7 +2689,7 @@ impl App {
                 .state
                 .session_chats
                 .get(&key)
-                .map_or(false, |c| c.loaded);
+                .is_some_and(|c| c.loaded);
             if !already_loaded {
                 self.spawn_load_session_messages(&key);
             }
@@ -3181,14 +3175,12 @@ impl App {
         let base_url = if state.provider_id == "bedrock" {
             state
                 .get_field_value_by_id("endpoint_url")
-                .filter(|v| !v.is_empty())
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| {
+                .filter(|v| !v.is_empty()).map_or_else(|| {
                     format!(
                         "https://bedrock-runtime.{}.amazonaws.com",
                         state.aws_region()
                     )
-                })
+                }, std::string::ToString::to_string)
         } else {
             let url = state.base_url();
             if url.is_empty() {
@@ -3567,7 +3559,7 @@ impl App {
             };
 
             match gateway_result {
-                Ok(resp) if matches!(resp.status, 200 | 201 | 202) => {
+                Ok(resp) if matches!(resp.status, 200..=202) => {
                     let action = if is_edit { "updated" } else { "created" };
                     let _ = tx.send(Message::AgentSaved(agent_id));
                     let _ = tx.send(Message::SetStatus(format!("Agent {action}"), false));
@@ -3673,11 +3665,11 @@ fn save_tui_preferences_to_config(config_path: &PathBuf, tui: &TuiConfig) -> Res
     doc["tui"]["theme"]["ai_text_color"] = doc["tui"]["theme"]["ai_text"].clone();
     doc["tui"]["theme"]["thinking_text_color"] = doc["tui"]["theme"]["thinking_text"].clone();
     doc["tui"]["theme"]["tool_text_color"] = doc["tui"]["theme"]["tool_text"].clone();
-    doc["tui"]["theme"].as_table_mut().map(|table| {
+    if let Some(table) = doc["tui"]["theme"].as_table_mut() {
         table.remove("ai_text");
         table.remove("thinking_text");
         table.remove("tool_text");
-    });
+    }
 
     doc["tui"]["fonts"] = toml_edit::Item::Table(toml_edit::Table::new());
     let fonts = &tui.fonts;
@@ -4210,22 +4202,20 @@ impl App {
         }
 
         // Card bar / overlay keybindings (Alt+arrows, Alt+Enter, Alt+letter)
-        if let Some(action) = self.keybindings.lookup("chat", &key) {
-            match action {
-                TuiAction::CardLeft
-                | TuiAction::CardRight
-                | TuiAction::CardUp
-                | TuiAction::CardDown
-                | TuiAction::CardActivate
-                | TuiAction::OpenVault
-                | TuiAction::OpenSettings
-                | TuiAction::OpenModels
-                | TuiAction::OpenCron => {
-                    // Delegate to normal-mode handler for card/overlay actions
-                    return self.handle_normal_mode(key);
-                }
-                _ => {} // Submit/Escape/Scroll handled below via normalization
-            }
+        if let Some(
+            TuiAction::CardLeft
+            | TuiAction::CardRight
+            | TuiAction::CardUp
+            | TuiAction::CardDown
+            | TuiAction::CardActivate
+            | TuiAction::OpenVault
+            | TuiAction::OpenSettings
+            | TuiAction::OpenModels
+            | TuiAction::OpenCron,
+        ) = self.keybindings.lookup("chat", &key)
+        {
+            // Delegate to normal-mode handler for card/overlay actions
+            return self.handle_normal_mode(key);
         }
 
         // Normalize the key event into a text-input action
@@ -4248,8 +4238,7 @@ impl App {
                     let prev = self.state.input_buffer[..self.state.input_cursor]
                         .char_indices()
                         .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
+                        .map_or(0, |(i, _)| i);
                     self.state.input_buffer.remove(prev);
                     self.state.input_cursor = prev;
                 }
@@ -4264,8 +4253,7 @@ impl App {
                     self.state.input_cursor = self.state.input_buffer[..self.state.input_cursor]
                         .char_indices()
                         .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
+                        .map_or(0, |(i, _)| i);
                 }
             }
             InputAction::NavRight => {
@@ -4273,8 +4261,7 @@ impl App {
                     self.state.input_cursor = self.state.input_buffer[self.state.input_cursor..]
                         .char_indices()
                         .nth(1)
-                        .map(|(i, _)| self.state.input_cursor + i)
-                        .unwrap_or(self.state.input_buffer.len());
+                        .map_or(self.state.input_buffer.len(), |(i, _)| self.state.input_cursor + i);
                 }
             }
             InputAction::Home => {
@@ -4410,7 +4397,7 @@ impl App {
                 chat.loading = true;
                 chat.auto_scroll = true;
             }
-            self.spawn_chat_request(routed_msg.to_string());
+            self.spawn_chat_request(routed_msg);
             self.state.clear_input();
             return;
         }
@@ -4420,7 +4407,7 @@ impl App {
             chat.loading = true;
             chat.auto_scroll = true;
         }
-        self.spawn_chat_request(message);
+        self.spawn_chat_request(&message);
         self.state.clear_input();
     }
 
@@ -4507,7 +4494,7 @@ impl App {
                     chat.loading = true;
                     chat.auto_scroll = true;
                 }
-                self.spawn_chat_request(message);
+                self.spawn_chat_request(&message);
             }
             CommandAction::SpawnAsync => {
                 // Command spawned async work via tx — nothing to do here
@@ -4551,7 +4538,7 @@ impl App {
                 chat.loading = true;
                 chat.auto_scroll = true;
             }
-            self.spawn_chat_request(message);
+            self.spawn_chat_request(&message);
         }
     }
 
@@ -4631,7 +4618,7 @@ impl App {
     }
 
     /// Spawn an async task to send a chat message via the gateway
-    fn spawn_chat_request(&self, user_message: String) {
+    fn spawn_chat_request(&self, user_message: &str) {
         let tx = self.state.tx.clone();
         let session_key = self.state.active_session_key().unwrap_or_default();
         // Resolve agent_id: chat_target > chat_agent_id > selected session's agent
@@ -4669,15 +4656,12 @@ impl App {
             return;
         }
 
-        let agent = match agent_id {
-            Some(ref a) => a,
-            None => {
-                let _ = tx.send(Message::ChatError(
-                    session_key,
-                    "No agent selected for this session.".to_string(),
-                ));
-                return;
-            }
+        let Some(ref agent) = agent_id else {
+            let _ = tx.send(Message::ChatError(
+                session_key,
+                "No agent selected for this session.".to_string(),
+            ));
+            return;
         };
 
         let ws_msg = serde_json::json!({
@@ -4945,7 +4929,7 @@ impl App {
             .split('\n')
             .map(|line| {
                 let char_count = (line.len() + 1).max(1);
-                (char_count + inner_width - 1) / inner_width
+                char_count.div_ceil(inner_width)
             })
             .sum();
         let input_line_count = visual_lines.clamp(1, 10);
@@ -5070,7 +5054,7 @@ impl App {
         frame.render_widget(Clear, area);
 
         let slot = self.state.slot_bar.slots.get(detail.slot_index);
-        let title = slot.map(|s| s.label.as_str()).unwrap_or("Detail");
+        let title = slot.map_or("Detail", |s| s.label.as_str());
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -5093,7 +5077,7 @@ impl App {
             MenuItem::Sessions => self.render_sessions_detail(frame, inner, detail),
             MenuItem::Models => self.render_models_detail(frame, inner, detail),
             MenuItem::Credentials => self.render_credentials_detail(frame, inner, detail),
-            _ => self.render_generic_detail(frame, inner, detail),
+            _ => App::render_generic_detail(frame, inner, detail),
         }
     }
 
@@ -5106,7 +5090,7 @@ impl App {
         use ratatui::widgets::Sparkline;
 
         let slot = self.state.slot_bar.slots.get(detail.slot_index);
-        let label = slot.map(|s| s.label.as_str()).unwrap_or("");
+        let label = slot.map_or("", |s| s.label.as_str());
 
         // Split: sparkline area (top) + stats text (bottom)
         let chunks = Layout::default()
@@ -5215,9 +5199,7 @@ impl App {
                     Span::styled("RTT: ", Style::default().fg(Color::Cyan)),
                     Span::raw(
                         self.state
-                            .ws_last_rtt_ms
-                            .map(|ms| format!("{ms} ms"))
-                            .unwrap_or_else(|| "--".to_string()),
+                            .ws_last_rtt_ms.map_or_else(|| "--".to_string(), |ms| format!("{ms} ms")),
                     ),
                 ]));
                 lines.push(Line::from(vec![
@@ -5312,9 +5294,7 @@ impl App {
                     self.state
                         .remote_executors
                         .iter()
-                        .find(|executor| executor.target_id == target)
-                        .map(RemoteExecutorInfo::display_name)
-                        .unwrap_or_else(|| target.to_string())
+                        .find(|executor| executor.target_id == target).map_or_else(|| target.to_string(), RemoteExecutorInfo::display_name)
                 } else {
                     "gateway".to_string()
                 };
@@ -5622,7 +5602,7 @@ impl App {
     ) {
         let mut lines: Vec<Line<'_>> = Vec::new();
         let slot = self.state.slot_bar.slots.get(detail.slot_index);
-        let label = slot.map(|s| s.label.as_str()).unwrap_or("");
+        let label = slot.map_or("", |s| s.label.as_str());
         match label {
             "Endpoints" => {
                 lines.push(Line::from(Span::styled(
@@ -5671,12 +5651,7 @@ impl App {
         frame.render_widget(paragraph, area);
     }
 
-    fn render_generic_detail(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        detail: &crate::state::CardDetailState,
-    ) {
+    fn render_generic_detail(frame: &mut Frame, area: Rect, detail: &crate::state::CardDetailState) {
         let lines = vec![Line::from("Detail view for this mode.")];
         let paragraph = Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -6485,12 +6460,9 @@ async fn handle_gateway_event(
             });
             if !result.is_empty() && !session_key.is_empty() {
                 let prefix = locality
-                    .as_ref()
-                    .map(|value| format!("\n[{tool_name} | executed on: {value}]\n"))
-                    .unwrap_or_else(|| format!("\n[{tool_name}]\n"));
+                    .as_ref().map_or_else(|| format!("\n[{tool_name}]\n"), |value| format!("\n[{tool_name} | executed on: {value}]\n"));
                 let _ = tx.send(Message::ChatStreamChunk(format!(
-                    "{session_key}:{}{result}",
-                    prefix
+                    "{session_key}:{prefix}{result}"
                 )));
             }
         }
@@ -6998,7 +6970,7 @@ async fn load_cron_jobs_from_gateway(
             Some("every") => {
                 let ms = schedule_val
                     .and_then(|s| s.get("interval_ms"))
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0);
                 if ms >= 3_600_000 {
                     format!("every {}h", ms / 3_600_000)
@@ -7011,7 +6983,7 @@ async fn load_cron_jobs_from_gateway(
             Some("at") => {
                 let at_ms = schedule_val
                     .and_then(|s| s.get("at_ms"))
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0);
                 format!("once @{at_ms}")
             }
@@ -7021,11 +6993,9 @@ async fn load_cron_jobs_from_gateway(
         let state_val = entry.get("state");
         let last_run = state_val
             .and_then(|s| s.get("last_run_at_ms"))
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .map(|ms| {
-                chrono::DateTime::from_timestamp_millis(ms as i64)
-                    .map(|dt| dt.format("%H:%M:%S").to_string())
-                    .unwrap_or_else(|| format!("{ms}"))
+                chrono::DateTime::from_timestamp_millis(ms as i64).map_or_else(|| format!("{ms}"), |dt| dt.format("%H:%M:%S").to_string())
             });
         let last_status = state_val
             .and_then(|s| s.get("last_run_status"))
@@ -7033,11 +7003,9 @@ async fn load_cron_jobs_from_gateway(
             .map(String::from);
         let next_run = state_val
             .and_then(|s| s.get("next_run_at_ms"))
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .map(|ms| {
-                chrono::DateTime::from_timestamp_millis(ms as i64)
-                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                    .unwrap_or_else(|| format!("{ms}"))
+                chrono::DateTime::from_timestamp_millis(ms as i64).map_or_else(|| format!("{ms}"), |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
             });
 
         jobs.push(CronJobInfo {
@@ -7049,7 +7017,7 @@ async fn load_cron_jobs_from_gateway(
                 .to_string(),
             enabled: entry
                 .get("enabled")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
             agent_id: entry
                 .get("agent_id")
@@ -7219,7 +7187,7 @@ async fn load_session_messages(
                             let timestamp = msg
                                 .get("created_at")
                                 .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
+                                .map(std::string::ToString::to_string);
                             Some(ChatMessage {
                                 role,
                                 content: text,
@@ -7239,7 +7207,7 @@ async fn load_session_messages(
 /// Simple base64 encoding (standard alphabet)
 fn base64_encode(input: &[u8]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };

@@ -693,7 +693,7 @@ pub fn render_edit_agent_modal(
             .split('\n')
             .map(|line| {
                 let char_count = line.len().max(1);
-                (char_count + field_inner_width - 1) / field_inner_width
+                char_count.div_ceil(field_inner_width)
             })
             .sum::<usize>()
             .clamp(1, 10)
@@ -1074,7 +1074,7 @@ pub fn render_create_session_modal(frame: &mut Frame, area: Rect, state: &Create
             } else {
                 let (_, ref name) = state.available_agents[state.selected_agent_index];
                 (
-                    format!("◀ {} ▶", name),
+                    format!("◀ {name} ▶"),
                     format!(
                         "{} of {} — query '{}' — ←→ to cycle",
                         filtered

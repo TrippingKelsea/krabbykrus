@@ -239,9 +239,7 @@ fn render_execution_target(frame: &mut Frame, area: Rect, state: &AppState) {
         state
             .remote_executors
             .iter()
-            .find(|executor| executor.target_id == target)
-            .map(|executor| executor.display_name())
-            .unwrap_or_else(|| target.to_string())
+            .find(|executor| executor.target_id == target).map_or_else(|| target.to_string(), super::super::state::RemoteExecutorInfo::display_name)
     } else {
         "Gateway".to_string()
     };

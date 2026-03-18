@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::{load_config, CaCertCommands, CertCommands, ClientCertCommands, EnrollCommands};
 
 /// Run certificate commands.
-pub async fn run(command: &CertCommands, config_path: &PathBuf) -> Result<()> {
+pub async fn run(command: &CertCommands, config_path: &Path) -> Result<()> {
     match command {
         CertCommands::Ca { command } => run_ca(command, config_path).await,
         CertCommands::Client { command } => run_client(command, config_path).await,
@@ -69,7 +69,7 @@ fn open_pki(pki_dir: PathBuf) -> Result<PkiManager> {
 // CA commands
 // ---------------------------------------------------------------------------
 
-async fn run_ca(command: &CaCertCommands, config_path: &PathBuf) -> Result<()> {
+async fn run_ca(command: &CaCertCommands, config_path: &Path) -> Result<()> {
     match command {
         CaCertCommands::Publish => cmd_publish(config_path).await,
         CaCertCommands::Generate {
@@ -278,7 +278,7 @@ async fn cmd_publish(_config_path: &Path) -> Result<()> {
 // Client commands
 // ---------------------------------------------------------------------------
 
-async fn run_client(command: &ClientCertCommands, config_path: &PathBuf) -> Result<()> {
+async fn run_client(command: &ClientCertCommands, config_path: &Path) -> Result<()> {
     match command {
         ClientCertCommands::Generate {
             name,
@@ -311,8 +311,8 @@ async fn run_client(command: &ClientCertCommands, config_path: &PathBuf) -> Resu
             }
 
             println!(
-                "{:<20} {:<10} {:<10} {:<12} {}",
-                "NAME", "ROLE", "STATUS", "EXPIRES", "FINGERPRINT"
+                "{:<20} {:<10} {:<10} {:<12} FINGERPRINT",
+                "NAME", "ROLE", "STATUS", "EXPIRES"
             );
             for entry in entries {
                 let expires = entry.not_after.format("%Y-%m-%d");
@@ -445,24 +445,21 @@ async fn cmd_install(config_path: &Path, name: &str) -> Result<()> {
     }
 
     let mut mgr = open_pki(dir.clone())?;
-    let role = match mgr.client_info(name) {
-        Ok(entry) => entry.role,
-        Err(_) => {
-            let config = rockbot_config::Config::from_file(config_path)
-                .await
-                .with_context(|| format!("Failed to load config: {}", config_path.display()))?;
-            let inferred_role = if config.security.roles.gateway {
-                CertRole::Gateway
-            } else {
-                CertRole::Tui
-            };
-            let cert_pem = tokio::fs::read_to_string(&cert_path)
-                .await
-                .with_context(|| format!("Failed to read certificate: {}", cert_path.display()))?;
-            mgr.import_signed_client(name, inferred_role, &cert_pem)
-                .with_context(|| format!("Failed to import certificate '{name}' into local PKI index"))?;
-            inferred_role
-        }
+    let role = if let Ok(entry) = mgr.client_info(name) { entry.role } else {
+        let config = rockbot_config::Config::from_file(config_path)
+            .await
+            .with_context(|| format!("Failed to load config: {}", config_path.display()))?;
+        let inferred_role = if config.security.roles.gateway {
+            CertRole::Gateway
+        } else {
+            CertRole::Tui
+        };
+        let cert_pem = tokio::fs::read_to_string(&cert_path)
+            .await
+            .with_context(|| format!("Failed to read certificate: {}", cert_path.display()))?;
+        mgr.import_signed_client(name, inferred_role, &cert_pem)
+            .with_context(|| format!("Failed to import certificate '{name}' into local PKI index"))?;
+        inferred_role
     };
 
     // Read and patch the TOML config
@@ -498,8 +495,7 @@ async fn cmd_install(config_path: &Path, name: &str) -> Result<()> {
     tokio::fs::write(config_path, doc.to_string()).await?;
 
     println!(
-        "Installed certificate '{name}' (role: {}) into config:",
-        role
+        "Installed certificate '{name}' (role: {role}) into config:"
     );
     println!("  tls_cert: {}", cert_path.display());
     println!("  tls_key:  {}", key_path.display());
@@ -711,7 +707,7 @@ async fn cmd_info(cert_path: &Path) -> Result<()> {
 // Enrollment commands
 // ---------------------------------------------------------------------------
 
-async fn run_enroll(command: &EnrollCommands, config_path: &PathBuf) -> Result<()> {
+async fn run_enroll(command: &EnrollCommands, config_path: &Path) -> Result<()> {
     match command {
         EnrollCommands::Create {
             role,
@@ -757,18 +753,14 @@ async fn run_enroll(command: &EnrollCommands, config_path: &PathBuf) -> Result<(
             }
 
             println!(
-                "{:<12} {:<10} {:<10} {:<20} {}",
-                "ID", "ROLE", "USES", "EXPIRES", "TOKEN"
+                "{:<12} {:<10} {:<10} {:<20} TOKEN",
+                "ID", "ROLE", "USES", "EXPIRES"
             );
             for t in tokens {
                 let uses_str = t
-                    .remaining_uses
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|| "∞".to_string());
+                    .remaining_uses.map_or_else(|| "∞".to_string(), |n| n.to_string());
                 let expires_str = t
-                    .expires_at
-                    .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                    .unwrap_or_else(|| "never".to_string());
+                    .expires_at.map_or_else(|| "never".to_string(), |dt| dt.format("%Y-%m-%d %H:%M").to_string());
                 let token_preview = if t.token.len() > 16 {
                     format!("{}…", &t.token[..16])
                 } else {
@@ -919,20 +911,17 @@ async fn resolve_cert_key_paths(
     key: Option<&Path>,
     config_path: &Path,
 ) -> Result<(PathBuf, PathBuf)> {
-    match (cert, key) {
-        (Some(c), Some(k)) => Ok((expand_tilde(c), expand_tilde(k))),
-        _ => {
-            let config = load_config(&config_path.to_path_buf()).await?;
-            let c = cert
-                .map(|p| expand_tilde(p))
-                .or(config.effective_pki().tls_cert.map(|p| expand_tilde(&p)))
-                .context("No --cert provided and no tls_cert in config")?;
-            let k = key
-                .map(|p| expand_tilde(p))
-                .or(config.effective_pki().tls_key.map(|p| expand_tilde(&p)))
-                .context("No --key provided and no tls_key in config")?;
-            Ok((c, k))
-        }
+    if let (Some(c), Some(k)) = (cert, key) { Ok((expand_tilde(c), expand_tilde(k))) } else {
+        let config = load_config(&config_path.to_path_buf()).await?;
+        let c = cert
+            .map(expand_tilde)
+            .or(config.effective_pki().tls_cert.map(|p| expand_tilde(&p)))
+            .context("No --cert provided and no tls_cert in config")?;
+        let k = key
+            .map(expand_tilde)
+            .or(config.effective_pki().tls_key.map(|p| expand_tilde(&p)))
+            .context("No --key provided and no tls_key in config")?;
+        Ok((c, k))
     }
 }
 

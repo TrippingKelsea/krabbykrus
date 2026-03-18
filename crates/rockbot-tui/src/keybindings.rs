@@ -10,7 +10,7 @@ use std::fmt;
 use std::str::FromStr;
 
 /// Actions that can be triggered by keybindings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TuiAction {
     Quit,
     NavLeft,
@@ -264,7 +264,7 @@ impl KeybindingConfig {
         bindings
             .iter()
             .find(|b| b.key.matches(event))
-            .map(|b| b.action.clone())
+            .map(|b| b.action)
     }
 }
 

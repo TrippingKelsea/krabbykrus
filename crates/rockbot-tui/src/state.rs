@@ -294,6 +294,12 @@ pub struct SlottedCardBar {
     pub active_slot: usize,
 }
 
+impl Default for SlottedCardBar {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SlottedCardBar {
     pub fn new() -> Self {
         let mut bar = Self {
@@ -683,8 +689,7 @@ impl ThinkingState {
     pub fn tokens_per_second(&self) -> f64 {
         let elapsed = self
             .started_at
-            .map(|s| s.elapsed().as_secs_f64())
-            .unwrap_or(0.0);
+            .map_or(0.0, |s| s.elapsed().as_secs_f64());
         if elapsed > 0.5 {
             self.completion_tokens as f64 / elapsed
         } else {
@@ -1130,6 +1135,12 @@ pub struct ModelProviderModel {
 pub struct AgentLauncherState {
     pub query: String,
     pub selected: usize,
+}
+
+impl Default for AgentLauncherState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AgentLauncherState {
@@ -2771,15 +2782,13 @@ impl EditPermissionState {
     pub fn selected_endpoint_id(&self) -> &str {
         self.endpoints
             .get(self.selected_endpoint)
-            .map(|(id, _)| id.as_str())
-            .unwrap_or("")
+            .map_or("", |(id, _)| id.as_str())
     }
 
     pub fn selected_endpoint_name(&self) -> &str {
         self.endpoints
             .get(self.selected_endpoint)
-            .map(|(_, name)| name.as_str())
-            .unwrap_or("")
+            .map_or("", |(_, name)| name.as_str())
     }
 
     pub fn to_rule(&self, priority: usize) -> PermissionRule {
@@ -3431,13 +3440,13 @@ impl AppState {
                 match locality.as_deref() {
                     Some("gateway") => {
                         self.gateway_tool_exec_count =
-                            self.gateway_tool_exec_count.saturating_add(1)
+                            self.gateway_tool_exec_count.saturating_add(1);
                     }
                     Some("active_client") => {
-                        self.local_tool_exec_count = self.local_tool_exec_count.saturating_add(1)
+                        self.local_tool_exec_count = self.local_tool_exec_count.saturating_add(1);
                     }
                     Some(value) if value.starts_with("remote:") => {
-                        self.remote_tool_exec_count = self.remote_tool_exec_count.saturating_add(1)
+                        self.remote_tool_exec_count = self.remote_tool_exec_count.saturating_add(1);
                     }
                     _ => {}
                 }
@@ -3586,7 +3595,7 @@ impl AppState {
                     // Append to last assistant message, or create a new one
                     if let Some(last) = chat.messages.last_mut() {
                         if last.role == ChatRole::Assistant && chat.loading {
-                            last.content.push_str(&text);
+                            last.content.push_str(text);
                         } else {
                             chat.messages.push(ChatMessage::assistant(text.to_string()));
                         }
@@ -3803,7 +3812,7 @@ impl AppState {
 
     /// Convenience: is chat loading for active session
     pub fn chat_loading(&self) -> bool {
-        self.active_chat().map_or(false, |c| c.loading)
+        self.active_chat().is_some_and(|c| c.loading)
     }
 
     /// Convenience: chat scroll for active session
@@ -3813,7 +3822,7 @@ impl AppState {
 
     /// Convenience: chat auto-scroll for active session
     pub fn chat_auto_scroll(&self) -> bool {
-        self.active_chat().map_or(true, |c| c.auto_scroll)
+        self.active_chat().is_none_or(|c| c.auto_scroll)
     }
 
     /// Resolve a session key to the corresponding chat state.

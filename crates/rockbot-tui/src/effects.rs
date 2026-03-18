@@ -449,7 +449,7 @@ mod tests {
         for i in 0..100 {
             let elapsed = i as f64 * 0.1;
             let pulse = pulse_value(elapsed, 1.0);
-            assert!(pulse >= 0.0 && pulse <= 1.0);
+            assert!((0.0..=1.0).contains(&pulse));
         }
     }
 

@@ -196,7 +196,7 @@ fn equal_cells(area: Rect, count: usize) -> Vec<Rect> {
         .direction(Direction::Horizontal)
         .constraints(vec![Constraint::Ratio(1, count as u32); count])
         .split(area)
-        .into_iter()
+        .iter()
         .copied()
         .collect()
 }
@@ -421,16 +421,15 @@ fn render_theme(frame: &mut Frame, area: Rect, state: &AppState) {
     let status = state
         .settings_save_feedback
         .as_ref()
-        .map(|(msg, is_error)| {
+        .map_or((
+            "Autosave on change",
+            palette::text_secondary(&state.tui_config),
+        ), |(msg, is_error)| {
             (
                 msg.as_str(),
                 if *is_error { Color::Red } else { Color::Green },
             )
-        })
-        .unwrap_or((
-            "Autosave on change",
-            palette::text_secondary(&state.tui_config),
-        ));
+        });
 
     frame.render_widget(
         Paragraph::new(vec![
@@ -522,6 +521,7 @@ fn render_typography(frame: &mut Frame, area: Rect, state: &AppState) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_choice_row<F>(
     frame: &mut Frame,
     area: Rect,

@@ -849,9 +849,8 @@ fn sweep_old_logs(log_dir: &std::path::Path, max_age_days: u64) {
     let cutoff =
         std::time::SystemTime::now() - std::time::Duration::from_secs(max_age_days * 86400);
 
-    let entries = match std::fs::read_dir(log_dir) {
-        Ok(e) => e,
-        Err(_) => return,
+    let Ok(entries) = std::fs::read_dir(log_dir) else {
+        return;
     };
 
     for entry in entries.flatten() {

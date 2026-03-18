@@ -94,7 +94,10 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
         .join("data")
         .join("sessions.redb");
 
-    tokio::fs::create_dir_all(db_path.parent().unwrap()).await?;
+    let Some(db_parent) = db_path.parent() else {
+        anyhow::bail!("Session database path has no parent: {}", db_path.display());
+    };
+    tokio::fs::create_dir_all(db_parent).await?;
     let pki_manager = open_pki_for_storage(&config)?;
     if let (Some(vault_result), Some(pki_manager)) = (vault_result.as_ref(), pki_manager.as_ref()) {
         bootstrap_local_vault_node(&config, pki_manager, &vault_result.manager).await;
@@ -704,8 +707,11 @@ WantedBy=default.target
     let service_path = if system {
         PathBuf::from(format!("/etc/systemd/system/{name}.service"))
     } else {
-        dirs::config_dir()
-            .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
+        dirs::config_dir().unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".config")
+        })
             .join("systemd/user")
             .join(format!("{name}.service"))
     };
@@ -798,8 +804,11 @@ async fn remove_service(system: bool, name: &str) -> Result<()> {
     let service_path = if system {
         PathBuf::from(format!("/etc/systemd/system/{name}.service"))
     } else {
-        dirs::config_dir()
-            .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
+        dirs::config_dir().unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".config")
+        })
             .join("systemd/user")
             .join(format!("{name}.service"))
     };

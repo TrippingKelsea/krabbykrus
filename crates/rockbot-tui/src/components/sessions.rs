@@ -73,7 +73,7 @@ pub fn render_chat_area(
         .map(|line| {
             // +1 for the cursor character that is rendered inline
             let char_count = (line.len() + 1).max(1);
-            (char_count + inner_width - 1) / inner_width // ceiling division
+            char_count.div_ceil(inner_width) // ceiling division
         })
         .sum();
     let input_line_count = visual_lines.clamp(1, 10);
@@ -300,7 +300,7 @@ pub fn render_chat_messages(
     let view_height = inner.height as usize;
 
     let scratch = Paragraph::new(lines.clone()).wrap(Wrap { trim: false });
-    let total_visual_lines = scratch.line_count(view_width) as usize;
+    let total_visual_lines = scratch.line_count(view_width);
 
     let max_scroll = total_visual_lines.saturating_sub(view_height);
 

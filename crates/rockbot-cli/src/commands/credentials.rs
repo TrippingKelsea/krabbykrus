@@ -364,8 +364,8 @@ async fn handle_permissions(config: &Config, command: &PermissionsCommands) -> R
             }
 
             println!(
-                "{:<36} {:<20} {:<14} {}",
-                "RULE ID", "PATTERN", "LEVEL", "DESCRIPTION"
+                "{:<36} {:<20} {:<14} DESCRIPTION",
+                "RULE ID", "PATTERN", "LEVEL"
             );
             println!("{}", "-".repeat(96));
             for permission in permissions {
