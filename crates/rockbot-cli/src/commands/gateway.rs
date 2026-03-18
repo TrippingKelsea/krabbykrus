@@ -165,20 +165,35 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
         bootstrap_local_vault_node(&config, pki_manager, &vault_result.manager).await;
     }
     let session_key = storage_key_for_label(&config, pki_manager.as_ref(), "sessions")?;
-    let session_store = Arc::new(rockbot_store::Store::open_volume(
-        &disk_path,
-        "sessions",
-        SESSIONS_VOLUME_CAPACITY,
-        session_key,
-    )?);
+    let legacy_sessions_path = storage_root.join("data").join("sessions.redb");
+    let session_store = if legacy_sessions_path.exists() {
+        let store = safe_open_legacy_store(&legacy_sessions_path)?;
+        info!(
+            "Session store opened via legacy store {}",
+            legacy_sessions_path.display()
+        );
+        Arc::new(store)
+    } else {
+        Arc::new(safe_open_volume(
+            &disk_path,
+            "sessions",
+            SESSIONS_VOLUME_CAPACITY,
+            session_key,
+        )?)
+    };
+    let session_store_descriptor = if legacy_sessions_path.exists() {
+        format!("legacy store {}", legacy_sessions_path.display())
+    } else {
+        encryption_mode_log(
+            session_key.is_some(),
+            &format!("virtual disk {} volume 'sessions'", disk_path.display()),
+        )
+    };
     let session_manager = Arc::new(
         SessionManager::new_with_store(
             session_store,
             1000,
-            &encryption_mode_log(
-                session_key.is_some(),
-                &format!("virtual disk {} volume 'sessions'", disk_path.display()),
-            ),
+            &session_store_descriptor,
         )
         .await?,
     );

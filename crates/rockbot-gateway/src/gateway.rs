@@ -836,23 +836,44 @@ impl Gateway {
             cron_scheduler: {
                 let _ = std::fs::create_dir_all(&storage_root);
                 let disk_path = rockbot_store::Store::default_disk_path(&storage_root);
-                match rockbot_store::Store::open_volume(
-                    &disk_path,
-                    "cron",
-                    CRON_VOLUME_CAPACITY,
-                    cron_storage_key,
-                ) {
-                    Ok(store) => match crate::cron::CronScheduler::new_with_store(
+                let legacy_cron_path = storage_root.join("data").join("cron.redb");
+                let cron_store = if legacy_cron_path.exists() {
+                    match rockbot_store::Store::open(&legacy_cron_path) {
+                        Ok(store) => {
+                            info!(
+                                "Cron store opened via legacy store {}",
+                                legacy_cron_path.display()
+                            );
+                            Ok((store, format!("legacy store {}", legacy_cron_path.display())))
+                        }
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    rockbot_store::Store::open_volume(
+                        &disk_path,
+                        "cron",
+                        CRON_VOLUME_CAPACITY,
+                        cron_storage_key,
+                    )
+                    .map(|store| {
+                        (
+                            store,
+                            format!(
+                                "virtual disk {} volume 'cron' ({})",
+                                disk_path.display(),
+                                if cron_storage_key.is_some() {
+                                    "encrypted"
+                                } else {
+                                    "plaintext"
+                                }
+                            ),
+                        )
+                    })
+                };
+                match cron_store {
+                    Ok((store, descriptor)) => match crate::cron::CronScheduler::new_with_store(
                         Arc::new(store),
-                        &format!(
-                            "virtual disk {} volume 'cron' ({})",
-                            disk_path.display(),
-                            if cron_storage_key.is_some() {
-                                "encrypted"
-                            } else {
-                                "plaintext"
-                            }
-                        ),
+                        &descriptor,
                     )
                     .await
                     {
