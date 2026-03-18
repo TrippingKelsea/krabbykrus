@@ -42,6 +42,7 @@ rockbot-client = { path = "../rockbot-client" }
 rockbot-config = { path = "../rockbot-config" }
 rockbot-gateway = { path = "../rockbot-gateway", default-features = false }
 rockbot-tools = { path = "../rockbot-tools" }
+rockbot-tools-system = { path = "../rockbot-tools-system" }
 rockbot-memory = { path = "../rockbot-memory" }
 rockbot-security = { path = "../rockbot-security" }
 rockbot-credentials = { path = "../rockbot-credentials" }

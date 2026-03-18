@@ -2,6 +2,7 @@
 members = [
     "crates/rockbot",
     "crates/rockbot-tools",
+    "crates/rockbot-tools-system",
     "crates/rockbot-tools-credentials",
     "crates/rockbot-tools-mcp",
     "crates/rockbot-tools-markdown",
@@ -183,7 +184,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 # Package metadata for all crates
 [workspace.package]
-version = "0.3.78"
+version = "0.3.79"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"

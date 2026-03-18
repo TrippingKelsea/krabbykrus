@@ -174,8 +174,9 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
     gateway.set_config_path(config_path.clone());
 
     // Initialize other components
-    let tool_registry =
-        Arc::new(ToolRegistry::new(convert_tool_config(config.tools.clone())).await?);
+    let tool_config = convert_tool_config(config.tools.clone());
+    let tool_registry = Arc::new(ToolRegistry::new_core_only(tool_config.clone()).await?);
+    rockbot_tools_system::register_profile_tools(tool_registry.as_ref(), &tool_config).await?;
     let security_manager =
         Arc::new(SecurityManager::new(convert_security_config(config.security.clone())).await?);
     let mut llm_registry = LlmProviderRegistry::new().await?;

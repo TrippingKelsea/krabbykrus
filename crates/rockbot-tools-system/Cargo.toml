@@ -1,0 +1,13 @@
+[package]
+name = "rockbot-tools-system"
+version.workspace = true
+edition = "2021"
+description = "System-level built-in tools for RockBot"
+license = "MIT"
+
+[lints]
+workspace = true
+
+[dependencies]
+rockbot-tools = { path = "../rockbot-tools" }
+anyhow = { workspace = true }

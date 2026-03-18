@@ -436,6 +436,18 @@ impl ToolRegistry {
         Ok(registry)
     }
 
+    /// Create a tool registry containing only core framework tools.
+    pub async fn new_core_only(config: ToolConfig) -> Result<Self> {
+        let registry = Self {
+            tools: Arc::new(RwLock::new(HashMap::new())),
+            config,
+        };
+
+        registry.register_core_builtin_tools().await?;
+
+        Ok(registry)
+    }
+
     /// Register built-in tools based on configuration
     async fn register_builtin_tools(&self) -> Result<()> {
         let tools_to_register = match self.config.profile.as_str() {
@@ -478,6 +490,35 @@ impl ToolRegistry {
                 "blackboard_write",
             ],
             _ => vec!["read", "write", "edit", "exec", "glob", "grep", "patch"],
+        };
+
+        for tool_name in tools_to_register {
+            if self.config.deny.contains(&tool_name.to_string()) {
+                continue;
+            }
+
+            if let Some(tool) = self.create_builtin_tool(tool_name).await? {
+                self.register_tool(tool).await;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Register non-system, framework-native tools based on configuration.
+    async fn register_core_builtin_tools(&self) -> Result<()> {
+        let tools_to_register = match self.config.profile.as_str() {
+            "minimal" | "standard" => vec!["invoke_agent", "handoff", "clarify"],
+            "full" => vec![
+                "memory_get",
+                "memory_search",
+                "invoke_agent",
+                "handoff",
+                "clarify",
+                "blackboard_read",
+                "blackboard_write",
+            ],
+            _ => vec!["clarify"],
         };
 
         for tool_name in tools_to_register {

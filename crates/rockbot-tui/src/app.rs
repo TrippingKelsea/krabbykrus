@@ -6343,7 +6343,7 @@ async fn handle_remote_tool_request(
         deny: vec![],
         configs: std::collections::HashMap::new(),
     };
-    let registry = match rockbot_tools::ToolRegistry::new(tool_config).await {
+    let registry = match rockbot_tools::ToolRegistry::new_core_only(tool_config.clone()).await {
         Ok(r) => r,
         Err(e) => {
             send_tool_response(
@@ -6357,6 +6357,17 @@ async fn handle_remote_tool_request(
             return;
         }
     };
+    if let Err(e) = rockbot_tools_system::register_profile_tools(&registry, &tool_config).await {
+        send_tool_response(
+            sender,
+            request_id,
+            false,
+            &format!("Failed to register system tools: {e}"),
+            start.elapsed(),
+        )
+        .await;
+        return;
+    }
 
     let workspace_path = std::path::PathBuf::from(workspace);
     let mut capabilities = rockbot_security::Capabilities::new();
