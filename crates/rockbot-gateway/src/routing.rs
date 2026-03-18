@@ -354,6 +354,24 @@ impl RoutingEngine {
         Ok(engine)
     }
 
+    pub async fn new_with_store(
+        store: Arc<Store>,
+        default_agent_id: impl Into<String>,
+        default_session_scope: SessionScope,
+        descriptor: &str,
+    ) -> Result<Self> {
+        let engine = Self {
+            bindings: Arc::new(RwLock::new(HashMap::new())),
+            store,
+            default_agent_id: default_agent_id.into(),
+            default_session_scope,
+        };
+
+        engine.load_bindings().await?;
+        info!("Routing engine initialized with {descriptor}");
+        Ok(engine)
+    }
+
     // -----------------------------------------------------------------------
     // CRUD operations
     // -----------------------------------------------------------------------

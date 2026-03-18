@@ -51,6 +51,8 @@ use tokio::sync::{broadcast, RwLock};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, error, info, warn};
 
+const CRON_VOLUME_CAPACITY: u64 = 128 * 1024 * 1024;
+
 /// Response body type supporting both full and SSE streaming responses.
 type GatewayBody = http_body_util::Either<
     Full<hyper::body::Bytes>,
@@ -785,6 +787,16 @@ impl Gateway {
         };
 
         let gateway_config = config.gateway.clone();
+        let storage_root = config
+            .credentials
+            .vault_path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| {
+                dirs::config_dir()
+                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
+                    .join("rockbot")
+            });
 
         Ok(Self {
             config: gateway_config,
@@ -806,23 +818,43 @@ impl Gateway {
             a2a_task_store: Arc::new(crate::a2a::TaskStore::new()),
             blackboard: Arc::new(rockbot_agent::orchestration::SwarmBlackboard::new()),
             cron_scheduler: {
-                let cron_db_path = dirs::config_dir()
-                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
-                    .join("rockbot")
-                    .join("data")
-                    .join("cron.redb");
-                if let Some(parent) = cron_db_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                match crate::cron::CronScheduler::new_with_key(&cron_db_path, cron_storage_key)
+                let _ = std::fs::create_dir_all(&storage_root);
+                let disk_path = rockbot_store::Store::default_disk_path(&storage_root);
+                match rockbot_store::Store::open_volume(
+                    &disk_path,
+                    "cron",
+                    CRON_VOLUME_CAPACITY,
+                    cron_storage_key,
+                ) {
+                    Ok(store) => match crate::cron::CronScheduler::new_with_store(
+                        Arc::new(store),
+                        &format!(
+                            "virtual disk {} volume 'cron' ({})",
+                            disk_path.display(),
+                            if cron_storage_key.is_some() {
+                                "encrypted"
+                            } else {
+                                "plaintext"
+                            }
+                        ),
+                    )
                     .await
-                {
-                    Ok(scheduler) => {
-                        info!("Cron scheduler initialized");
-                        Arc::new(scheduler)
-                    }
+                    {
+                        Ok(scheduler) => {
+                            info!("Cron scheduler initialized");
+                            Arc::new(scheduler)
+                        }
+                        Err(e) => {
+                            error!("Failed to initialize cron scheduler: {}", e);
+                            Arc::new(
+                                crate::cron::CronScheduler::new(":memory:")
+                                    .await
+                                    .expect("in-memory cron scheduler should never fail"),
+                            )
+                        }
+                    },
                     Err(e) => {
-                        error!("Failed to initialize cron scheduler: {}", e);
+                        error!("Failed to initialize cron store: {}", e);
                         // Create an in-memory fallback so the gateway can still start
                         Arc::new(
                             crate::cron::CronScheduler::new(":memory:")
@@ -4172,26 +4204,22 @@ impl Gateway {
     /// `client_identify` message, or the first 8 characters of the connection
     /// ID as a fallback.
     async fn client_hostname(&self, conn_id: &str) -> String {
-        self.ws_connections
-            .read()
-            .await
-            .get(conn_id)
-            .map_or_else(
-                || conn_id[..8.min(conn_id.len())].to_string(),
-                |conn| {
-                    if let Some(id) = conn.identity.as_ref() {
-                        if let Some(ref label) = id.label {
-                            format!("{}({})", id.hostname, label)
-                        } else {
-                            id.hostname.clone()
-                        }
-                    } else if let Some(cert_name) = conn.browser_auth.cert_name.as_ref() {
-                        format!("browser:{cert_name}")
+        self.ws_connections.read().await.get(conn_id).map_or_else(
+            || conn_id[..8.min(conn_id.len())].to_string(),
+            |conn| {
+                if let Some(id) = conn.identity.as_ref() {
+                    if let Some(ref label) = id.label {
+                        format!("{}({})", id.hostname, label)
                     } else {
-                        conn_id[..8.min(conn_id.len())].to_string()
+                        id.hostname.clone()
                     }
-                },
-            )
+                } else if let Some(cert_name) = conn.browser_auth.cert_name.as_ref() {
+                    format!("browser:{cert_name}")
+                } else {
+                    conn_id[..8.min(conn_id.len())].to_string()
+                }
+            },
+        )
     }
 
     async fn ws_listener_kind(&self, conn_id: &str) -> Option<ListenerKind> {

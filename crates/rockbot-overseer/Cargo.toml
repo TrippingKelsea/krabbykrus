@@ -24,6 +24,7 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 dirs = { workspace = true }
+rockbot-vdisk = { path = "../rockbot-vdisk" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

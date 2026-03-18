@@ -325,6 +325,17 @@ impl CronScheduler {
         })
     }
 
+    pub async fn new_with_store(store: Arc<Store>, descriptor: &str) -> Result<Self> {
+        info!("Cron scheduler initialized with {descriptor}");
+        let jobs = Self::load_jobs_from_store(&store)?;
+        Ok(Self {
+            jobs: Arc::new(RwLock::new(jobs)),
+            store,
+            cmd_tx: Arc::new(tokio::sync::Mutex::new(None)),
+            tick_interval: Duration::from_secs(1),
+        })
+    }
+
     /// Set the tick interval (how often the scheduler checks for due jobs).
     pub fn with_tick_interval(mut self, interval: Duration) -> Self {
         self.tick_interval = interval;

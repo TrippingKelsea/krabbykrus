@@ -26,6 +26,9 @@ use tracing::{debug, error, info, warn};
 use crate::commands::vault_unlock::unlock_vault_for_gateway;
 use crate::GatewayCommands;
 
+const SESSIONS_VOLUME_CAPACITY: u64 = 512 * 1024 * 1024;
+const AGENTS_VOLUME_CAPACITY: u64 = 128 * 1024 * 1024;
+
 fn expand_tilde(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
     if s == "~" || s.starts_with("~/") {
@@ -97,30 +100,41 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
                 as Arc<dyn rockbot_tools::CredentialAccessor>
         });
 
-    // Create session manager
-    let db_path = dirs::config_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
-        .join("rockbot")
-        .join("data")
-        .join("sessions.redb");
-
-    let Some(db_parent) = db_path.parent() else {
-        anyhow::bail!("Session database path has no parent: {}", db_path.display());
-    };
-    tokio::fs::create_dir_all(db_parent).await?;
+    let storage_root = storage_root_dir(config_path, &config);
+    tokio::fs::create_dir_all(&storage_root).await?;
+    let disk_path = rockbot_store::Store::default_disk_path(&storage_root);
     let pki_manager = open_pki_for_storage(&config)?;
     if let (Some(vault_result), Some(pki_manager)) = (vault_result.as_ref(), pki_manager.as_ref()) {
         bootstrap_local_vault_node(&config, pki_manager, &vault_result.manager).await;
     }
     let session_key = storage_key_for_label(&config, pki_manager.as_ref(), "sessions")?;
-    let session_manager =
-        Arc::new(SessionManager::new_with_key(&db_path, 1000, session_key).await?);
+    let session_store = Arc::new(rockbot_store::Store::open_volume(
+        &disk_path,
+        "sessions",
+        SESSIONS_VOLUME_CAPACITY,
+        session_key,
+    )?);
+    let session_manager = Arc::new(
+        SessionManager::new_with_store(
+            session_store,
+            1000,
+            &encryption_mode_log(
+                session_key.is_some(),
+                &format!("virtual disk {} volume 'sessions'", disk_path.display()),
+            ),
+        )
+        .await?,
+    );
 
     let mut vault_store: Option<Arc<rockbot_store::Store>> = None;
     if vault_result.is_some() {
-        let store_path = vault_path.join("agents.redb");
         let store_key = storage_key_for_label(&config, pki_manager.as_ref(), "agents")?;
-        match rockbot_store::Store::open_with_optional_key(&store_path, store_key) {
+        match rockbot_store::Store::open_volume(
+            &disk_path,
+            "agents",
+            AGENTS_VOLUME_CAPACITY,
+            store_key,
+        ) {
             Ok(store) => {
                 let store = Arc::new(store);
                 #[cfg(feature = "overseer")]
@@ -129,7 +143,10 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
                     "{}",
                     encryption_mode_log(
                         store_key.is_some(),
-                        "Vault store opened for agent persistence"
+                        &format!(
+                            "Vault store opened for agent persistence via virtual disk {} volume 'agents'",
+                            disk_path.display()
+                        )
                     )
                 );
                 vault_store = Some(store);
@@ -426,6 +443,18 @@ fn default_pki_dir() -> PathBuf {
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
         .join("rockbot")
         .join("pki")
+}
+
+fn storage_root_dir(config_path: &Path, config: &Config) -> PathBuf {
+    if let Some(parent) = config_path.parent() {
+        return parent.to_path_buf();
+    }
+    if let Some(parent) = config.credentials.vault_path.parent() {
+        return parent.to_path_buf();
+    }
+    dirs::config_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
+        .join("rockbot")
 }
 
 async fn bootstrap_local_vault_node(

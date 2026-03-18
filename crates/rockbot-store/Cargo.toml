@@ -12,6 +12,7 @@ replication = ["dep:openraft", "dep:futures-util"]
 [dependencies]
 redb = "2"
 rockbot-config = { path = "../rockbot-config" }
+rockbot-vdisk = { path = "../rockbot-vdisk" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

@@ -357,6 +357,13 @@ pub struct CredentialVault {
 }
 
 impl CredentialVault {
+    fn disk_path_for_dir(data_dir: &Path) -> PathBuf {
+        data_dir
+            .parent()
+            .map(rockbot_store::Store::default_disk_path)
+            .unwrap_or_else(|| data_dir.join(rockbot_store::Store::DEFAULT_DATA_FILE))
+    }
+
     /// Opens an existing credential vault at the specified directory.
     /// Returns an error if the vault hasn't been initialized.
     ///
@@ -365,8 +372,13 @@ impl CredentialVault {
     pub fn open<P: AsRef<Path>>(data_dir: P) -> Result<Self> {
         let data_dir = data_dir.as_ref().to_path_buf();
 
-        let store = Store::open(&data_dir.join("vault.db"))
-            .map_err(|e| CredentialError::Internal(format!("Failed to open store: {e}")))?;
+        let store = Store::open_volume(
+            &Self::disk_path_for_dir(&data_dir),
+            "vault",
+            256 * 1024 * 1024,
+            None,
+        )
+        .map_err(|e| CredentialError::Internal(format!("Failed to open store: {e}")))?;
 
         let mut vault = Self {
             data_dir,
@@ -515,8 +527,13 @@ impl CredentialVault {
             verification_nonce: hex_encode(&verification_nonce),
         };
 
-        let store = Store::open(&data_dir.join("vault.db"))
-            .map_err(|e| CredentialError::Internal(format!("Failed to open store: {e}")))?;
+        let store = Store::open_volume(
+            &Self::disk_path_for_dir(&data_dir),
+            "vault",
+            256 * 1024 * 1024,
+            None,
+        )
+        .map_err(|e| CredentialError::Internal(format!("Failed to open store: {e}")))?;
 
         let vault = Self {
             data_dir,

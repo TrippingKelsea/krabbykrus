@@ -499,9 +499,14 @@ impl App {
         let vault_path = self.state.vault_path.clone();
         let tx = self.state.tx.clone();
         tokio::spawn(async move {
-            let store_path = vault_path.join("agents.redb");
-            // Open the store once; if it doesn't exist yet, we just do nothing.
-            let Ok(store) = rockbot_store::Store::open(&store_path) else {
+            let storage_root = vault_path
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or(vault_path.clone());
+            let disk_path = rockbot_store::Store::default_disk_path(&storage_root);
+            let Ok(store) =
+                rockbot_store::Store::open_volume(&disk_path, "agents", 128 * 1024 * 1024, None)
+            else {
                 return;
             };
             let mut last_hash: Option<u64> = None;

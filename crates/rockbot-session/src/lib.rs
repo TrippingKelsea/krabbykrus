@@ -199,6 +199,19 @@ impl SessionManager {
         })
     }
 
+    pub async fn new_with_store(
+        store: Arc<Store>,
+        max_sessions: usize,
+        descriptor: &str,
+    ) -> Result<Self> {
+        info!("Session manager initialized with {descriptor}");
+        Ok(Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            store,
+            max_sessions,
+        })
+    }
+
     fn load_all_sessions(&self) -> Result<Vec<Session>> {
         self.store
             .list(tables::SESSIONS)?

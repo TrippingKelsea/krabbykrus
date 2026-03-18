@@ -7,9 +7,12 @@ use candle_core::{Device, IndexOp, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::quantized_llama as qllama;
 use candle_transformers::models::quantized_qwen2 as qqwen2;
+use rockbot_vdisk::{blob_volume_name, import_file, materialize_file};
 use std::path::{Path, PathBuf};
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
+
+const ROCKBOT_DATA_FILE: &str = "rockbot.data";
 
 /// Errors specific to model inference.
 #[derive(Debug, thiserror::Error)]
@@ -196,7 +199,7 @@ impl InferenceEngine {
         repo_id: &str,
         model_filename: &str,
         tokenizer_repo: Option<&str>,
-        _cache_dir: &Path,
+        cache_dir: &Path,
     ) -> Result<(PathBuf, PathBuf), InferenceError> {
         let api =
             hf_hub::api::tokio::Api::new().map_err(|e| InferenceError::Download(e.to_string()))?;
@@ -210,15 +213,20 @@ impl InferenceEngine {
             .map_err(|e| InferenceError::Download(format!("model: {e}")))?;
 
         // Resolve tokenizer: explicit repo > model repo > base repo
-        let tokenizer_path = if let Some(tok_repo) = tokenizer_repo {
+        let (tokenizer_source, tokenizer_path) = if let Some(tok_repo) = tokenizer_repo {
             info!("Fetching tokenizer from configured repo {tok_repo}...");
-            api.model(tok_repo.to_string())
-                .get("tokenizer.json")
-                .await
-                .map_err(|e| InferenceError::Download(format!("tokenizer from {tok_repo}: {e}")))?
+            (
+                tok_repo.to_string(),
+                api.model(tok_repo.to_string())
+                    .get("tokenizer.json")
+                    .await
+                    .map_err(|e| {
+                        InferenceError::Download(format!("tokenizer from {tok_repo}: {e}"))
+                    })?,
+            )
         } else {
             match repo.get("tokenizer.json").await {
-                Ok(path) => path,
+                Ok(path) => (repo_id.to_string(), path),
                 Err(_) => {
                     let base = Self::base_repo_id(repo_id).ok_or_else(|| {
                         InferenceError::Download(format!(
@@ -227,15 +235,63 @@ impl InferenceEngine {
                         ))
                     })?;
                     info!("Tokenizer not in {repo_id}, trying base repo {base}...");
-                    api.model(base.to_string())
-                        .get("tokenizer.json")
-                        .await
-                        .map_err(|e| {
-                            InferenceError::Download(format!("tokenizer from {base}: {e}"))
-                        })?
+                    (
+                        base.to_string(),
+                        api.model(base.to_string())
+                            .get("tokenizer.json")
+                            .await
+                            .map_err(|e| {
+                                InferenceError::Download(format!("tokenizer from {base}: {e}"))
+                            })?,
+                    )
                 }
             }
         };
+
+        let disk_path = dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join("rockbot")
+            .join(ROCKBOT_DATA_FILE);
+        import_file(
+            &disk_path,
+            &blob_volume_name("models", &format!("{repo_id}:{model_filename}")),
+            &model_path,
+            None,
+        )
+        .map_err(|e| InferenceError::Download(format!("persist model to virtual disk: {e}")))?;
+        import_file(
+            &disk_path,
+            &blob_volume_name("tokenizers", &format!("{tokenizer_source}:tokenizer")),
+            &tokenizer_path,
+            None,
+        )
+        .map_err(|e| InferenceError::Download(format!("persist tokenizer to virtual disk: {e}")))?;
+
+        let materialized_model = cache_dir
+            .join("materialized")
+            .join(blob_volume_name("models", &format!("{repo_id}:{model_filename}")) + ".gguf");
+        let materialized_tokenizer = cache_dir.join("materialized").join(
+            blob_volume_name("tokenizers", &format!("{tokenizer_source}:tokenizer")) + ".json",
+        );
+
+        let model_path = materialize_file(
+            &disk_path,
+            &blob_volume_name("models", &format!("{repo_id}:{model_filename}")),
+            &materialized_model,
+            None,
+        )
+        .map_err(|e| {
+            InferenceError::Download(format!("materialize model from virtual disk: {e}"))
+        })?;
+        let tokenizer_path = materialize_file(
+            &disk_path,
+            &blob_volume_name("tokenizers", &format!("{tokenizer_source}:tokenizer")),
+            &materialized_tokenizer,
+            None,
+        )
+        .map_err(|e| {
+            InferenceError::Download(format!("materialize tokenizer from virtual disk: {e}"))
+        })?;
 
         Ok((model_path, tokenizer_path))
     }

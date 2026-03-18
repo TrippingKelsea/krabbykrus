@@ -15,6 +15,7 @@ pub use redb::TableDefinition;
 
 use encrypted_backend::EncryptedBackend;
 use redb::{Database, ReadableTable};
+use rockbot_vdisk::VolumeBackend;
 use std::path::Path;
 
 /// The unified embedded store.
@@ -26,6 +27,8 @@ pub struct Store {
 }
 
 impl Store {
+    pub const DEFAULT_DATA_FILE: &str = "rockbot.data";
+
     /// Open a plaintext redb database at `path`.
     pub fn open(path: &Path) -> anyhow::Result<Self> {
         let db = Database::create(path)?;
@@ -50,6 +53,24 @@ impl Store {
             Some(key) => Self::open_encrypted(path, key),
             None => Self::open(path),
         }
+    }
+
+    /// Open a named virtual volume within a shared `rockbot.data` container.
+    pub fn open_volume(
+        disk_path: &Path,
+        volume_name: &str,
+        capacity: u64,
+        key: Option<[u8; 32]>,
+    ) -> anyhow::Result<Self> {
+        let backend = VolumeBackend::open(disk_path, volume_name, capacity, key)?;
+        let db = Database::builder().create_with_backend(backend)?;
+        let store = Self { db };
+        store.initialize_tables()?;
+        Ok(store)
+    }
+
+    pub fn default_disk_path(base_dir: &Path) -> std::path::PathBuf {
+        base_dir.join(Self::DEFAULT_DATA_FILE)
     }
 
     fn initialize_tables(&self) -> anyhow::Result<()> {
