@@ -7,6 +7,7 @@ use rockbot_security::Capabilities;
 use serde_json::json;
 use std::future::Future;
 use std::io::BufRead;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
 use tokio::process::Command;
@@ -1569,6 +1570,82 @@ impl Tool for BlackboardWriteTool {
 /// Maximum response body size for web_fetch (256 KB)
 const WEB_FETCH_MAX_BODY: usize = 256 * 1024;
 
+fn is_private_or_local_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || ip.is_unspecified()
+                || ip.octets() == [169, 254, 169, 254]
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+        }
+    }
+}
+
+async fn validate_web_fetch_url(url: &str) -> Result<reqwest::Url> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| crate::ToolError::InvalidParameters {
+        message: format!("Invalid URL: {e}"),
+    })?;
+
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(crate::ToolError::InvalidParameters {
+                message: format!("Unsupported URL scheme: {other}"),
+            })
+        }
+    }
+
+    let host = parsed.host_str().ok_or_else(|| crate::ToolError::InvalidParameters {
+        message: "URL host is required".to_string(),
+    })?;
+
+    if matches!(host, "localhost" | "localhost.localdomain")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+    {
+        return Err(crate::ToolError::InvalidParameters {
+            message: "web_fetch does not allow localhost or internal hostnames".to_string(),
+        });
+    }
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_private_or_local_ip(ip) {
+            return Err(crate::ToolError::InvalidParameters {
+                message: "web_fetch does not allow private, loopback, or link-local addresses"
+                    .to_string(),
+            });
+        }
+        return Ok(parsed);
+    }
+
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let resolved = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| crate::ToolError::ExecutionFailed {
+            message: format!("Failed to resolve host '{host}': {e}"),
+        })?;
+    for socket_addr in resolved {
+        if is_private_or_local_ip(socket_addr.ip()) {
+            return Err(crate::ToolError::InvalidParameters {
+                message:
+                    "web_fetch target resolves to a private, loopback, or link-local address"
+                        .to_string(),
+            });
+        }
+    }
+
+    Ok(parsed)
+}
+
 /// Web fetch tool — HTTP GET with text extraction
 pub struct WebFetchTool;
 
@@ -1635,6 +1712,7 @@ impl Tool for WebFetchTool {
                     message: "url is required".to_string(),
                 })?
                 .to_string();
+            let parsed_url = validate_web_fetch_url(&url).await?;
 
             let timeout_secs = params
                 .get("timeout_secs")
@@ -1655,7 +1733,7 @@ impl Tool for WebFetchTool {
 
             let response =
                 client
-                    .get(&url)
+                    .get(parsed_url)
                     .send()
                     .await
                     .map_err(|e| crate::ToolError::ExecutionFailed {

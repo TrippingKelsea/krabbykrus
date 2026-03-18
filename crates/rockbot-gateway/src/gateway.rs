@@ -1830,28 +1830,41 @@ impl Gateway {
         let path = req.uri().path().to_string();
 
         match (req.method(), path.as_str()) {
-            (&Method::GET, "/health") => self.handle_health_check().await,
+            (&Method::GET, "/health") => self
+                .handle_health_check()
+                .await
+                .map(Self::with_public_security_headers),
             (&Method::GET, "/") | (&Method::GET, "/index.html")
                 if self.config.public.serve_webapp =>
             {
-                self.handle_web_ui().await
+                self.handle_web_ui()
+                    .await
+                    .map(Self::with_public_security_headers)
             }
             (&Method::GET, p)
                 if p.starts_with("/static/") && self.config.public.serve_webapp =>
             {
-                self.handle_web_ui_asset(p).await
+                self.handle_web_ui_asset(p)
+                    .await
+                    .map(Self::with_public_security_headers)
             }
             (&Method::GET, "/ws") => self.handle_websocket_upgrade(req, ListenerKind::Public).await,
             (&Method::GET, "/api/cert/ca") if self.config.public.serve_ca => {
-                self.handle_cert_ca_info().await
+                self.handle_cert_ca_info()
+                    .await
+                    .map(Self::with_public_security_headers)
             }
             (&Method::POST, "/api/cert/sign") if self.config.public.enrollment_enabled => {
-                self.handle_cert_sign(req).await
+                self.handle_cert_sign(req)
+                    .await
+                    .map(Self::with_public_security_headers)
             }
-            _ => Ok(Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(GatewayBody::Left(Full::new("Not Found".into())))
-                .unwrap()),
+            _ => Ok(Self::with_public_security_headers(
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(GatewayBody::Left(Full::new("Not Found".into())))
+                    .unwrap(),
+            )),
         }
     }
 
@@ -2563,8 +2576,7 @@ impl Gateway {
         };
 
         // Parse optional body for resolved_by
-        let resolved_by = if let Ok(collected) = req.collect().await {
-            let body = collected.to_bytes();
+        let resolved_by = if let Ok(body) = Self::collect_limited_body(req, MAX_HTTP_BODY_BYTES).await {
             if !body.is_empty() {
                 #[derive(Deserialize)]
                 struct ApproveBody {
@@ -2624,8 +2636,9 @@ impl Gateway {
         };
 
         // Parse body for resolved_by and denial_reason
-        let (resolved_by, denial_reason) = if let Ok(collected) = req.collect().await {
-            let body = collected.to_bytes();
+        let (resolved_by, denial_reason) = if let Ok(body) =
+            Self::collect_limited_body(req, MAX_HTTP_BODY_BYTES).await
+        {
             if !body.is_empty() {
                 #[derive(Deserialize)]
                 struct DenyBody {
@@ -3451,6 +3464,33 @@ impl Gateway {
             .unwrap()
     }
 
+    fn with_public_security_headers(mut response: Response<GatewayBody>) -> Response<GatewayBody> {
+        let headers = response.headers_mut();
+        headers.insert(
+            hyper::header::HeaderName::from_static("content-security-policy"),
+            hyper::header::HeaderValue::from_static(
+                "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+            ),
+        );
+        headers.insert(
+            hyper::header::HeaderName::from_static("x-frame-options"),
+            hyper::header::HeaderValue::from_static("DENY"),
+        );
+        headers.insert(
+            hyper::header::HeaderName::from_static("x-content-type-options"),
+            hyper::header::HeaderValue::from_static("nosniff"),
+        );
+        headers.insert(
+            hyper::header::HeaderName::from_static("referrer-policy"),
+            hyper::header::HeaderValue::from_static("no-referrer"),
+        );
+        headers.insert(
+            hyper::header::HeaderName::from_static("strict-transport-security"),
+            hyper::header::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        );
+        response
+    }
+
     async fn collect_limited_body(
         req: Request<IncomingBody>,
         max_bytes: usize,
@@ -3716,7 +3756,7 @@ impl Gateway {
     ) -> Response<GatewayBody>
     where
         B: hyper::body::Body<Data = hyper::body::Bytes> + Send,
-        B::Error: std::fmt::Display,
+        B::Error: std::fmt::Debug,
     {
         let Some((agent_id, filename)) = Self::parse_agent_file_path(path) else {
             return Self::json_error("Invalid path", StatusCode::BAD_REQUEST);
@@ -3725,14 +3765,9 @@ impl Gateway {
             return Self::json_error("Invalid filename", StatusCode::BAD_REQUEST);
         }
 
-        let body = match req.collect().await {
-            Ok(collected) => collected.to_bytes(),
-            Err(e) => {
-                return Self::json_error(
-                    &format!("Failed to read body: {e}"),
-                    StatusCode::BAD_REQUEST,
-                )
-            }
+        let body = match Self::collect_limited_body_generic(req, MAX_HTTP_BODY_BYTES).await {
+            Ok(bytes) => bytes,
+            Err(resp) => return resp,
         };
         let payload: serde_json::Value = match serde_json::from_slice(&body) {
             Ok(v) => v,
@@ -6880,16 +6915,9 @@ impl Gateway {
         &self,
         req: Request<IncomingBody>,
     ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
-        let body = match req.collect().await {
-            Ok(collected) => collected.to_bytes(),
-            Err(_) => {
-                return Ok(Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(GatewayBody::Left(Full::new(
-                        "Failed to read request body".into(),
-                    )))
-                    .unwrap());
-            }
+        let body = match Self::collect_limited_body(req, MAX_HTTP_BODY_BYTES).await {
+            Ok(bytes) => bytes,
+            Err(resp) => return Ok(resp),
         };
 
         let rpc_request: crate::a2a::JsonRpcRequest = match serde_json::from_slice(&body) {
