@@ -11,6 +11,14 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
 ## [Unreleased]
 
 ### Added
+- **Completions**: shell completion generation via `rockbot completion <bash|zsh|fish|powershell|elvish>`
+- **TUI**: slash command autocompletion with `Tab` / `Shift+Tab`
+- **Tools**: new `rockbot-tools-system` crate for system-facing tools such as read/write/exec/browser
+- **Tools**: standard system tool profile now includes the browser tool
+- **Architecture docs**:
+  - `docs/architecture/webui-wasm-migration-plan.md`
+  - `docs/architecture/browser-plugin-architecture-plan.md`
+  - `docs/architecture/tooling-gap-analysis.md`
 - **Public listener policy**: `gateway.public` now controls whether the public
   HTTPS listener serves the browser bootstrap shell, CA bundle, and enrollment
 - **Web bootstrap shell**: `/` and `/static/*` now serve a minimal browser

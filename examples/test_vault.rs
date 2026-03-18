@@ -6,8 +6,8 @@ fn main() {
     let keyfile_path = PathBuf::from("/home/kelsea/.config/rockbot/vault.key");
 
     println!("=== Vault Test ===");
-    println!("Testing vault at: {:?}", vault_path);
-    println!("Keyfile at: {:?}", keyfile_path);
+    println!("Testing vault at: {vault_path:?}");
+    println!("Keyfile at: {keyfile_path:?}");
     println!("Vault exists: {}", vault_path.join("meta.json").exists());
     println!("Keyfile exists: {}", keyfile_path.exists());
 
@@ -21,15 +21,15 @@ fn main() {
                 Ok(()) => {
                     println!("Vault unlocked successfully!");
                     let endpoints = vault.list_endpoints();
-                    println!("Endpoints: {:?}", endpoints);
+                    println!("Endpoints: {endpoints:?}");
                 }
                 Err(e) => {
-                    println!("Failed to unlock: {:?}", e);
+                    println!("Failed to unlock: {e:?}");
                 }
             }
         }
         Err(e) => {
-            println!("Failed to open vault: {:?}", e);
+            println!("Failed to open vault: {e:?}");
         }
     }
 
@@ -37,7 +37,7 @@ fn main() {
     println!("\n=== Claude Code Session Key Test ===");
     if let Some(home) = dirs::home_dir() {
         let credentials_path = home.join(".claude").join(".credentials.json");
-        println!("Credentials path: {:?}", credentials_path);
+        println!("Credentials path: {credentials_path:?}");
 
         if credentials_path.exists() {
             println!("✓ Credentials file exists");
@@ -60,7 +60,7 @@ fn main() {
                         if let Some(oauth) = creds.claude_ai_oauth {
                             let now = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
+                                .unwrap_or_default()
                                 .as_millis() as u64;
 
                             println!(
@@ -68,7 +68,7 @@ fn main() {
                                 &oauth.access_token[..30.min(oauth.access_token.len())]
                             );
                             println!("Expires at: {} ms", oauth.expires_at);
-                            println!("Current time: {} ms", now);
+                            println!("Current time: {now} ms");
                             println!(
                                 "Token valid for: {} hours",
                                 (oauth.expires_at - now) / 3600000
@@ -84,7 +84,7 @@ fn main() {
                         }
                     }
                     Err(e) => {
-                        println!("✗ Failed to parse credentials: {}", e);
+                        println!("✗ Failed to parse credentials: {e}");
                     }
                 }
             } else {

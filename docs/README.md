@@ -16,6 +16,10 @@
 - [Encrypted Storage + PKI Refactor Proposal](architecture/encrypted-storage-pki-refactor-proposal.md) — High-level scope for encrypted-by-default redb, distributed vault authority, and role separation
 - [Encrypted Storage + PKI Architecture Plan](architecture/encrypted-storage-pki-architecture-plan.md) — Formal architecture plan for roles, key hierarchy, grants, replication, and rollout
 - [Virtual Disk Architecture Plan](architecture/virtual-disk-architecture-plan.md) — Formal plan for the `rockbot.data` virtual disk container, named volumes, encrypted local persistence, and model storage
+- [Responsive WASM WebUI Migration Plan](architecture/webui-wasm-migration-plan.md) — Phased plan for replacing the bootstrap shell with a responsive authenticated browser app
+- [Browser Plugin Architecture Plan](architecture/browser-plugin-architecture-plan.md) — Extension architecture for page-aware workflows, page-context capture, and safe browser actions
+- [Tooling Gap Analysis](architecture/tooling-gap-analysis.md) — Practical comparison of current RockBot workflow gaps against adjacent coding/agent tools
+- [Post-Maintenance Audit (2026-03-18)](architecture/post-maintenance-audit-2026-03-18.md) — Validation record and residual follow-on items after the latest maintenance/refactor pass
 - [PKI and mTLS](architecture/pki.md) — Certificate authority, mutual TLS, enrollment, x.509 extensions
 - [Vault Replication](architecture/vault-replication.md) — PKI/credential sync over Noise protocol (draft)
 - [Security Model](architecture/security.md) — Credential flow, capabilities, trust boundaries

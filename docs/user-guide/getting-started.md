@@ -22,6 +22,14 @@ make release
 make test
 ```
 
+You can also generate shell completions directly from the CLI:
+
+```bash
+./rockbot completion zsh
+./rockbot completion bash
+./rockbot completion fish
+```
+
 ```bash
 rockbot --version
 rockbot doctor        # diagnostic checks

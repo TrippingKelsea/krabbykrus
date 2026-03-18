@@ -20,7 +20,8 @@ rockbot/
 │   ├── rockbot-editor/            # Text editor helpers for interactive clients
 │   ├── rockbot-shell/             # Shell/session helpers for interactive clients
 │   ├── rockbot-llm/               # LLM provider abstraction
-│   ├── rockbot-tools/             # Tool trait, registry, built-ins
+│   ├── rockbot-tools/             # Tool trait, registry, core framework tools
+│   ├── rockbot-tools-system/      # System-facing tools (read/write/exec/browser/etc.)
 │   ├── rockbot-tools-credentials/ # Credential vault access tool
 │   ├── rockbot-tools-mcp/         # MCP server connection tool
 │   ├── rockbot-tools-markdown/    # Markdown processing tool
@@ -61,10 +62,12 @@ rockbot-credentials        → rockbot-store, rockbot-security
 
 rockbot-llm                → rockbot-credentials-schema
 rockbot-tools              → rockbot-security, rockbot-credentials-schema
+rockbot-tools-system       → rockbot-tools
 rockbot-channels           → rockbot-credentials-schema
 
 rockbot-agent              → rockbot-config, rockbot-session, rockbot-llm,
-                              rockbot-tools, rockbot-memory, rockbot-security
+                              rockbot-tools, rockbot-tools-system,
+                              rockbot-memory, rockbot-security
                               [optional: rockbot-client for remote-exec]
 
 rockbot-client             → rockbot-config
@@ -76,14 +79,16 @@ rockbot-deploy             → rockbot-pki, rockbot-config, rockbot-credentials
 
 rockbot-gateway            → rockbot-config, rockbot-session, rockbot-agent,
                               rockbot-webui, rockbot-client, rockbot-llm,
-                              rockbot-tools, rockbot-channels, rockbot-credentials,
-                              rockbot-pki
+                              rockbot-tools, rockbot-tools-system,
+                              rockbot-channels, rockbot-credentials, rockbot-pki
 
 rockbot-tui                → rockbot-config, rockbot-agent, rockbot-gateway,
                               rockbot-client, rockbot-credentials,
+                              rockbot-tools-system,
                               rockbot-chat, rockbot-editor, rockbot-shell
 rockbot-cli                → rockbot-config, rockbot-agent, rockbot-gateway,
-                              rockbot-session, rockbot-client, rockbot-pki, rockbot-tui
+                              rockbot-session, rockbot-client, rockbot-pki,
+                              rockbot-tools-system, rockbot-tui
 rockbot                    → rockbot-cli
 ```
 

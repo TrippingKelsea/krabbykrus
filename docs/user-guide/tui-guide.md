@@ -73,6 +73,7 @@ Press `c` to focus the chat input. In chat mode:
 |-----|--------|
 | `Enter` | Send message |
 | `Shift+Enter` | Insert newline (Ctrl+J fallback) |
+| `Tab` / `Shift+Tab` | Autocomplete slash commands |
 | `PgUp/PgDn` | Scroll history |
 | `Ctrl+R` | Retry last message |
 | `Esc` | Exit chat mode |
