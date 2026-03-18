@@ -7060,6 +7060,10 @@ async fn load_providers_from_gateway(
                                                     .get("description")?
                                                     .as_str()?
                                                     .to_string(),
+                                                kind: m
+                                                    .get("kind")
+                                                    .and_then(|v| v.as_str())
+                                                    .map(String::from),
                                                 context_window: m.get("context_window")?.as_u64()?
                                                     as u32,
                                                 max_output_tokens: m

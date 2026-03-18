@@ -189,6 +189,7 @@ pub struct ProviderModelInfo {
     pub id: String,
     pub name: String,
     pub description: String,
+    pub kind: Option<String>,
     pub context_window: u32,
     pub max_output_tokens: Option<u32>,
 }
@@ -3007,6 +3008,7 @@ impl Gateway {
                     id: m.id,
                     name: m.name,
                     description: m.description,
+                    kind: m.kind,
                     context_window: m.context_window,
                     max_output_tokens: m.max_output_tokens,
                 })

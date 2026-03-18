@@ -47,6 +47,9 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
 - **WebSocket control plane**: native clients now tunnel gateway management/data
   requests over the client-listener WebSocket instead of mixing WS on the
   client listener with REST calls on the public listener
+- **Bedrock provider**: provider model inventory now includes AWS Bedrock
+  inference profiles alongside foundation models so TUI and agent pickers can
+  target either a direct model ID or a named/system-defined profile
 - **Config**: Rich TUI theme token configuration via `[tui.theme]`
   - RGBA token overrides for border, text, AI/thinking/tool text, accents, graphs, and backgrounds
   - Backward-compatible preset resolution from legacy `color_theme`

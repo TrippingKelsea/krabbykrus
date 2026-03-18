@@ -336,12 +336,13 @@ impl BedrockProvider {
         &self.auth_mode
     }
 
-    /// List models from the Bedrock ListFoundationModels API.
+    /// List models from the Bedrock APIs.
     ///
-    /// Filters to models that support the Converse API (ON_DEMAND inference)
-    /// and are actively available.
+    /// This merges foundation models with system/application inference profiles
+    /// so the UI can offer both native model IDs and Bedrock-defined execution
+    /// targets.
     async fn list_models_from_api(&self) -> Result<Vec<ModelInfo>> {
-        use aws_sdk_bedrock::types::InferenceType;
+        use aws_sdk_bedrock::types::{InferenceProfileStatus, InferenceType};
 
         let resp = self
             .bedrock_client
@@ -375,11 +376,80 @@ impl BedrockProvider {
                 id: model_id.to_string(),
                 name: format!("{model_name} ({provider_name})"),
                 description: format!("{provider_name} {model_name} via AWS Bedrock"),
+                kind: Some("foundation_model".to_string()),
                 context_window,
                 max_output_tokens: Some(max_output),
                 supports_tools: supports_streaming, // Converse-capable models generally support tools
                 supports_vision,
             });
+        }
+
+        let mut next_token = None;
+        loop {
+            let mut request = self.bedrock_client.list_inference_profiles();
+            if let Some(token) = next_token.clone() {
+                request = request.next_token(token);
+            }
+            let response = request.send().await.map_err(|e| LlmError::ApiError {
+                message: format!("Failed to list Bedrock inference profiles: {e}"),
+            })?;
+
+            for summary in response.inference_profile_summaries() {
+                if *summary.status() != InferenceProfileStatus::Active {
+                    continue;
+                }
+
+                let profile_id = summary.inference_profile_id();
+                let profile_name = summary.inference_profile_name();
+                let description = summary.description().unwrap_or("");
+                let model_targets: Vec<&str> = summary
+                    .models()
+                    .iter()
+                    .filter_map(|model| model.model_arn())
+                    .collect();
+                let backing_model_hint = model_targets
+                    .first()
+                    .copied()
+                    .unwrap_or(profile_id)
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(profile_id);
+                let (context_window, max_output) =
+                    Self::estimate_model_limits(backing_model_hint);
+                let supports_vision = model_targets
+                    .iter()
+                    .any(|arn| arn.contains("claude") || arn.contains("nova"));
+                let profile_kind = format!(
+                    "inference_profile:{}",
+                    summary.r#type().as_str().to_ascii_lowercase()
+                );
+                let model_summary = if model_targets.is_empty() {
+                    "No backing models reported".to_string()
+                } else {
+                    format!("Targets: {}", model_targets.join(", "))
+                };
+                let detail = if description.is_empty() {
+                    model_summary
+                } else {
+                    format!("{description} | {model_summary}")
+                };
+
+                models.push(ModelInfo {
+                    id: profile_id.to_string(),
+                    name: format!("{} [Profile]", profile_name),
+                    description: detail,
+                    kind: Some(profile_kind),
+                    context_window,
+                    max_output_tokens: Some(max_output),
+                    supports_tools: true,
+                    supports_vision,
+                });
+            }
+
+            next_token = response.next_token().map(str::to_string);
+            if next_token.is_none() {
+                break;
+            }
         }
 
         Ok(models)
@@ -420,6 +490,7 @@ impl BedrockProvider {
                 id: "anthropic.claude-sonnet-4-20250514-v1:0".to_string(),
                 name: "Claude Sonnet 4 (Bedrock)".to_string(),
                 description: "Claude Sonnet 4 via AWS Bedrock".to_string(),
+                kind: Some("foundation_model".to_string()),
                 context_window: 200_000,
                 max_output_tokens: Some(8192),
                 supports_tools: true,
@@ -429,6 +500,7 @@ impl BedrockProvider {
                 id: "anthropic.claude-opus-4-20250514-v1:0".to_string(),
                 name: "Claude Opus 4 (Bedrock)".to_string(),
                 description: "Claude Opus 4 via AWS Bedrock".to_string(),
+                kind: Some("foundation_model".to_string()),
                 context_window: 200_000,
                 max_output_tokens: Some(8192),
                 supports_tools: true,
@@ -438,6 +510,7 @@ impl BedrockProvider {
                 id: "anthropic.claude-3-5-haiku-20241022-v1:0".to_string(),
                 name: "Claude 3.5 Haiku (Bedrock)".to_string(),
                 description: "Claude 3.5 Haiku via AWS Bedrock".to_string(),
+                kind: Some("foundation_model".to_string()),
                 context_window: 200_000,
                 max_output_tokens: Some(8192),
                 supports_tools: true,
@@ -447,6 +520,7 @@ impl BedrockProvider {
                 id: "amazon.nova-pro-v1:0".to_string(),
                 name: "Amazon Nova Pro".to_string(),
                 description: "Amazon's Nova Pro model".to_string(),
+                kind: Some("foundation_model".to_string()),
                 context_window: 300_000,
                 max_output_tokens: Some(5120),
                 supports_tools: true,
@@ -456,6 +530,7 @@ impl BedrockProvider {
                 id: "amazon.nova-lite-v1:0".to_string(),
                 name: "Amazon Nova Lite".to_string(),
                 description: "Amazon's Nova Lite model".to_string(),
+                kind: Some("foundation_model".to_string()),
                 context_window: 300_000,
                 max_output_tokens: Some(5120),
                 supports_tools: true,

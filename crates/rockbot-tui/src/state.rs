@@ -1120,6 +1120,7 @@ pub struct ModelProviderModel {
     pub id: String,
     pub name: String,
     pub description: String,
+    pub kind: Option<String>,
     pub context_window: u32,
     pub max_output_tokens: Option<u32>,
 }
