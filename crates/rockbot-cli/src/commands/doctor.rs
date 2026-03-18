@@ -229,21 +229,38 @@ async fn run_migrate(config_path: &PathBuf) -> Result<()> {
 
 #[cfg(feature = "doctor-ai")]
 async fn run_storage(config_path: &PathBuf) -> Result<()> {
-    use rockbot_doctor::{inspect_storage, summarize_report, DoctorAi};
+    use rockbot_doctor::{inspect_storage, recommended_actions, summarize_report, DoctorAi};
+    use std::time::Duration;
 
     println!("Doctor AI: Inspecting storage state...\n");
     let report = inspect_storage(config_path);
     let summary = summarize_report(&report);
     println!("{summary}");
+    println!("Recommended next steps:");
+    for action in recommended_actions(&report) {
+        println!("- {action}");
+    }
+    println!();
 
     let raw_toml = tokio::fs::read_to_string(config_path).await.unwrap_or_default();
     let doctor_config = try_parse_doctor_config_from_raw(&raw_toml);
     let doctor = DoctorAi::init(doctor_config).await?;
-    let analysis = doctor.diagnose_storage_report(&report).await;
+    let analysis = tokio::time::timeout(
+        Duration::from_secs(10),
+        doctor.diagnose_storage_report(&report),
+    )
+    .await;
 
-    if !analysis.trim().is_empty() {
-        println!("Doctor AI Assessment:\n");
-        println!("{analysis}");
+    match analysis {
+        Ok(text) if !text.trim().is_empty() => {
+            println!("Doctor AI Assessment:\n");
+            println!("{text}");
+        }
+        Ok(_) => {}
+        Err(_) => {
+            println!("Doctor AI Assessment:\n");
+            println!("The deterministic storage report is complete, but the AI explanation timed out after 10 seconds.");
+        }
     }
 
     Ok(())

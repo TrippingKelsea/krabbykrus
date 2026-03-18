@@ -215,3 +215,55 @@ pub fn summarize_report(report: &StorageReport) -> String {
     }
     out
 }
+
+pub fn recommended_actions(report: &StorageReport) -> Vec<String> {
+    let mut actions = Vec::new();
+
+    let legacy_sessions = report
+        .legacy_files
+        .iter()
+        .find(|f| f.label == "sessions" && f.exists);
+    let legacy_cron = report
+        .legacy_files
+        .iter()
+        .find(|f| f.label == "cron" && f.exists);
+    let legacy_agents = report
+        .legacy_files
+        .iter()
+        .find(|f| f.label == "agents" && f.exists);
+    let legacy_vault = report
+        .legacy_files
+        .iter()
+        .find(|f| f.label == "vault" && f.exists);
+
+    if legacy_sessions.is_some() || legacy_cron.is_some() || legacy_agents.is_some() || legacy_vault.is_some() {
+        actions.push(
+            "Legacy standalone stores still coexist with rockbot.data. Treat this node as mid-migration; prefer explicit migration/repair over assuming the vdisk volumes are authoritative.".to_string(),
+        );
+    }
+
+    if let Some(volume) = report.volumes.iter().find(|v| v.name == "vault" && v.exists) {
+        if volume.header_kind.as_deref() == Some("plaintext_redb") {
+            actions.push(
+                "The embedded 'vault' volume looks like plaintext redb bytes. Re-importing from the legacy vault file or marking the volume as migrated should be part of the next storage migration pass.".to_string(),
+            );
+        }
+    }
+
+    if report
+        .volumes
+        .iter()
+        .any(|v| v.exists && v.header_kind.as_deref() == Some("opaque_or_encrypted"))
+        && report.legacy_files.iter().any(|f| f.exists)
+    {
+        actions.push(
+            "Opaque/encrypted vdisk volumes coexist with legacy files. Verify each volume explicitly before opening it in production; do not assume presence implies health.".to_string(),
+        );
+    }
+
+    if actions.is_empty() {
+        actions.push("No immediate storage migration actions detected.".to_string());
+    }
+
+    actions
+}

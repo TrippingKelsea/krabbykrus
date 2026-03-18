@@ -183,33 +183,64 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
                     "Could not open legacy session store {}: {err}. Falling back to virtual-disk sessions volume.",
                     legacy_sessions_path.display()
                 );
-                (
-                    Arc::new(safe_open_volume(
-                        &disk_path,
-                        "sessions",
-                        SESSIONS_VOLUME_CAPACITY,
-                        session_key,
-                    )?),
-                    encryption_mode_log(
-                        session_key.is_some(),
-                        &format!("virtual disk {} volume 'sessions'", disk_path.display()),
+                match safe_open_volume(&disk_path, "sessions", SESSIONS_VOLUME_CAPACITY, session_key)
+                {
+                    Ok(store) => (
+                        Arc::new(store),
+                        encryption_mode_log(
+                            session_key.is_some(),
+                            &format!("virtual disk {} volume 'sessions'", disk_path.display()),
+                        ),
                     ),
-                )
+                    Err(volume_err) => {
+                        let recovery_sessions_path =
+                            storage_root.join("runtime").join("sessions.recovery.redb");
+                        warn!(
+                            "Could not open virtual-disk sessions volume: {volume_err}. Falling back to recovery session store {}.",
+                            recovery_sessions_path.display()
+                        );
+                        if let Some(parent) = recovery_sessions_path.parent() {
+                            tokio::fs::create_dir_all(parent).await?;
+                        }
+                        let recovery_store = rockbot_store::Store::open_with_optional_key(
+                            &recovery_sessions_path,
+                            session_key,
+                        )?;
+                        (
+                            Arc::new(recovery_store),
+                            format!("recovery store {}", recovery_sessions_path.display()),
+                        )
+                    }
+                }
             }
         }
     } else {
-        (
-            Arc::new(safe_open_volume(
-                &disk_path,
-                "sessions",
-                SESSIONS_VOLUME_CAPACITY,
-                session_key,
-            )?),
-            encryption_mode_log(
-                session_key.is_some(),
-                &format!("virtual disk {} volume 'sessions'", disk_path.display()),
+        match safe_open_volume(&disk_path, "sessions", SESSIONS_VOLUME_CAPACITY, session_key) {
+            Ok(store) => (
+                Arc::new(store),
+                encryption_mode_log(
+                    session_key.is_some(),
+                    &format!("virtual disk {} volume 'sessions'", disk_path.display()),
+                ),
             ),
-        )
+            Err(volume_err) => {
+                let recovery_sessions_path =
+                    storage_root.join("runtime").join("sessions.recovery.redb");
+                warn!(
+                    "Could not open virtual-disk sessions volume: {volume_err}. Falling back to recovery session store {}.",
+                    recovery_sessions_path.display()
+                );
+                if let Some(parent) = recovery_sessions_path.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+                let recovery_store =
+                    rockbot_store::Store::open_with_optional_key(&recovery_sessions_path, session_key)?;
+                (
+                    Arc::new(recovery_store),
+                    format!("recovery store {}", recovery_sessions_path.display()),
+                )
+            }
+        }
     };
     let session_manager = Arc::new(
         SessionManager::new_with_store(

@@ -33,7 +33,7 @@ pub use diagnosis::{ConfigDiagnosis, DiagnosisKind};
 pub use learned::{LearnedFix, LearnedStore};
 pub use migration::{MigrationNote, MigrationSource};
 pub use repair::DoctorFix;
-pub use storage::{inspect_storage, summarize_report, StorageReport};
+pub use storage::{inspect_storage, recommended_actions, summarize_report, StorageReport};
 
 /// Speaker role in a Doctor AI conversation.
 #[derive(Debug, Clone)]
