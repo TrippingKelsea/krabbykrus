@@ -38,16 +38,16 @@ the agent.
 # Build from source (Rust 1.75+)
 git clone https://github.com/TrippingKelsea/rockbot.git
 cd rockbot
-cargo build --release
+make release
 
 # Initialize config and TLS certificate
-rockbot config init
+rockbot config init gateway
 
 # Start the gateway
 rockbot gateway run
 
 # Connect with the TUI (from any machine)
-rockbot tui -g 192.168.1.10:18080
+rockbot tui -g 192.168.1.10:18182
 ```
 
 ## Documentation
@@ -67,12 +67,14 @@ rockbot tui -g 192.168.1.10:18080
 ## Building
 
 ```bash
-cargo build --release                        # default features
-cargo build --release -F noise               # + Noise transport primitives
-cargo build --release -F remote-exec         # + remote executor dispatch over Noise
-cargo build --release -F overseer            # + embedded local-model oversight
-cargo build --release -F http-insecure       # allow plain HTTP (TLS is default)
-cargo build --release -F all-providers       # all LLM backends
+make dev                                     # debug build, enhanced profile
+make release                                 # release build, enhanced profile
+make test                                    # test suite, enhanced profile
+
+# Raw cargo equivalents
+cargo build --release --no-default-features --features enhanced
+cargo build --release --no-default-features --features experimental
+cargo build --release --no-default-features -F anthropic
 ```
 
 See [docs/architecture/crates.md](docs/architecture/crates.md) for the full

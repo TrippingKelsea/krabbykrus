@@ -9,10 +9,18 @@
 ```bash
 git clone https://github.com/TrippingKelsea/rockbot.git
 cd rockbot
-cargo build --release -F enhanced
+make release
 ```
 
 The binary is at `./target/release/rockbot`.
+
+The Make targets default to the `enhanced` feature profile:
+
+```bash
+make dev
+make release
+make test
+```
 
 ```bash
 rockbot --version

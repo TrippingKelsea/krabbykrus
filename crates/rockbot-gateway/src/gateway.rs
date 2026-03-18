@@ -6697,12 +6697,15 @@ mod tests {
         let config = Config {
             gateway: GatewayConfig {
                 bind_host: "127.0.0.1".to_string(),
+                listen_ips: Vec::new(),
                 port: 0, // Use 0 for testing to avoid port conflicts
+                client_port: 1,
                 max_connections: 100,
                 request_timeout: 30,
                 require_api_key: None,
                 pki: PkiConfig::default(),
             },
+            pki: PkiConfig::default(),
             agents: AgentConfig {
                 defaults: AgentDefaults {
                     workspace: std::env::temp_dir(),
@@ -6724,8 +6727,11 @@ mod tests {
                     image: None,
                 },
                 capabilities: Default::default(),
+                storage: Default::default(),
+                roles: Default::default(),
                 noise: NoiseTransportConfig::default(),
             },
+            client: Default::default(),
             credentials: CredentialsConfig::default(),
             providers: ProvidersConfig::default(),
             overseer: None,
