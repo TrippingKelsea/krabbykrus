@@ -586,18 +586,35 @@ impl BedrockProvider {
         &self,
         messages: &[Message],
     ) -> (Option<Vec<SystemContentBlock>>, Vec<BedrockMessage>) {
+        #[derive(Clone, Copy, Eq, PartialEq)]
+        enum PendingMessageKind {
+            UserText,
+            ToolResult,
+            Assistant,
+        }
+
         let mut system_blocks = Vec::new();
-        // Collect content blocks grouped by role, merging consecutive same-role messages
-        // (Bedrock requires strictly alternating user/assistant roles)
-        let mut pending_role: Option<ConversationRole> = None;
+        // Collect content blocks grouped by Bedrock turn semantics.
+        // Tool results must remain isolated from ordinary user text even though both
+        // map to `ConversationRole::User`, otherwise Bedrock/Anthropic rejects the
+        // request because toolResult blocks no longer align with the immediately
+        // preceding assistant toolUse turn.
+        let mut pending_kind: Option<PendingMessageKind> = None;
         let mut pending_blocks: Vec<ContentBlock> = Vec::new();
         let mut bedrock_messages = Vec::new();
 
-        let flush =
-            |role: ConversationRole, blocks: Vec<ContentBlock>, out: &mut Vec<BedrockMessage>| {
+        let flush = |kind: PendingMessageKind,
+                     blocks: Vec<ContentBlock>,
+                     out: &mut Vec<BedrockMessage>| {
                 if blocks.is_empty() {
                     return;
                 }
+                let role = match kind {
+                    PendingMessageKind::UserText | PendingMessageKind::ToolResult => {
+                        ConversationRole::User
+                    }
+                    PendingMessageKind::Assistant => ConversationRole::Assistant,
+                };
                 #[allow(clippy::expect_used)]
                 let mut builder = BedrockMessage::builder().role(role);
                 for block in blocks {
@@ -612,17 +629,16 @@ impl BedrockProvider {
                     system_blocks.push(SystemContentBlock::Text(msg.content.clone()));
                 }
                 MessageRole::Tool => {
-                    // Tool results are sent as User role with ContentBlock::ToolResult
-                    let target_role = ConversationRole::User;
-                    if pending_role.as_ref() != Some(&target_role) {
-                        if let Some(role) = pending_role.take() {
+                    let target_kind = PendingMessageKind::ToolResult;
+                    if pending_kind.as_ref() != Some(&target_kind) {
+                        if let Some(kind) = pending_kind.take() {
                             flush(
-                                role,
+                                kind,
                                 std::mem::take(&mut pending_blocks),
                                 &mut bedrock_messages,
                             );
                         }
-                        pending_role = Some(target_role);
+                        pending_kind = Some(target_kind);
                     }
                     let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
                     #[allow(clippy::expect_used)]
@@ -634,30 +650,30 @@ impl BedrockProvider {
                     pending_blocks.push(ContentBlock::ToolResult(tool_result));
                 }
                 MessageRole::User => {
-                    let target_role = ConversationRole::User;
-                    if pending_role.as_ref() != Some(&target_role) {
-                        if let Some(role) = pending_role.take() {
+                    let target_kind = PendingMessageKind::UserText;
+                    if pending_kind.as_ref() != Some(&target_kind) {
+                        if let Some(kind) = pending_kind.take() {
                             flush(
-                                role,
+                                kind,
                                 std::mem::take(&mut pending_blocks),
                                 &mut bedrock_messages,
                             );
                         }
-                        pending_role = Some(target_role);
+                        pending_kind = Some(target_kind);
                     }
                     pending_blocks.push(ContentBlock::Text(msg.content.clone()));
                 }
                 MessageRole::Assistant => {
-                    let target_role = ConversationRole::Assistant;
-                    if pending_role.as_ref() != Some(&target_role) {
-                        if let Some(role) = pending_role.take() {
+                    let target_kind = PendingMessageKind::Assistant;
+                    if pending_kind.as_ref() != Some(&target_kind) {
+                        if let Some(kind) = pending_kind.take() {
                             flush(
-                                role,
+                                kind,
                                 std::mem::take(&mut pending_blocks),
                                 &mut bedrock_messages,
                             );
                         }
-                        pending_role = Some(target_role);
+                        pending_kind = Some(target_kind);
                     }
                     if !msg.content.is_empty() {
                         pending_blocks.push(ContentBlock::Text(msg.content.clone()));
@@ -687,8 +703,8 @@ impl BedrockProvider {
             }
         }
         // Flush any remaining pending blocks
-        if let Some(role) = pending_role {
-            flush(role, pending_blocks, &mut bedrock_messages);
+        if let Some(kind) = pending_kind {
+            flush(kind, pending_blocks, &mut bedrock_messages);
         }
 
         let system = if system_blocks.is_empty() {
