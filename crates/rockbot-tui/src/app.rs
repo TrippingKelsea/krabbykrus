@@ -2269,15 +2269,49 @@ impl App {
                 self.state.clear_input();
             }
             UnlockMethod::SshKey { path } => {
-                // Try SSH agent unlock
                 let ssh_path = path
                     .clone()
                     .unwrap_or_else(|| "~/.ssh/id_ed25519".to_string());
-                // TODO: Actually unlock via SSH agent
-                self.state.status_message = Some((
-                    format!("SSH unlock not yet implemented (key: {ssh_path})"),
-                    true,
-                ));
+                let ssh_pathbuf = std::path::PathBuf::from(&ssh_path);
+                if ssh_pathbuf.exists() {
+                    match rockbot_credentials::CredentialVault::open(&self.state.vault_path) {
+                        Ok(mut storage) => match storage.unlock_with_ssh(&ssh_pathbuf, None) {
+                            Ok(()) => {
+                                let endpoints: Vec<EndpointInfo> = storage
+                                    .list_endpoints()
+                                    .into_iter()
+                                    .map(|e| EndpointInfo {
+                                        id: e.id.to_string(),
+                                        name: e.name.clone(),
+                                        endpoint_type: format!("{:?}", e.endpoint_type),
+                                        base_url: e.base_url.clone(),
+                                        has_credential: e.credential_id != uuid::Uuid::nil(),
+                                        expiration: None,
+                                    })
+                                    .collect();
+
+                                self.vault = Some(storage);
+                                self.state.vault.locked = false;
+                                self.state.endpoints = endpoints;
+                                self.state.status_message =
+                                    Some(("Vault unlocked with SSH key".to_string(), false));
+                            }
+                            Err(e) => {
+                                self.state.status_message =
+                                    Some((format!("Failed to unlock vault: {e}"), true));
+                            }
+                        },
+                        Err(e) => {
+                            self.state.status_message =
+                                Some((format!("Failed to open vault: {e}"), true));
+                        }
+                    }
+                } else {
+                    self.state.status_message = Some((
+                        format!("SSH key not found: {}", ssh_pathbuf.display()),
+                        true,
+                    ));
+                }
             }
             UnlockMethod::Unknown => {
                 // Default to password prompt
@@ -2473,11 +2507,12 @@ impl App {
     fn handle_view_action(&mut self) {
         if self.state.menu_item == MenuItem::Sessions {
             if let Some(session) = self.state.sessions.get(self.state.selected_session) {
+                let session_key = session.key.clone();
                 self.state.input_mode = InputMode::ViewSession {
-                    session_key: session.key.clone(),
+                    session_key: session_key.clone(),
                 };
                 // Spawn async task to load session details
-                self.spawn_session_details(&session.key);
+                self.spawn_session_details(&session_key);
             } else {
                 self.state.status_message = Some(("No session selected".to_string(), true));
             }
@@ -2691,10 +2726,11 @@ impl App {
         });
     }
 
-    #[allow(clippy::unused_self)]
-    fn spawn_session_details(&self, _session_key: &str) {
-        // TODO: Load session details from gateway API
-        // For now, just show the view modal with basic info
+    fn spawn_session_details(&mut self, session_key: &str) {
+        self.state.input_mode = InputMode::ViewSession {
+            session_key: session_key.to_string(),
+        };
+        self.spawn_load_session_messages(session_key);
     }
 
     /// Test a provider via the gateway API (POST /api/providers/{id}/test)

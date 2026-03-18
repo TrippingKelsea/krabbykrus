@@ -3971,7 +3971,13 @@ impl Gateway {
                 .body(GatewayBody::Left(Full::new(
                     "Missing Upgrade: websocket header".into(),
                 )))
-                .expect("response"));
+                .unwrap_or_else(|e| {
+                    error!("Failed to build websocket error response: {}", e);
+                    Self::json_error(
+                        "Failed to build response",
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                    )
+                }));
         }
         let ws_key = match req.headers().get("sec-websocket-key") {
             Some(k) => k.to_str().unwrap_or("").to_string(),
@@ -3981,7 +3987,13 @@ impl Gateway {
                     .body(GatewayBody::Left(Full::new(
                         "Missing Sec-WebSocket-Key".into(),
                     )))
-                    .expect("response"));
+                    .unwrap_or_else(|e| {
+                        error!("Failed to build websocket error response: {}", e);
+                        Self::json_error(
+                            "Failed to build response",
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                        )
+                    }));
             }
         };
 
@@ -4020,7 +4032,13 @@ impl Gateway {
             .header("Connection", "Upgrade")
             .header("Sec-WebSocket-Accept", accept_key)
             .body(GatewayBody::Left(Full::new(hyper::body::Bytes::new())))
-            .expect("response"))
+            .unwrap_or_else(|e| {
+                error!("Failed to build websocket upgrade response: {}", e);
+                Self::json_error(
+                    "Failed to build response",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            }))
     }
 
     /// Handle an active WebSocket connection (read/write loop)
@@ -6339,7 +6357,7 @@ impl Gateway {
             agents: agent_health,
             memory_usage: MemoryUsage {
                 allocated_bytes: memory_bytes,
-                heap_size_bytes: memory_bytes,
+                heap_size_bytes: 0,
             },
         }
     }
