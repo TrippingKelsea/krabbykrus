@@ -509,6 +509,9 @@ pub struct GatewayConfig {
     /// Request timeout in seconds
     #[serde(default = "default_request_timeout")]
     pub request_timeout: u64,
+    /// Public listener policy for web bootstrap and monitoring endpoints.
+    #[serde(default)]
+    pub public: GatewayPublicConfig,
     /// Require API key for programmatic access (default: false for localhost, true otherwise)
     #[serde(default)]
     pub require_api_key: Option<bool>,
@@ -526,8 +529,33 @@ impl Default for GatewayConfig {
             client_port: default_client_port(),
             max_connections: default_max_connections(),
             request_timeout: default_request_timeout(),
+            public: GatewayPublicConfig::default(),
             require_api_key: None,
             pki: PkiConfig::default(),
+        }
+    }
+}
+
+/// Public listener policy for the gateway HTTPS port.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayPublicConfig {
+    /// Serve the browser bootstrap app and static assets from the public listener.
+    #[serde(default = "default_true")]
+    pub serve_webapp: bool,
+    /// Expose the CA bundle on the public listener.
+    #[serde(default = "default_true")]
+    pub serve_ca: bool,
+    /// Allow browser/bootstrap enrollment on the public listener.
+    #[serde(default = "default_true")]
+    pub enrollment_enabled: bool,
+}
+
+impl Default for GatewayPublicConfig {
+    fn default() -> Self {
+        Self {
+            serve_webapp: true,
+            serve_ca: true,
+            enrollment_enabled: true,
         }
     }
 }
@@ -1243,6 +1271,14 @@ impl Config {
             return Err(ConfigError::Invalid {
                 message: "Gateway HTTPS and client ports must differ".to_string(),
             });
+        }
+
+        if !self.gateway.public.serve_webapp && !self.gateway.public.serve_ca
+            && !self.gateway.public.enrollment_enabled
+        {
+            warn!(
+                "Gateway public listener is fully disabled except for /health; only monitoring will remain available"
+            );
         }
 
         for listen_ip in &self.gateway.listen_ips {

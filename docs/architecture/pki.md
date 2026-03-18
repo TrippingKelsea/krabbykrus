@@ -100,8 +100,15 @@ The `index.json` file tracks all issued certificates:
 [gateway]
 bind_host = "0.0.0.0"
 port = 18080
+client_port = 18081
+
+[gateway.public]
+serve_webapp = true
+serve_ca = true
+enrollment_enabled = true
 
 # TLS certificate and key (gateway cert)
+[pki]
 tls_cert = "/home/you/.config/rockbot/pki/certs/gateway.crt"
 tls_key  = "/home/you/.config/rockbot/pki/keys/gateway.key"
 
@@ -125,12 +132,17 @@ enrollment_psk = "some-secret-token"
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `tls_cert` | `Option<PathBuf>` | None | Path to gateway TLS certificate (PEM) |
-| `tls_key` | `Option<PathBuf>` | None | Path to gateway TLS private key (PEM) |
-| `tls_ca` | `Option<PathBuf>` | None | Path to CA certificate for client verification |
-| `require_client_cert` | `bool` | `false` | Enforce mandatory client certificates |
-| `pki_dir` | `Option<PathBuf>` | None | Path to PKI directory |
-| `enrollment_psk` | `Option<String>` | None | Pre-shared key for `/api/cert/sign` enrollment |
+| `gateway.port` | `u16` | `18080` | Public HTTPS bootstrap port |
+| `gateway.client_port` | `u16` | `18081` | Dedicated authenticated client listener |
+| `gateway.public.serve_webapp` | `bool` | `true` | Serve `/` and `/static/*` |
+| `gateway.public.serve_ca` | `bool` | `true` | Serve `GET /api/cert/ca` |
+| `gateway.public.enrollment_enabled` | `bool` | `true` | Enable `POST /api/cert/sign` |
+| `pki.tls_cert` | `Option<PathBuf>` | None | Path to gateway TLS certificate (PEM) |
+| `pki.tls_key` | `Option<PathBuf>` | None | Path to gateway TLS private key (PEM) |
+| `pki.tls_ca` | `Option<PathBuf>` | None | Path to CA certificate for client verification |
+| `pki.require_client_cert` | `bool` | `false` | Enforce mandatory client certificates on the client listener |
+| `pki.pki_dir` | `Option<PathBuf>` | None | Path to PKI directory |
+| `pki.enrollment_psk` | `Option<String>` | None | Pre-shared key for `/api/cert/sign` enrollment |
 
 ### mTLS Modes
 
@@ -215,7 +227,8 @@ rockbot cert verify --cert gateway.crt --key gateway.key --ca ca.crt
 ### Remote Enrollment
 
 Enrollment tokens allow clients to obtain certificates without direct
-CA access — useful for bootstrapping remote agents and TUIs.
+CA access — useful for bootstrapping remote agents and TUIs. This endpoint is
+served from the public listener only when `gateway.public.enrollment_enabled = true`.
 
 ```bash
 # On the CA host: create a limited-use enrollment token

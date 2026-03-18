@@ -10,10 +10,10 @@ encrypted vault that agents never see directly.
 ```
 ┌───────────────────────────────────────────────────────────┐
 │                      Interfaces                           │
-│ CLI (rockbot-cli)  TUI (rockbot-tui)  Web UI  Channels   │
+│ CLI (rockbot-cli)  TUI (rockbot-tui)  Web App  Channels  │
 │         ▲                 ▲              ▲    (Telegram, │
 │         │                 │              │     Telegram, │
-│         │                 │ WebSocket    │ HTTP Signal)  │
+│         │                 │ WebSocket    │ Bootstrap     │
 └─────────┼────────────────────┼──────────┬─────────────────┘
           │                    │          │
      ┌────▼────────────────────▼──────────▼────┐
@@ -53,7 +53,8 @@ The gateway (`rockbot-gateway`) is the single source of truth. It owns:
 
 - **Agent lifecycle** — creates, configures, and destroys agents
 - **Provider state** — LLM, channel, and tool provider registries
-- **TLS termination** — serves HTTPS/WSS with self-signed or custom certs
+- **TLS termination** — serves a public HTTPS bootstrap listener and a
+  dedicated authenticated client listener
 - **Multi-agent routing** — routes messages to agents by channel, pattern, or keyword
 - **WebSocket protocol** — real-time streaming, health checks, remote tool dispatch
 - **A2A protocol** — agent-to-agent communication via JSON-RPC
@@ -135,18 +136,25 @@ Session updated with new messages
 
 ### TLS and Connection Security
 
-By default, the gateway serves a public HTTPS listener and a dedicated client
-listener. `rockbot config init gateway` generates
-a self-signed certificate for quick bootstrap. For production use, the
-built-in PKI system (`rockbot-pki`) provides a full certificate authority:
+By default, the gateway serves a public HTTPS bootstrap listener and a
+dedicated client listener. `rockbot config init gateway` generates a
+self-signed certificate for quick bootstrap. For production use, the built-in
+PKI system (`rockbot-pki`) provides a full certificate authority:
 
 - **CA management** — `rockbot cert ca generate` creates a local CA
 - **Client certificates** — issued per role (gateway, agent, tui)
 - **Mutual TLS** — the dedicated client listener can enforce mTLS without
-  blocking browser access or enrollment on the public listener
+  blocking browser bootstrap or enrollment on the public listener
+- **Public bootstrap surface** — `/`, `/static/*`, `/health`, `GET /api/cert/ca`,
+  and optionally `POST /api/cert/sign`
 - **Remote enrollment** — `POST /api/cert/sign` with a pre-shared key lets
-  new clients obtain certificates without direct CA access
+  new clients obtain certificates without direct CA access when enabled
 - **Revocation** — `rockbot cert client revoke` updates the CRL
+
+The browser app is no longer a public admin SPA. It is a bootstrap shell that
+can persist imported client key material locally and prepare for an
+authenticated WebSocket session; sensitive application APIs belong on the
+authenticated control plane instead of the public listener.
 
 See [PKI and mTLS](pki.md) for full details.
 

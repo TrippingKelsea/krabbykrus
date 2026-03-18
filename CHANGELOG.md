@@ -11,6 +11,11 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
 ## [Unreleased]
 
 ### Added
+- **Public listener policy**: `gateway.public` now controls whether the public
+  HTTPS listener serves the browser bootstrap shell, CA bundle, and enrollment
+- **Web bootstrap shell**: `/` and `/static/*` now serve a minimal browser
+  bootstrap app with health display, CA download, and IndexedDB-backed client
+  certificate/key import persistence
 - **Gateway bootstrap**: deterministic role-targeted bootstrap config commands
   - `rockbot config init gateway --https-port ... --client-port ...`
   - `rockbot config init client --gateway-ip ... --https-port ... --client-port ...`
@@ -93,6 +98,9 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
   - Automatic save of `[tui]`, `[tui.theme]`, and `[tui.fonts]` changes to `rockbot.toml`
 
 ### Fixed
+- **Public surface area**: the public HTTPS listener no longer exposes the full
+  management/data REST API by default; it is now limited to health, bootstrap
+  assets, CA publication, and optional enrollment
 - **Remote exec streaming**: fast remote tools no longer log repeated
   “Received tool output for unknown request” warnings when output chunks arrive
   just after the final response wins the race back to the gateway

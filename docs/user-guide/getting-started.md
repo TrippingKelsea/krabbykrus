@@ -55,6 +55,11 @@ bind_host = "0.0.0.0"
 port = 18181
 client_port = 18182
 
+[gateway.public]
+serve_webapp = true
+serve_ca = true
+enrollment_enabled = true
+
 [pki]
 tls_cert = "/home/you/.config/rockbot/gateway.crt"
 tls_key = "/home/you/.config/rockbot/gateway.key"
@@ -93,8 +98,8 @@ You can still override it with `-g host:port` when needed.
 
 Native clients use the client-listener WebSocket for both chat traffic and
 gateway control-plane requests such as provider, agent, and session management.
-The public HTTPS listener remains for the browser, enrollment, and external
-automation endpoints.
+The public HTTPS listener is intentionally minimal: browser bootstrap shell,
+`/static/*`, health, CA publication, and optional enrollment.
 
 ### Credential Management UI
 
@@ -105,13 +110,20 @@ standalone credential UI:
 rockbot credentials ui
 ```
 
-### Open the Web UI
+### Open the Web UI Bootstrap
 
-self-signed certificate when prompted.
-Navigate to `https://localhost:18181` in your browser. Accept the
-self-signed certificate when prompted. The browser uses the public listener,
-not the mTLS client listener.
-self-signed certificate when prompted.
+Navigate to `https://localhost:18181` in your browser and accept the
+self-signed certificate when prompted. The browser app is now a bootstrap shell
+served from the public listener. It exposes only:
+
+- `/`
+- `/static/*`
+- `/health`
+- `/api/cert/ca`
+- `/api/cert/sign` when `gateway.public.enrollment_enabled = true`
+
+The page lets you import a client certificate/key bundle into browser storage
+for future authenticated control-plane use.
 
 ## Mutual TLS (mTLS)
 
@@ -138,7 +150,13 @@ rockbot cert client generate --name my-tui --role tui --days 365
 ### Enroll a Remote Client
 
 Enrollment happens over the public HTTPS listener, so you do not need to
-temporarily disable client-certificate enforcement for the client listener.
+temporarily disable client-certificate enforcement for the client listener. If
+you do not want browser/bootstrap enrollment exposed, set:
+
+```toml
+[gateway.public]
+enrollment_enabled = false
+```
 
 If you need to provision a client on a different machine:
 

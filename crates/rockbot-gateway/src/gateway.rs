@@ -1641,20 +1641,16 @@ impl Gateway {
         req: Request<IncomingBody>,
         listener_kind: ListenerKind,
     ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        if listener_kind == ListenerKind::Public {
+            return self.handle_public_request(req).await;
+        }
+
         let path = req.uri().path().to_string();
 
         match (req.method(), path.as_str()) {
             // Web UI
             (&Method::GET, "/") | (&Method::GET, "/index.html") => self.handle_web_ui().await,
-            (&Method::GET, "/ws") => match listener_kind {
-                ListenerKind::Client => self.handle_websocket_upgrade(req).await,
-                ListenerKind::Public => Ok(Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(GatewayBody::Left(Full::new(
-                        "WebSocket connections are only available on the client listener".into(),
-                    )))
-                    .unwrap()),
-            },
+            (&Method::GET, "/ws") => self.handle_websocket_upgrade(req).await,
             // A2A Protocol
             (&Method::GET, "/.well-known/agent.json") => self.handle_agent_card().await,
             (&Method::POST, "/a2a") => self.handle_a2a_request(req).await,
@@ -1799,6 +1795,37 @@ impl Gateway {
             // Certificate API (PSK-authenticated CSR signing)
             (&Method::POST, "/api/cert/sign") => self.handle_cert_sign(req).await,
             (&Method::GET, "/api/cert/ca") => self.handle_cert_ca_info().await,
+            _ => Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(GatewayBody::Left(Full::new("Not Found".into())))
+                .unwrap()),
+        }
+    }
+
+    async fn handle_public_request(
+        &self,
+        req: Request<IncomingBody>,
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        let path = req.uri().path().to_string();
+
+        match (req.method(), path.as_str()) {
+            (&Method::GET, "/health") => self.handle_health_check().await,
+            (&Method::GET, "/") | (&Method::GET, "/index.html")
+                if self.config.public.serve_webapp =>
+            {
+                self.handle_web_ui().await
+            }
+            (&Method::GET, p)
+                if p.starts_with("/static/") && self.config.public.serve_webapp =>
+            {
+                self.handle_web_ui_asset(p).await
+            }
+            (&Method::GET, "/api/cert/ca") if self.config.public.serve_ca => {
+                self.handle_cert_ca_info().await
+            }
+            (&Method::POST, "/api/cert/sign") if self.config.public.enrollment_enabled => {
+                self.handle_cert_sign(req).await
+            }
             _ => Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(GatewayBody::Left(Full::new("Not Found".into())))
@@ -2665,6 +2692,24 @@ impl Gateway {
             .header("Content-Type", "text/html; charset=utf-8")
             .body(GatewayBody::Left(Full::new(html.into())))
             .unwrap())
+    }
+
+    /// Serve embedded static web assets.
+    async fn handle_web_ui_asset(
+        &self,
+        path: &str,
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        match rockbot_webui::get_static_asset(path) {
+            Some((content_type, body)) => Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", content_type)
+                .body(GatewayBody::Left(Full::new(body.into())))
+                .unwrap()),
+            None => Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(GatewayBody::Left(Full::new("Not Found".into())))
+                .unwrap()),
+        }
     }
 
     // ==================== Provider API Handlers ====================

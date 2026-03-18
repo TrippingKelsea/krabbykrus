@@ -134,6 +134,11 @@ bind_host = "{bind_host}"
 port = {https_port}
 client_port = {client_port}
 
+[gateway.public]
+serve_webapp = true
+serve_ca = true
+enrollment_enabled = true
+
 [pki]
 tls_cert = "{tls_cert}"
 tls_key = "{tls_key}"
@@ -205,6 +210,11 @@ async fn init_client_config(
 bind_host = "127.0.0.1"
 port = {https_port}
 client_port = {client_port}
+
+[gateway.public]
+serve_webapp = false
+serve_ca = false
+enrollment_enabled = false
 
 [client]
 gateway_host = "{gateway_ip}"

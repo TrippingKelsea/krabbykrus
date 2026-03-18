@@ -33,17 +33,27 @@ transport, and human-in-the-loop approval for sensitive operations.
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### Boundary 1: Transport (mTLS)
+### Boundary 1: Transport and Listener Separation
 
-All gateway communication uses TLS. With the built-in PKI system,
-mutual TLS ensures both sides verify identity:
+The gateway separates public bootstrap traffic from the authenticated control
+plane:
+
+- **Public HTTPS listener** — `/`, `/static/*`, `/health`, `GET /api/cert/ca`,
+  and optional enrollment
+- **Client listener** — authenticated WebSocket control plane, remote exec,
+  native chat traffic, and mTLS client sessions
+
+All gateway communication uses TLS. On the client listener, the built-in PKI
+system provides mutual TLS so both sides verify identity:
 
 - **Gateway** presents its server certificate (gateway role)
 - **Clients** present their client certificates (agent/tui role)
 - Both are signed by the same CA and verified via `WebPkiClientVerifier`
 - Revoked certificates are tracked in the CRL
 
-See [PKI and mTLS](pki.md) for certificate management details.
+The browser-facing bootstrap shell is intentionally not the place for sensitive
+REST management APIs. See [PKI and mTLS](pki.md) for certificate management
+details.
 
 ### Boundary 2: Credential Isolation
 

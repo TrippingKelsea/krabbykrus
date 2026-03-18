@@ -40,8 +40,12 @@ port = 18181                     # Public HTTPS / Web UI port
 client_port = 18182              # Dedicated client / mTLS port
 max_connections = 100            # Max concurrent connections (default: 100)
 request_timeout = 30             # Request timeout in seconds (default: 30)
-require_api_key = false          # Require API key (default: auto based on bind_host)
-require_client_cert = true       # Client listener mTLS policy
+require_api_key = false          # Legacy programmatic access toggle
+
+[gateway.public]
+serve_webapp = true              # Serve / and /static/*
+serve_ca = true                  # Serve GET /api/cert/ca
+enrollment_enabled = true        # Serve POST /api/cert/sign
 ```
 
 ## `[pki]`
@@ -53,6 +57,7 @@ tls_key  = "~/.config/rockbot/pki/keys/gateway.key"
 
 tls_ca = "~/.config/rockbot/pki/ca.crt"        # CA cert enables client verification
 pki_dir = "~/.config/rockbot/pki"               # PKI directory for enrollment
+require_client_cert = true                      # mTLS policy for the dedicated client listener
 enrollment_psk = "secret-token"                 # PSK for POST /api/cert/sign
 ```
 
@@ -65,8 +70,9 @@ https_port = 18181               # Public HTTPS / enrollment / Web UI port
 client_port = 18182              # Dedicated client / mTLS listener
 ```
 
-The public listener handles browser access and certificate enrollment. The
-client listener is for TUI, agent, and remote-exec connections.
+The public listener is intentionally narrow: browser bootstrap shell, `/static/*`,
+health, CA publication, and optional enrollment. The client listener is for the
+authenticated control plane: TUI, agent, remote-exec, and native WS API traffic.
 
 ### mTLS Modes
 
@@ -207,6 +213,19 @@ first implementation uses PKI-managed node-local storage keys when
 does not yet wrap the main WebSocket or streaming channels in Noise transport,
 but it provides the config surface for `ws-over-noise` / `stream-over-noise`
 enforcement modes.
+
+## Public Web Bootstrap
+
+The browser app is delivered from:
+
+- `/`
+- `/static/app.css`
+- `/static/app.js`
+
+The embedded page is a bootstrap shell, not the old public admin SPA. It
+supports importing a client certificate/key bundle into browser storage and
+fetching health / CA material from the public listener. Sensitive runtime APIs
+belong on the authenticated WebSocket control plane instead of public REST.
 
 ---
 
