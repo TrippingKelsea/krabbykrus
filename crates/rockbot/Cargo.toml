@@ -21,7 +21,7 @@ enshitify = ["discord"]
 # LLM providers
 anthropic = ["rockbot-cli/anthropic"]
 openai = ["rockbot-cli/openai"]
-ollama = ["rockbot-cli/ollama", "rockbot-llm/ollama"]
+ollama = ["rockbot-cli/ollama"]
 bedrock = ["rockbot-cli/bedrock"]
 all-providers = ["anthropic", "openai", "ollama", "bedrock"]
 # Channel providers

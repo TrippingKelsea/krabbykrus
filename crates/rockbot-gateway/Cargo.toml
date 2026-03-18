@@ -10,7 +10,7 @@ default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "too
 # LLM providers
 anthropic = []
 openai = []
-ollama = ["rockbot-llm/ollama"]
+ollama = ["dep:rockbot-llm-ollama"]
 bedrock = []
 # Channel providers
 discord = ["dep:rockbot-channels-discord"]
@@ -48,6 +48,7 @@ rockbot-webui = { path = "../rockbot-webui" }
 rockbot-tools = { path = "../rockbot-tools" }
 rockbot-memory = { path = "../rockbot-memory" }
 rockbot-llm = { path = "../rockbot-llm", default-features = false }
+rockbot-llm-ollama = { path = "../rockbot-llm-ollama", optional = true }
 rockbot-security = { path = "../rockbot-security" }
 rockbot-credentials = { path = "../rockbot-credentials" }
 rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }

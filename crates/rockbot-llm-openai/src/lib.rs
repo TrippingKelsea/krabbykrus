@@ -475,7 +475,20 @@ impl LlmProvider for OpenAiProvider {
             temperature: request.temperature,
             max_tokens: request.max_tokens,
             stream: Some(true),
-            response_format: None,
+            response_format: request.response_format.as_ref().map(|rf| match rf {
+                ResponseFormat::Text => OpenAiResponseFormat {
+                    r#type: "text".to_string(),
+                    json_schema: None,
+                },
+                ResponseFormat::JsonObject => OpenAiResponseFormat {
+                    r#type: "json_object".to_string(),
+                    json_schema: None,
+                },
+                ResponseFormat::JsonSchema { schema } => OpenAiResponseFormat {
+                    r#type: "json_schema".to_string(),
+                    json_schema: Some(schema.clone()),
+                },
+            }),
         };
 
         let response = self

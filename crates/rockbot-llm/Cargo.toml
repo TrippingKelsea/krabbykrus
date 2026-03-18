@@ -7,7 +7,6 @@ license = "MIT"
 
 [features]
 default = []
-ollama = []
 
 [lints]
 workspace = true

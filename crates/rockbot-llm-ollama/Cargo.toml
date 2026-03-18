@@ -1,8 +1,8 @@
 [package]
-name = "rockbot-llm-anthropic"
+name = "rockbot-llm-ollama"
 version.workspace = true
 edition = "2021"
-description = "Anthropic Claude provider for RockBot"
+description = "Ollama provider for RockBot"
 license = "MIT"
 
 [lints]
@@ -14,11 +14,5 @@ async-trait = "0.1"
 async-stream = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
-futures-util = { workspace = true }
 reqwest = { workspace = true }
-dirs = "5"
-tokio = { workspace = true }
-uuid = { workspace = true }
-
-[dev-dependencies]
-tokio = { workspace = true }
+futures-util = { workspace = true }

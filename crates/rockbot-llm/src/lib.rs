@@ -12,8 +12,6 @@
 //! # No built-in cloud providers
 //! rockbot-llm = { path = "..." }
 //!
-//! # With local Ollama support
-//! rockbot-llm = { path = "...", features = ["ollama"] }
 //! ```
 //!
 //! # Example
@@ -62,11 +60,6 @@ use thiserror::Error;
 pub use rockbot_credentials_schema::{
     AuthMethod, CredentialCategory, CredentialField, CredentialSchema,
 };
-
-#[cfg(feature = "ollama")]
-pub mod ollama;
-#[cfg(feature = "ollama")]
-pub use ollama::OllamaProvider;
 
 /// LLM provider errors
 #[derive(Debug, Error)]
@@ -326,16 +319,6 @@ impl LlmProviderRegistry {
         // Register mock provider for development
         let mock_provider = Arc::new(MockLlmProvider::new());
         self.register_provider(mock_provider).await;
-
-        // Register Ollama provider (always available; probed at runtime)
-        #[cfg(feature = "ollama")]
-        {
-            let base_url = std::env::var("OLLAMA_HOST")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string());
-            let ollama = OllamaProvider::with_base_url(base_url);
-            tracing::info!("Registered Ollama provider");
-            self.register_provider(Arc::new(ollama)).await;
-        }
 
         Ok(())
     }

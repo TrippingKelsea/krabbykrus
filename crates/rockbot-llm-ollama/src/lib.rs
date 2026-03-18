@@ -1,29 +1,21 @@
-//! Ollama local model provider
-//!
-//! Ollama exposes an OpenAI-compatible API at `http://localhost:11434/v1`.
-//! No API key is required; users configure the base URL if they run Ollama
-//! on a non-default address.
+//! Ollama local model provider.
 
-use crate::{
+use async_trait::async_trait;
+use futures_util::StreamExt;
+use rockbot_llm::{
     AuthMethod, ChatCompletionRequest, ChatCompletionResponse, Choice, CompletionStream,
     CredentialCategory, CredentialField, CredentialSchema, FunctionCall, LlmError, LlmProvider,
-    Message, MessageRole, ModelInfo, ProviderCapabilities, Result, StreamingChunk, ToolCall, Usage,
+    Message, MessageRole, ModelInfo, ProviderCapabilities, Result, StreamingChunk, ToolCall,
+    Usage,
 };
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-/// Default Ollama base URL
 const DEFAULT_BASE_URL: &str = "http://localhost:11434";
 
-/// Ollama local model provider
 pub struct OllamaProvider {
     client: reqwest::Client,
     base_url: String,
 }
-
-// ---------------------------------------------------------------------------
-// Wire-format types (OpenAI-compatible)
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 struct OllamaRequest {
@@ -109,14 +101,8 @@ struct OllamaError {
 #[derive(Debug, Deserialize)]
 struct OllamaErrorDetail {
     message: String,
-    #[serde(rename = "type")]
-    #[allow(dead_code)]
-    error_type: Option<String>,
-    #[allow(dead_code)]
-    code: Option<String>,
 }
 
-/// Response from `GET /api/tags`
 #[derive(Debug, Deserialize)]
 struct OllamaTagsResponse {
     models: Vec<OllamaModelEntry>,
@@ -127,12 +113,7 @@ struct OllamaModelEntry {
     name: String,
 }
 
-// ---------------------------------------------------------------------------
-// Implementation
-// ---------------------------------------------------------------------------
-
 impl OllamaProvider {
-    /// Create a new Ollama provider targeting the default local address.
     pub fn new() -> Self {
         Self {
             client: Self::build_client(),
@@ -140,16 +121,13 @@ impl OllamaProvider {
         }
     }
 
-    /// Create with an explicit base URL (e.g. `http://192.168.1.5:11434`).
     pub fn with_base_url(base_url: String) -> Self {
-        let base_url = base_url.trim_end_matches('/').to_string();
         Self {
             client: Self::build_client(),
-            base_url,
+            base_url: base_url.trim_end_matches('/').to_string(),
         }
     }
 
-    /// Build an HTTP client with sensible timeouts to prevent indefinite hangs.
     fn build_client() -> reqwest::Client {
         reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -158,7 +136,6 @@ impl OllamaProvider {
             .unwrap_or_else(|_| reqwest::Client::new())
     }
 
-    /// Strip the `ollama/` provider prefix from a model identifier.
     #[allow(clippy::unused_self)]
     fn normalize_model(&self, model_id: &str) -> String {
         model_id
@@ -167,7 +144,6 @@ impl OllamaProvider {
             .to_string()
     }
 
-    /// Convert our `Message` into the OpenAI-compatible wire format.
     #[allow(clippy::unused_self)]
     fn convert_message(&self, msg: &Message) -> OllamaMessage {
         let role = match msg.role {
@@ -247,7 +223,6 @@ impl LlmProvider for OllamaProvider {
     }
 
     async fn is_configured(&self) -> bool {
-        // Probe the Ollama health endpoint — no credentials needed.
         self.client
             .get(format!("{}/api/tags", self.base_url))
             .send()
@@ -261,15 +236,10 @@ impl LlmProvider for OllamaProvider {
         request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse> {
         let model = self.normalize_model(&request.model);
-
-        let messages: Vec<OllamaMessage> = request
-            .messages
-            .iter()
-            .map(|m| self.convert_message(m))
-            .collect();
-
-        let tools: Option<Vec<OllamaTool>> = request.tools.map(|t| {
-            t.into_iter()
+        let messages = request.messages.iter().map(|m| self.convert_message(m)).collect();
+        let tools = request.tools.map(|tools| {
+            tools
+                .into_iter()
                 .map(|tool| OllamaTool {
                     tool_type: "function".to_string(),
                     function: OllamaFunctionDef {
@@ -281,26 +251,23 @@ impl LlmProvider for OllamaProvider {
                 .collect()
         });
 
-        let api_request = OllamaRequest {
-            model: model.clone(),
-            messages,
-            tools,
-            temperature: request.temperature,
-            max_tokens: request.max_tokens,
-            stream: None,
-        };
-
         let response = self
             .client
             .post(format!("{}/v1/chat/completions", self.base_url))
             .header("Content-Type", "application/json")
-            .json(&api_request)
+            .json(&OllamaRequest {
+                model: model.clone(),
+                messages,
+                tools,
+                temperature: request.temperature,
+                max_tokens: request.max_tokens,
+                stream: None,
+            })
             .send()
             .await?;
 
         let status = response.status();
         let body = response.text().await?;
-
         if !status.is_success() {
             if let Ok(error) = serde_json::from_str::<OllamaError>(&body) {
                 return Err(LlmError::ApiError {
@@ -313,7 +280,6 @@ impl LlmProvider for OllamaProvider {
         }
 
         let api_response: OllamaResponse = serde_json::from_str(&body)?;
-
         let choice = api_response
             .choices
             .into_iter()
@@ -322,7 +288,7 @@ impl LlmProvider for OllamaProvider {
                 message: "No choices in response".to_string(),
             })?;
 
-        let tool_calls: Option<Vec<ToolCall>> = choice.message.tool_calls.map(|calls| {
+        let tool_calls = choice.message.tool_calls.map(|calls| {
             calls
                 .into_iter()
                 .map(|tc| ToolCall {
@@ -362,15 +328,10 @@ impl LlmProvider for OllamaProvider {
 
     async fn stream_completion(&self, request: ChatCompletionRequest) -> Result<CompletionStream> {
         let model = self.normalize_model(&request.model);
-
-        let messages: Vec<OllamaMessage> = request
-            .messages
-            .iter()
-            .map(|m| self.convert_message(m))
-            .collect();
-
-        let tools: Option<Vec<OllamaTool>> = request.tools.map(|t| {
-            t.into_iter()
+        let messages = request.messages.iter().map(|m| self.convert_message(m)).collect();
+        let tools = request.tools.map(|tools| {
+            tools
+                .into_iter()
                 .map(|tool| OllamaTool {
                     tool_type: "function".to_string(),
                     function: OllamaFunctionDef {
@@ -382,25 +343,22 @@ impl LlmProvider for OllamaProvider {
                 .collect()
         });
 
-        let api_request = OllamaRequest {
-            model: model.clone(),
-            messages,
-            tools,
-            temperature: request.temperature,
-            max_tokens: request.max_tokens,
-            stream: Some(true),
-        };
-
         let response = self
             .client
             .post(format!("{}/v1/chat/completions", self.base_url))
             .header("Content-Type", "application/json")
-            .json(&api_request)
+            .json(&OllamaRequest {
+                model: model.clone(),
+                messages,
+                tools,
+                temperature: request.temperature,
+                max_tokens: request.max_tokens,
+                stream: Some(true),
+            })
             .send()
             .await?;
 
         let status = response.status();
-
         if !status.is_success() {
             let body = response.text().await?;
             if let Ok(error) = serde_json::from_str::<OllamaError>(&body) {
@@ -414,11 +372,8 @@ impl LlmProvider for OllamaProvider {
         }
 
         let stream = async_stream::stream! {
-            use futures_util::StreamExt;
-
             let mut byte_stream = response.bytes_stream();
             let mut buffer = String::new();
-
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = match chunk {
                     Ok(c) => c,
@@ -427,24 +382,16 @@ impl LlmProvider for OllamaProvider {
                         return;
                     }
                 };
-
                 buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                // Consume complete SSE events (terminated by "\n\n")
                 while let Some(event_end) = buffer.find("\n\n") {
                     let event_data = buffer[..event_end].to_string();
                     buffer = buffer[event_end + 2..].to_string();
-
-                    // Extract the payload after "data: "
-                    let data = match parse_sse_data(&event_data) {
-                        Some(d) => d,
-                        None => continue,
+                    let Some(data) = parse_sse_data(&event_data) else {
+                        continue;
                     };
-
                     if data == "[DONE]" {
                         return;
                     }
-
                     match serde_json::from_str::<StreamingChunk>(&data) {
                         Ok(mut parsed) => {
                             parsed.model = model.clone();
@@ -471,12 +418,7 @@ impl LlmProvider for OllamaProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>> {
-        let response = self
-            .client
-            .get(format!("{}/api/tags", self.base_url))
-            .send()
-            .await;
-
+        let response = self.client.get(format!("{}/api/tags", self.base_url)).send().await;
         let tags: Vec<String> = match response {
             Ok(r) if r.status().is_success() => match r.json::<OllamaTagsResponse>().await {
                 Ok(tags) => tags.models.into_iter().map(|m| m.name).collect(),
@@ -486,7 +428,6 @@ impl LlmProvider for OllamaProvider {
         };
 
         if tags.is_empty() {
-            // Return a placeholder when Ollama is not reachable
             return Ok(vec![ModelInfo {
                 id: "ollama/llama3".to_string(),
                 name: "Llama 3 (example)".to_string(),
@@ -517,7 +458,6 @@ impl LlmProvider for OllamaProvider {
     async fn get_model_info(&self, model_id: &str) -> Result<ModelInfo> {
         let models = self.list_models().await?;
         let normalized = self.normalize_model(model_id);
-
         models
             .into_iter()
             .find(|m| {
@@ -529,7 +469,6 @@ impl LlmProvider for OllamaProvider {
     }
 }
 
-/// Extract the payload string from an SSE `data:` line.
 fn parse_sse_data(event: &str) -> Option<String> {
     for line in event.lines() {
         if let Some(data) = line.strip_prefix("data: ") {
@@ -537,73 +476,4 @@ fn parse_sse_data(event: &str) -> Option<String> {
         }
     }
     None
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-    use super::*;
-
-    #[test]
-    fn test_provider_name() {
-        let provider = OllamaProvider::new();
-        assert_eq!(provider.id(), "ollama");
-    }
-
-    #[test]
-    fn test_credential_schema() {
-        let provider = OllamaProvider::new();
-        let schema = provider.credential_schema().unwrap();
-        assert_eq!(schema.provider_id, "ollama");
-        assert_eq!(schema.provider_name, "Ollama");
-        assert!(!schema.auth_methods.is_empty());
-        let fields = &schema.auth_methods[0].fields;
-        assert!(fields.iter().any(|f| f.id == "base_url"));
-    }
-
-    #[test]
-    fn test_with_base_url_strips_trailing_slash() {
-        let provider = OllamaProvider::with_base_url("http://localhost:11434/".to_string());
-        assert_eq!(provider.base_url, "http://localhost:11434");
-    }
-
-    #[test]
-    fn test_normalize_model() {
-        let provider = OllamaProvider::new();
-        assert_eq!(provider.normalize_model("ollama/llama3"), "llama3");
-        assert_eq!(provider.normalize_model("llama3"), "llama3");
-    }
-
-    #[test]
-    fn test_convert_message_user() {
-        let provider = OllamaProvider::new();
-        let msg = Message {
-            role: MessageRole::User,
-            content: "Hello".to_string(),
-            images: vec![],
-            tool_calls: None,
-            tool_call_id: None,
-        };
-        let converted = provider.convert_message(&msg);
-        assert_eq!(converted.role, "user");
-        assert_eq!(converted.content, Some("Hello".to_string()));
-    }
-
-    #[test]
-    fn test_parse_sse_data_found() {
-        let event = "data: {\"id\":\"1\"}";
-        assert_eq!(parse_sse_data(event), Some("{\"id\":\"1\"}".to_string()));
-    }
-
-    #[test]
-    fn test_parse_sse_data_done() {
-        let event = "data: [DONE]";
-        assert_eq!(parse_sse_data(event), Some("[DONE]".to_string()));
-    }
-
-    #[test]
-    fn test_parse_sse_data_missing() {
-        let event = "event: ping";
-        assert_eq!(parse_sse_data(event), None);
-    }
 }

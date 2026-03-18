@@ -546,11 +546,14 @@ async fn register_compiled_llm_providers(
 
     #[cfg(feature = "anthropic")]
     {
-        if rockbot_llm_anthropic::AnthropicProvider::has_credentials() {
-            if let Ok(provider) = rockbot_llm_anthropic::AnthropicProvider::new() {
-                tracing::info!("Registered Anthropic provider (Claude Code OAuth)");
-                registry.register_provider(Arc::new(provider)).await;
-            }
+        let provider = llm_credentials
+            .and_then(|creds| creds.get("anthropic").cloned())
+            .map(rockbot_llm_anthropic::AnthropicProvider::with_api_key)
+            .map(Ok)
+            .unwrap_or_else(rockbot_llm_anthropic::AnthropicProvider::new);
+        if let Ok(provider) = provider {
+            tracing::info!("Registered Anthropic provider");
+            registry.register_provider(Arc::new(provider)).await;
         }
     }
 
@@ -565,6 +568,15 @@ async fn register_compiled_llm_providers(
             tracing::info!("Registered OpenAI provider");
             registry.register_provider(Arc::new(provider)).await;
         }
+    }
+
+    #[cfg(feature = "ollama")]
+    {
+        let base_url =
+            std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
+        let provider = rockbot_llm_ollama::OllamaProvider::with_base_url(base_url);
+        tracing::info!("Registered Ollama provider");
+        registry.register_provider(Arc::new(provider)).await;
     }
 
     Ok(())
