@@ -91,6 +91,11 @@ rockbot tui
 The client bootstrap config points the TUI at the dedicated client listener.
 You can still override it with `-g host:port` when needed.
 
+Native clients use the client-listener WebSocket for both chat traffic and
+gateway control-plane requests such as provider, agent, and session management.
+The public HTTPS listener remains for the browser, enrollment, and external
+automation endpoints.
+
 ### Credential Management UI
 
 For vault setup and inspection from the terminal, you can also launch the

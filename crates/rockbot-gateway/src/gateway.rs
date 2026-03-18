@@ -366,6 +366,14 @@ enum WsMessageType {
         #[serde(default)]
         stream: Option<String>,
     },
+    #[serde(rename = "api_request")]
+    ApiRequest {
+        request_id: String,
+        method: String,
+        path: String,
+        #[serde(default)]
+        body: Option<serde_json::Value>,
+    },
 }
 
 /// WebSocket response types (server -> client)
@@ -463,6 +471,14 @@ enum WsResponseType {
         agent_id: String,
         session_id: String,
         workspace_path: String,
+    },
+    #[serde(rename = "api_response")]
+    ApiResponse {
+        request_id: String,
+        status: u16,
+        body: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content_type: Option<String>,
     },
 }
 
@@ -1816,10 +1832,14 @@ impl Gateway {
     }
 
     /// Handle create endpoint
-    async fn handle_create_endpoint(
+    async fn handle_create_endpoint<B>(
         &self,
-        req: Request<IncomingBody>,
-    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        req: Request<B>,
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error>
+    where
+        B: hyper::body::Body<Data = hyper::body::Bytes> + Send,
+        B::Error: std::fmt::Debug,
+    {
         let Some(manager) = &self.credential_manager else {
             return Ok(Self::json_error(
                 "Credential management not enabled",
@@ -1915,11 +1935,15 @@ impl Gateway {
     }
 
     /// Handle store credential
-    async fn handle_store_credential(
+    async fn handle_store_credential<B>(
         &self,
-        req: Request<IncomingBody>,
+        req: Request<B>,
         path: &str,
-    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error>
+    where
+        B: hyper::body::Body<Data = hyper::body::Bytes> + Send,
+        B::Error: std::fmt::Debug,
+    {
         let Some(manager) = &self.credential_manager else {
             return Ok(Self::json_error(
                 "Credential management not enabled",
@@ -3048,10 +3072,13 @@ impl Gateway {
     // ==================== Session API Handlers ====================
 
     /// Handle list sessions (GET /api/sessions?agent_id=xxx)
-    async fn handle_list_sessions(
+    async fn handle_list_sessions<B>(
         &self,
-        req: Request<IncomingBody>,
-    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        req: Request<B>,
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error>
+    where
+        B: hyper::body::Body<Data = hyper::body::Bytes> + Send,
+    {
         // Parse optional query params
         let uri = req.uri();
         let query_string = uri.query().unwrap_or("");
@@ -3089,10 +3116,14 @@ impl Gateway {
     }
 
     /// Handle create session (POST /api/sessions)
-    async fn handle_create_session(
+    async fn handle_create_session<B>(
         &self,
-        req: Request<IncomingBody>,
-    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        req: Request<B>,
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error>
+    where
+        B: hyper::body::Body<Data = hyper::body::Bytes> + Send,
+        B::Error: std::fmt::Debug,
+    {
         let body = req.collect().await.unwrap_or_default().to_bytes();
         let body_str = String::from_utf8_lossy(&body);
 
@@ -3552,11 +3583,15 @@ impl Gateway {
     }
 
     /// Create or update a context file
-    async fn handle_put_agent_file(
+    async fn handle_put_agent_file<B>(
         &self,
         path: &str,
-        req: Request<IncomingBody>,
-    ) -> Response<GatewayBody> {
+        req: Request<B>,
+    ) -> Response<GatewayBody>
+    where
+        B: hyper::body::Body<Data = hyper::body::Bytes> + Send,
+        B::Error: std::fmt::Display,
+    {
         let Some((agent_id, filename)) = Self::parse_agent_file_path(path) else {
             return Self::json_error("Invalid path", StatusCode::BAD_REQUEST);
         };
@@ -4162,6 +4197,146 @@ impl Gateway {
                     warn!("Received remote tool output but remote-exec feature is disabled");
                 }
             }
+            WsMessageType::ApiRequest {
+                request_id,
+                method,
+                path,
+                body,
+            } => {
+                self.handle_ws_api_request(outbound_tx, request_id, method, path, body)
+                    .await;
+            }
+        }
+    }
+
+    async fn handle_ws_api_request(
+        &self,
+        outbound_tx: &tokio::sync::mpsc::UnboundedSender<WsMessage>,
+        request_id: String,
+        method: String,
+        path: String,
+        body: Option<serde_json::Value>,
+    ) {
+        let response = match self.dispatch_ws_api_request(&method, &path, body).await {
+            Ok(resp) => resp,
+            Err(message) => Self::json_error(&message, StatusCode::BAD_REQUEST),
+        };
+
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(hyper::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
+        let body = match response.into_body().collect().await {
+            Ok(collected) => String::from_utf8_lossy(&collected.to_bytes()).to_string(),
+            Err(e) => serde_json::json!({ "error": format!("Failed to read response body: {e}") })
+                .to_string(),
+        };
+
+        let response = WsResponseType::ApiResponse {
+            request_id,
+            status,
+            body,
+            content_type,
+        };
+        if let Ok(json) = serde_json::to_string(&response) {
+            let _ = outbound_tx.send(WsMessage::Text(json));
+        }
+    }
+
+    async fn dispatch_ws_api_request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> std::result::Result<Response<GatewayBody>, String> {
+        let method = Method::from_bytes(method.as_bytes())
+            .map_err(|e| format!("Invalid method '{method}': {e}"))?;
+        let method_label = method.as_str().to_string();
+        let uri: hyper::Uri = path
+            .parse()
+            .map_err(|e| format!("Invalid API path '{path}': {e}"))?;
+        let body_bytes = match body {
+            Some(value) => serde_json::to_vec(&value)
+                .map_err(|e| format!("Failed to encode API request body: {e}"))?,
+            None => Vec::new(),
+        };
+        let req = Request::builder()
+            .method(method.clone())
+            .uri(uri)
+            .body(Full::new(hyper::body::Bytes::from(body_bytes)))
+            .map_err(|e| format!("Failed to build API request: {e}"))?;
+
+        match (method, path) {
+            (Method::GET, "/api/status") => self.handle_health_check().await.map_err(|e| e.to_string()),
+            (Method::GET, "/api/providers") => self.handle_list_providers().await.map_err(|e| e.to_string()),
+            (Method::POST, p) if p.starts_with("/api/providers/") && p.ends_with("/test") => {
+                self.handle_test_provider(path).await.map_err(|e| e.to_string())
+            }
+            (Method::GET, "/api/agents") => self.handle_list_agents().await.map_err(|e| e.to_string()),
+            (Method::POST, "/api/agents") => self.handle_create_agent(req).await.map_err(|e| e.to_string()),
+            (Method::PUT, p) if p.starts_with("/api/agents/") && !p.contains("/files/") => {
+                self.handle_update_agent(req).await.map_err(|e| e.to_string())
+            }
+            (Method::GET, p) if p.starts_with("/api/agents/") && p.ends_with("/files") => {
+                Ok(self.handle_list_agent_files(path).await)
+            }
+            (Method::GET, p) if p.starts_with("/api/agents/") && p.contains("/files/") => {
+                Ok(self.handle_get_agent_file(path).await)
+            }
+            (Method::PUT, p) if p.starts_with("/api/agents/") && p.contains("/files/") => {
+                Ok(self.handle_put_agent_file(path, req).await)
+            }
+            (Method::DELETE, p) if p.starts_with("/api/agents/") && p.contains("/files/") => {
+                Ok(self.handle_delete_agent_file(path).await)
+            }
+            (Method::GET, "/api/credentials/schemas") => {
+                self.handle_credential_schemas().await.map_err(|e| e.to_string())
+            }
+            (Method::POST, "/api/credentials/endpoints") => {
+                self.handle_create_endpoint(req).await.map_err(|e| e.to_string())
+            }
+            (Method::POST, p)
+                if p.starts_with("/api/credentials/endpoints/") && p.ends_with("/credential") =>
+            {
+                self.handle_store_credential(req, path)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+            (Method::GET, p) if p == "/api/sessions" || p.starts_with("/api/sessions?") => {
+                self.handle_list_sessions(req).await.map_err(|e| e.to_string())
+            }
+            (Method::POST, "/api/sessions") => {
+                self.handle_create_session(req).await.map_err(|e| e.to_string())
+            }
+            (Method::DELETE, p) if p.starts_with("/api/sessions/") => {
+                self.handle_delete_session(path).await.map_err(|e| e.to_string())
+            }
+            (Method::GET, p) if p.starts_with("/api/sessions/") && p.ends_with("/messages") => {
+                self.handle_get_session_messages(path)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+            (Method::GET, "/api/cron/jobs") => {
+                self.handle_list_cron_jobs().await.map_err(|e| e.to_string())
+            }
+            (Method::PUT, p) if p.starts_with("/api/cron/jobs/") => {
+                self.handle_update_cron_job(req, path).await.map_err(|e| e.to_string())
+            }
+            (Method::DELETE, p) if p.starts_with("/api/cron/jobs/") => {
+                self.handle_delete_cron_job(path).await.map_err(|e| e.to_string())
+            }
+            (Method::POST, p) if p.starts_with("/api/cron/jobs/") && p.ends_with("/trigger") => {
+                self.handle_trigger_cron_job(path).await.map_err(|e| e.to_string())
+            }
+            (Method::GET, "/api/executors") => {
+                self.handle_list_executors().await.map_err(|e| e.to_string())
+            }
+            _ => Ok(Self::json_error(
+                &format!("Unsupported WS API route: {method_label} {path}"),
+                StatusCode::NOT_FOUND,
+            )),
         }
     }
 
@@ -5039,10 +5214,14 @@ impl Gateway {
     }
 
     /// Handle create agent request
-    async fn handle_create_agent(
+    async fn handle_create_agent<B>(
         &self,
-        req: Request<IncomingBody>,
-    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        req: Request<B>,
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error>
+    where
+        B: hyper::body::Body<Data = hyper::body::Bytes> + Send,
+        B::Error: std::fmt::Debug,
+    {
         let body = match req.collect().await {
             Ok(collected) => collected.to_bytes(),
             Err(_) => {
@@ -5194,10 +5373,14 @@ impl Gateway {
     }
 
     /// Handle update agent request
-    async fn handle_update_agent(
+    async fn handle_update_agent<B>(
         &self,
-        req: Request<IncomingBody>,
-    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        req: Request<B>,
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error>
+    where
+        B: hyper::body::Body<Data = hyper::body::Bytes> + Send,
+        B::Error: std::fmt::Debug,
+    {
         let path = req.uri().path().to_string();
         let agent_id = path.strip_prefix("/api/agents/").unwrap_or("").to_string();
 
@@ -5870,10 +6053,14 @@ impl Gateway {
             .unwrap())
     }
 
-    async fn handle_create_cron_job(
+    async fn handle_create_cron_job<B>(
         &self,
-        req: Request<IncomingBody>,
-    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        req: Request<B>,
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error>
+    where
+        B: hyper::body::Body<Data = hyper::body::Bytes> + Send,
+        B::Error: std::fmt::Debug,
+    {
         let body = match req.collect().await {
             Ok(collected) => collected.to_bytes(),
             Err(_) => {
@@ -5950,11 +6137,15 @@ impl Gateway {
         }
     }
 
-    async fn handle_update_cron_job(
+    async fn handle_update_cron_job<B>(
         &self,
-        req: Request<IncomingBody>,
+        req: Request<B>,
         path: &str,
-    ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+    ) -> std::result::Result<Response<GatewayBody>, hyper::Error>
+    where
+        B: hyper::body::Body<Data = hyper::body::Bytes> + Send,
+        B::Error: std::fmt::Debug,
+    {
         let _job_id = path.strip_prefix("/api/cron/jobs/").unwrap_or("");
         let body = match req.collect().await {
             Ok(collected) => collected.to_bytes(),

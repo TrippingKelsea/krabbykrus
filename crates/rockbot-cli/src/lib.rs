@@ -736,19 +736,10 @@ pub async fn run(cli: Cli) -> Result<()> {
                     config.client.gateway_host, config.client.client_port
                 ))
             };
-            let gateway_http_url = if gateway.is_some() {
-                rockbot_client::ws_url_to_http(&gateway_url)
-            } else {
-                format!(
-                    "https://{}:{}",
-                    config.client.gateway_host, config.client.https_port
-                )
-            };
             rockbot_tui::run_app(
                 config_path.clone(),
                 config.credentials.vault_path,
                 gateway_url,
-                gateway_http_url,
             )
             .await
         }

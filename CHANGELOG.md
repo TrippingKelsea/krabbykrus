@@ -44,6 +44,9 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
   `ws-over-noise` and `stream-over-noise` enforcement modes
 - **Gateway API**: `GET /api/executors` for listing connected remote executors,
   their identities, advertised working directories, and capability sets
+- **WebSocket control plane**: native clients now tunnel gateway management/data
+  requests over the client-listener WebSocket instead of mixing WS on the
+  client listener with REST calls on the public listener
 - **Config**: Rich TUI theme token configuration via `[tui.theme]`
   - RGBA token overrides for border, text, AI/thinking/tool text, accents, graphs, and backgrounds
   - Backward-compatible preset resolution from legacy `color_theme`
@@ -82,6 +85,9 @@ Release channels: `v0.2.16` (development), `v0.2.16-preview`, `v0.2.16-release`.
 - **Web and enrollment access**: browser access and client enrollment no longer
   depend on weakening client-certificate requirements for the dedicated client
   listener
+- **TUI transport split bug**: provider loading, agent loading, session creation,
+  cron actions, context-file operations, and provider credential saves no longer
+  fail by accidentally targeting the wrong listener port
 - **Gateway startup**: Session, cron, and agent-persistence stores can now use
   PKI-managed node-local storage keys through encrypted redb open paths
 - **Gateway WebSocket**: agent messages no longer block the connection read loop,

@@ -8,10 +8,12 @@
 use futures_util::{SinkExt, StreamExt};
 use rockbot_config::PkiConfig;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
+use std::time::Duration;
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tracing::{debug, info, warn};
 
 /// Summary of a tool call returned in an agent response.
@@ -103,6 +105,13 @@ pub enum GatewayEvent {
         session_id: String,
         workspace_path: String,
     },
+    /// Response to a generic WS API request.
+    ApiResponse {
+        request_id: String,
+        status: u16,
+        body: String,
+        content_type: Option<String>,
+    },
 }
 
 /// Token usage info attached to an agent response.
@@ -114,6 +123,7 @@ pub struct TokenUsageInfo {
 }
 
 /// Gateway client that maintains a WebSocket connection and emits events.
+#[derive(Clone)]
 pub struct GatewayClient {
     /// Send raw text over the WebSocket.
     ws_tx: Arc<tokio::sync::RwLock<Option<mpsc::UnboundedSender<String>>>>,
@@ -121,6 +131,16 @@ pub struct GatewayClient {
     event_tx: broadcast::Sender<GatewayEvent>,
     /// Whether the WS is currently connected.
     connected: Arc<AtomicBool>,
+    /// In-flight WS API requests waiting on a response.
+    pending_api_requests: Arc<Mutex<HashMap<String, oneshot::Sender<ApiResponse>>>>,
+}
+
+/// Structured response returned by the gateway WS API tunnel.
+#[derive(Debug, Clone)]
+pub struct ApiResponse {
+    pub status: u16,
+    pub body: String,
+    pub content_type: Option<String>,
 }
 
 impl GatewayClient {
@@ -139,17 +159,19 @@ impl GatewayClient {
         let ws_tx: Arc<tokio::sync::RwLock<Option<mpsc::UnboundedSender<String>>>> =
             Arc::new(tokio::sync::RwLock::new(None));
         let connected = Arc::new(AtomicBool::new(false));
+        let pending_api_requests = Arc::new(Mutex::new(HashMap::new()));
 
         let client = Self {
             ws_tx: Arc::clone(&ws_tx),
             event_tx: event_tx.clone(),
             connected: Arc::clone(&connected),
+            pending_api_requests: Arc::clone(&pending_api_requests),
         };
 
         let url = ws_url.to_string();
         let pki = pki.cloned();
         tokio::spawn(async move {
-            Self::run_connection(url, ws_tx, event_tx, connected, pki).await;
+            Self::run_connection(url, ws_tx, event_tx, connected, pending_api_requests, pki).await;
         });
 
         client
@@ -200,6 +222,66 @@ impl GatewayClient {
     /// Send a ping keepalive.
     pub async fn send_ping(&self) -> Result<(), ClientError> {
         self.send_raw(r#"{"type":"ping"}"#.to_string()).await
+    }
+
+    /// Send a management/data API request over the native WS control plane.
+    pub async fn send_api_request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<ApiResponse, ClientError> {
+        self.wait_for_connection(Duration::from_secs(5)).await?;
+
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel();
+        self.pending_api_requests
+            .lock()
+            .await
+            .insert(request_id.clone(), tx);
+
+        let msg = serde_json::json!({
+            "type": "api_request",
+            "request_id": request_id,
+            "method": method,
+            "path": path,
+            "body": body,
+        });
+
+        if let Err(err) = self
+            .send_raw(serde_json::to_string(&msg).map_err(|_| ClientError::Disconnected)?)
+            .await
+        {
+            self.pending_api_requests.lock().await.remove(
+                msg.get("request_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+            );
+            return Err(err);
+        }
+
+        match tokio::time::timeout(Duration::from_secs(10), rx).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_)) => Err(ClientError::Disconnected),
+            Err(_) => {
+                self.pending_api_requests
+                    .lock()
+                    .await
+                    .remove(msg.get("request_id").and_then(serde_json::Value::as_str).unwrap_or_default());
+                Err(ClientError::Timeout)
+            }
+        }
+    }
+
+    async fn wait_for_connection(&self, timeout: Duration) -> Result<(), ClientError> {
+        let start = std::time::Instant::now();
+        while !self.is_connected() {
+            if start.elapsed() >= timeout {
+                return Err(ClientError::Timeout);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Ok(())
     }
 
     /// Get a clonable sender handle for raw WS messages.
@@ -364,6 +446,7 @@ impl GatewayClient {
         ws_tx: Arc<tokio::sync::RwLock<Option<mpsc::UnboundedSender<String>>>>,
         event_tx: broadcast::Sender<GatewayEvent>,
         connected: Arc<AtomicBool>,
+        pending_api_requests: Arc<Mutex<HashMap<String, oneshot::Sender<ApiResponse>>>>,
         pki: Option<PkiConfig>,
     ) {
         // Build candidate URLs: primary first, then fallback(s)
@@ -427,7 +510,7 @@ impl GatewayClient {
                 inbound = source.next() => {
                     match inbound {
                         Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
-                            Self::parse_and_emit(&event_tx, &text);
+                            Self::parse_and_emit(&event_tx, &pending_api_requests, &text).await;
                         }
                         Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) | None => {
                             info!("WebSocket closed by server");
@@ -451,11 +534,16 @@ impl GatewayClient {
         let _ = event_tx.send(GatewayEvent::Disconnected {
             reason: "Connection closed".to_string(),
         });
+        pending_api_requests.lock().await.clear();
         info!("WebSocket disconnected");
     }
 
     /// Parse a WebSocket JSON message and emit the corresponding event.
-    fn parse_and_emit(event_tx: &broadcast::Sender<GatewayEvent>, text: &str) {
+    async fn parse_and_emit(
+        event_tx: &broadcast::Sender<GatewayEvent>,
+        pending_api_requests: &Arc<Mutex<HashMap<String, oneshot::Sender<ApiResponse>>>>,
+        text: &str,
+    ) {
         let json: serde_json::Value = match serde_json::from_str(text) {
             Ok(v) => v,
             Err(e) => {
@@ -772,6 +860,37 @@ impl GatewayClient {
                     workspace_path,
                 }
             }
+            "api_response" => {
+                let request_id = json
+                    .get("request_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if request_id.is_empty() {
+                    return;
+                }
+                let response = ApiResponse {
+                    status: json.get("status").and_then(|v| v.as_u64()).unwrap_or(500) as u16,
+                    body: json
+                        .get("body")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    content_type: json
+                        .get("content_type")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                };
+                if let Some(tx) = pending_api_requests.lock().await.remove(&request_id) {
+                    let _ = tx.send(response.clone());
+                }
+                GatewayEvent::ApiResponse {
+                    request_id,
+                    status: response.status,
+                    body: response.body,
+                    content_type: response.content_type,
+                }
+            }
             other => {
                 debug!("Unhandled WebSocket message type: {other}");
                 return;
@@ -806,6 +925,8 @@ impl GatewaySender {
 pub enum ClientError {
     #[error("WebSocket disconnected")]
     Disconnected,
+    #[error("WebSocket request timed out")]
+    Timeout,
     #[error("TLS configuration error: {0}")]
     TlsConfig(String),
 }
@@ -877,11 +998,12 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
 
-    #[test]
-    fn test_parse_stream_chunk() {
+    #[tokio::test]
+    async fn test_parse_stream_chunk() {
         let (tx, mut rx) = broadcast::channel(16);
+        let pending = Arc::new(Mutex::new(HashMap::new()));
         let json = r#"{"type":"stream_chunk","session_key":"s1","delta":"hello"}"#;
-        GatewayClient::parse_and_emit(&tx, json);
+        GatewayClient::parse_and_emit(&tx, &pending, json).await;
         let event = rx.try_recv().unwrap();
         match event {
             GatewayEvent::StreamChunk { session_key, delta } => {
@@ -892,11 +1014,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_parse_agent_response() {
+    #[tokio::test]
+    async fn test_parse_agent_response() {
         let (tx, mut rx) = broadcast::channel(16);
+        let pending = Arc::new(Mutex::new(HashMap::new()));
         let json = r#"{"type":"agent_response","session_key":"s1","content":"hi","tool_calls":[]}"#;
-        GatewayClient::parse_and_emit(&tx, json);
+        GatewayClient::parse_and_emit(&tx, &pending, json).await;
         let event = rx.try_recv().unwrap();
         match event {
             GatewayEvent::AgentResponse {
@@ -913,27 +1036,30 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_parse_pong() {
+    #[tokio::test]
+    async fn test_parse_pong() {
         let (tx, mut rx) = broadcast::channel(16);
-        GatewayClient::parse_and_emit(&tx, r#"{"type":"pong"}"#);
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        GatewayClient::parse_and_emit(&tx, &pending, r#"{"type":"pong"}"#).await;
         match rx.try_recv().unwrap() {
             GatewayEvent::Pong => {}
             _ => panic!("expected Pong"),
         }
     }
 
-    #[test]
-    fn test_parse_unknown_type() {
+    #[tokio::test]
+    async fn test_parse_unknown_type() {
         let (tx, mut rx) = broadcast::channel(16);
-        GatewayClient::parse_and_emit(&tx, r#"{"type":"something_new"}"#);
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        GatewayClient::parse_and_emit(&tx, &pending, r#"{"type":"something_new"}"#).await;
         assert!(rx.try_recv().is_err()); // No event emitted
     }
 
-    #[test]
-    fn test_parse_invalid_json() {
+    #[tokio::test]
+    async fn test_parse_invalid_json() {
         let (tx, mut rx) = broadcast::channel(16);
-        GatewayClient::parse_and_emit(&tx, "not json");
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        GatewayClient::parse_and_emit(&tx, &pending, "not json").await;
         assert!(rx.try_recv().is_err());
     }
 

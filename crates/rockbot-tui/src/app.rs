@@ -144,12 +144,11 @@ impl App {
         config_path: PathBuf,
         vault_path: PathBuf,
         gateway_url: String,
-        gateway_http_url: String,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
 
         Self {
-            state: AppState::new(config_path, vault_path, gateway_url, gateway_http_url, tx),
+            state: AppState::new(config_path, vault_path, gateway_url, tx),
             rx,
             effect_state: EffectState::new(),
             last_frame: Instant::now(),
@@ -203,7 +202,8 @@ impl App {
             }
         }
 
-        // Spawn background tasks for initial data loading
+        // Establish WS control plane first, then load gateway-backed state over it.
+        self.spawn_ws_connect();
         self.spawn_gateway_check();
         self.spawn_agents_load();
         self.spawn_vault_check();
@@ -212,7 +212,6 @@ impl App {
         self.spawn_credential_schemas_load();
         self.spawn_sessions_load();
         self.spawn_remote_executors_load();
-        self.spawn_ws_connect();
         self.spawn_keybinding_watch();
         Ok(())
     }
@@ -365,10 +364,12 @@ impl App {
 
     /// Spawn a task to check gateway status
     fn spawn_gateway_check(&self) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match check_gateway_status(&gw).await {
+            match check_gateway_status(&client).await {
                 Ok(status) => {
                     let _ = tx.send(Message::GatewayStatus(status));
                 }
@@ -381,11 +382,12 @@ impl App {
 
     /// Spawn a task to load agents
     fn spawn_agents_load(&self) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
-        let config_path = self.state.config_path.clone();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match load_agents(&config_path, &gw).await {
+            match load_agents(&client).await {
                 Ok(agents) => {
                     let _ = tx.send(Message::AgentsLoaded(agents));
                 }
@@ -398,11 +400,13 @@ impl App {
 
     /// Spawn a task to load cron jobs from gateway
     fn spawn_cron_jobs_load(&mut self) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
-        let gw = self.state.gateway_http_url.clone();
         self.state.cron_loading = true;
         tokio::spawn(async move {
-            match load_cron_jobs_from_gateway(&gw).await {
+            match load_cron_jobs_from_gateway(&client).await {
                 Ok(jobs) => {
                     let _ = tx.send(Message::CronJobsLoaded(jobs));
                 }
@@ -414,11 +418,13 @@ impl App {
     }
 
     fn spawn_cron_job_toggle(&self, job_id: &str, enabled: bool) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
         let job_id = job_id.to_string();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match toggle_cron_job(&gw, &job_id, enabled).await {
+            match toggle_cron_job(&client, &job_id, enabled).await {
                 Ok(()) => {
                     let _ = tx.send(Message::CronJobToggled(job_id, enabled));
                 }
@@ -430,11 +436,13 @@ impl App {
     }
 
     fn spawn_cron_job_delete(&self, job_id: &str) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
         let job_id = job_id.to_string();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match delete_cron_job(&gw, &job_id).await {
+            match delete_cron_job(&client, &job_id).await {
                 Ok(()) => {
                     let _ = tx.send(Message::CronJobDeleted(job_id));
                 }
@@ -446,11 +454,13 @@ impl App {
     }
 
     fn spawn_cron_job_trigger(&self, job_id: &str) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
         let job_id = job_id.to_string();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match trigger_cron_job(&gw, &job_id).await {
+            match trigger_cron_job(&client, &job_id).await {
                 Ok(()) => {
                     let _ = tx.send(Message::SetStatus("Cron job triggered".to_string(), false));
                 }
@@ -513,10 +523,12 @@ impl App {
 
     /// Spawn a task to load credential schemas from gateway
     fn spawn_credential_schemas_load(&self) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match load_credential_schemas(&gw).await {
+            match load_credential_schemas(&client).await {
                 Ok(schemas) if !schemas.is_empty() => {
                     let _ = tx.send(Message::CredentialSchemasLoaded(schemas));
                 }
@@ -527,10 +539,12 @@ impl App {
 
     /// Spawn a task to load providers from gateway
     fn spawn_providers_load(&self) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match load_providers_from_gateway(&gw).await {
+            match load_providers_from_gateway(&client).await {
                 Ok(providers) if !providers.is_empty() => {
                     let _ = tx.send(Message::ModelsLoaded(providers));
                 }
@@ -543,10 +557,12 @@ impl App {
 
     /// Spawn a task to load sessions from gateway
     fn spawn_sessions_load(&self) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match load_sessions_from_gateway(&gw).await {
+            match load_sessions_from_gateway(&client).await {
                 Ok(sessions) => {
                     let _ = tx.send(Message::SessionsLoaded(sessions));
                 }
@@ -559,10 +575,12 @@ impl App {
 
     /// Spawn a task to load connected remote executors from the gateway.
     fn spawn_remote_executors_load(&self) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match load_remote_executors_from_gateway(&gw).await {
+            match load_remote_executors_from_gateway(&client).await {
                 Ok(executors) => {
                     let _ = tx.send(Message::RemoteExecutorsLoaded(executors));
                 }
@@ -2335,15 +2353,17 @@ impl App {
     fn spawn_gateway_control(&self, action: &str) {
         let tx = self.state.tx.clone();
         let action = action.to_string();
-        let gw = self.state.gateway_http_url.clone();
+        let client = self.gateway_client.clone();
         tokio::spawn(async move {
             match run_gateway_control(&action).await {
                 Ok(msg) => {
                     let _ = tx.send(Message::SetStatus(msg, false));
                     // Refresh gateway status after action
                     tokio::time::sleep(Duration::from_millis(500)).await;
-                    if let Ok(status) = check_gateway_status(&gw).await {
-                        let _ = tx.send(Message::GatewayStatus(status));
+                    if let Some(client) = client {
+                        if let Ok(status) = check_gateway_status(&client).await {
+                            let _ = tx.send(Message::GatewayStatus(status));
+                        }
                     }
                 }
                 Err(e) => {
@@ -2361,13 +2381,15 @@ impl App {
 
     /// Test a provider via the gateway API (POST /api/providers/{id}/test)
     fn spawn_model_test_via_gateway(&self, provider_id: &str, provider_name: &str) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
         let id = provider_id.to_string();
         let name = provider_name.to_string();
-        let gw = self.state.gateway_http_url.clone();
 
         tokio::spawn(async move {
-            match test_provider_via_gateway(&gw, &id).await {
+            match test_provider_via_gateway(&client, &id).await {
                 Ok((models_found, _)) => {
                     let _ = tx.send(Message::SetStatus(
                         format!("✅ {name}: connection OK ({models_found} models)"),
@@ -2383,11 +2405,13 @@ impl App {
 
     /// Load message history for a session from the gateway
     fn spawn_load_session_messages(&self, session_key: &str) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
         let key = session_key.to_string();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match load_session_messages(&gw, &key).await {
+            match load_session_messages(&client, &key).await {
                 Ok(messages) => {
                     let _ = tx.send(Message::SessionMessagesLoaded(key, messages));
                 }
@@ -2435,11 +2459,13 @@ impl App {
     }
 
     fn spawn_kill_session(&self, session_key: &str) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
         let key = session_key.to_string();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match kill_session(&gw, &key).await {
+            match kill_session(&client, &key).await {
                 Ok(()) => {
                     let _ = tx.send(Message::SetStatus(
                         format!("✅ Session archived: {key}"),
@@ -2952,10 +2978,18 @@ impl App {
         base_url: String,
         secret: String,
     ) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match save_provider_via_gateway(&gw, &provider_name, &endpoint_type, &base_url, &secret)
+            match save_provider_via_gateway(
+                &client,
+                &provider_name,
+                &endpoint_type,
+                &base_url,
+                &secret,
+            )
                 .await
             {
                 Ok(()) => {
@@ -3144,10 +3178,12 @@ impl App {
     }
 
     fn spawn_create_session(&self, agent_id: Option<String>, model: Option<String>) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
-        let gw = self.state.gateway_http_url.clone();
         tokio::spawn(async move {
-            match create_session_via_gateway(&gw, agent_id.as_deref(), model.as_deref()).await {
+            match create_session_via_gateway(&client, agent_id.as_deref(), model.as_deref()).await {
                 Ok(session_id) => {
                     let _ = tx.send(Message::SessionCreated(session_id));
                     let _ = tx.send(Message::ReloadSessions);
@@ -3159,7 +3195,7 @@ impl App {
         });
     }
 
-    /// Save agent via gateway API, falling back to direct config file edit
+    /// Save agent via the gateway WS control plane.
     fn save_agent_to_config(&mut self, state: &EditAgentState) {
         // Build the JSON body for the gateway API
         let mut body = serde_json::Map::new();
@@ -3225,60 +3261,43 @@ impl App {
         let is_edit = state.is_edit;
         let agent_id = state.id.clone();
         let tx = self.state.tx.clone();
-        let config_path = self.state.config_path.clone();
-        let gateway_url = self.state.gateway_http_url.clone();
+        let client = self.gateway_client.clone();
 
-        // Try gateway API first, fall back to direct config file edit
         tokio::spawn(async move {
-            let client = reqwest::Client::builder()
-                .danger_accept_invalid_certs(true)
-                .timeout(std::time::Duration::from_secs(5))
-                .build()
-                .unwrap();
+            let Some(client) = client else {
+                let _ = tx.send(Message::AgentSaveError(
+                    "Gateway WebSocket is not connected".to_string(),
+                ));
+                return;
+            };
 
-            let gateway_result = if is_edit {
-                client
-                    .put(format!("{gateway_url}/api/agents/{agent_id}"))
-                    .json(&json_body)
-                    .send()
-                    .await
+            let gateway_result: Result<rockbot_client::client::ApiResponse> = if is_edit {
+                ws_api_request_json(
+                    &client,
+                    "PUT",
+                    &format!("/api/agents/{agent_id}"),
+                    Some(json_body),
+                )
+                .await
             } else {
-                client
-                    .post(format!("{gateway_url}/api/agents"))
-                    .json(&json_body)
-                    .send()
-                    .await
+                ws_api_request_json(&client, "POST", "/api/agents", Some(json_body)).await
             };
 
             match gateway_result {
-                Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 202 => {
+                Ok(resp) if matches!(resp.status, 200 | 201 | 202) => {
                     let action = if is_edit { "updated" } else { "created" };
                     let _ = tx.send(Message::AgentSaved(agent_id));
                     let _ = tx.send(Message::SetStatus(format!("Agent {action}"), false));
                     let _ = tx.send(Message::ReloadAgents);
                 }
                 Ok(resp) => {
-                    let err_text = resp.text().await.unwrap_or_default();
                     let _ = tx.send(Message::AgentSaveError(format!(
-                        "Gateway error: {err_text}"
+                        "Gateway error: {}",
+                        extract_api_error(&resp.body)
                     )));
                 }
-                Err(_) => {
-                    // Gateway unreachable — fall back to direct config file edit
-                    match save_agent_to_config_file(&config_path, &json_body, is_edit, &agent_id) {
-                        Ok(()) => {
-                            let action = if is_edit { "updated" } else { "created" };
-                            let _ = tx.send(Message::AgentSaved(agent_id));
-                            let _ = tx.send(Message::SetStatus(
-                                format!("Agent {action} (offline)"),
-                                false,
-                            ));
-                            let _ = tx.send(Message::ReloadAgents);
-                        }
-                        Err(e) => {
-                            let _ = tx.send(Message::AgentSaveError(e.to_string()));
-                        }
-                    }
+                Err(e) => {
+                    let _ = tx.send(Message::AgentSaveError(e.to_string()));
                 }
             }
         });
@@ -3291,90 +3310,6 @@ fn load_pki_config_from_file(config_path: &PathBuf) -> Option<PkiConfig> {
     let content = std::fs::read_to_string(config_path).ok()?;
     let config = rockbot_config::Config::from_toml(&content).ok()?;
     Some(config.effective_pki())
-}
-
-/// Direct config file save (fallback when gateway is unavailable)
-fn save_agent_to_config_file(
-    config_path: &PathBuf,
-    json_body: &serde_json::Value,
-    is_edit: bool,
-    agent_id: &str,
-) -> Result<()> {
-    let content = std::fs::read_to_string(config_path)?;
-    let mut doc: toml_edit::DocumentMut = content
-        .parse()
-        .map_err(|e| anyhow::anyhow!("Failed to parse config: {e}"))?;
-
-    if !doc.contains_key("agents") {
-        doc["agents"] = toml_edit::Item::Table(toml_edit::Table::new());
-    }
-
-    if is_edit {
-        if let Some(list) = doc["agents"]["list"].as_array_of_tables_mut() {
-            for table in list.iter_mut() {
-                if table.get("id").and_then(|v| v.as_str()) == Some(agent_id) {
-                    apply_agent_fields_to_table(table, json_body);
-                    break;
-                }
-            }
-        }
-    } else {
-        let mut new_agent = toml_edit::Table::new();
-        new_agent["id"] = toml_edit::value(agent_id);
-        apply_agent_fields_to_table(&mut new_agent, json_body);
-
-        if let Some(list) = doc["agents"]["list"].as_array_of_tables_mut() {
-            list.push(new_agent);
-        } else {
-            let mut arr = toml_edit::ArrayOfTables::new();
-            arr.push(new_agent);
-            doc["agents"]["list"] = toml_edit::Item::ArrayOfTables(arr);
-        }
-    }
-
-    std::fs::write(config_path, doc.to_string())?;
-    Ok(())
-}
-
-/// Apply JSON fields to a toml_edit table
-fn apply_agent_fields_to_table(table: &mut toml_edit::Table, json: &serde_json::Value) {
-    if let Some(model) = json.get("model").and_then(|v| v.as_str()) {
-        if model.is_empty() {
-            table.remove("model");
-        } else {
-            table["model"] = toml_edit::value(model);
-        }
-    }
-    if let Some(parent_id) = json.get("parent_id").and_then(|v| v.as_str()) {
-        if parent_id.is_empty() {
-            table.remove("parent_id");
-        } else {
-            table["parent_id"] = toml_edit::value(parent_id);
-        }
-    }
-    if let Some(workspace) = json.get("workspace").and_then(|v| v.as_str()) {
-        if workspace.is_empty() {
-            table.remove("workspace");
-        } else {
-            table["workspace"] = toml_edit::value(workspace);
-        }
-    }
-    if let Some(max_tool_calls) = json
-        .get("max_tool_calls")
-        .and_then(serde_json::Value::as_i64)
-    {
-        table["max_tool_calls"] = toml_edit::value(max_tool_calls);
-    }
-    if let Some(system_prompt) = json.get("system_prompt").and_then(|v| v.as_str()) {
-        if system_prompt.is_empty() {
-            table.remove("system_prompt");
-        } else {
-            table["system_prompt"] = toml_edit::value(system_prompt);
-        }
-    }
-    if let Some(enabled) = json.get("enabled").and_then(serde_json::Value::as_bool) {
-        table["enabled"] = toml_edit::value(enabled);
-    }
 }
 
 fn contains_point(rect: Rect, x: u16, y: u16) -> bool {
@@ -3842,21 +3777,28 @@ impl App {
     }
 
     fn fetch_context_files(&self, agent_id: &str) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
-        let gateway_url = self.state.gateway_http_url.clone();
-        let url = format!("{gateway_url}/api/agents/{}/files", agent_id);
         let agent_id = agent_id.to_string();
         tokio::spawn(async move {
-            match reqwest::get(&url).await {
-                Ok(resp) if resp.status().is_success() => {
-                    if let Ok(files) = resp.json::<Vec<ContextFileInfo>>().await {
+            match ws_api_request_json(&client, "GET", &format!("/api/agents/{agent_id}/files"), None)
+                .await
+            {
+                Ok(resp) if resp.status == 200 => {
+                    if let Ok(files) = serde_json::from_str::<Vec<ContextFileInfo>>(&resp.body) {
                         let _ = tx.send(Message::ContextFilesLoaded(agent_id, files));
+                    } else {
+                        let _ = tx.send(Message::ContextFileError(
+                            "Failed to parse file list".to_string(),
+                        ));
                     }
                 }
                 Ok(resp) => {
                     let _ = tx.send(Message::ContextFileError(format!(
                         "Failed to list files: {}",
-                        resp.status()
+                        extract_api_error(&resp.body)
                     )));
                 }
                 Err(e) => {
@@ -3869,15 +3811,23 @@ impl App {
     }
 
     fn fetch_context_file(&self, agent_id: &str, filename: &str) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
-        let gateway_url = self.state.gateway_http_url.clone();
-        let url = format!("{gateway_url}/api/agents/{}/files/{}", agent_id, filename);
         let agent_id = agent_id.to_string();
         let filename = filename.to_string();
         tokio::spawn(async move {
-            match reqwest::get(&url).await {
-                Ok(resp) if resp.status().is_success() => {
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+            match ws_api_request_json(
+                &client,
+                "GET",
+                &format!("/api/agents/{agent_id}/files/{filename}"),
+                None,
+            )
+            .await
+            {
+                Ok(resp) if resp.status == 200 => {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&resp.body) {
                         let content = json
                             .get("content")
                             .and_then(|v| v.as_str())
@@ -3889,7 +3839,7 @@ impl App {
                 Ok(resp) => {
                     let _ = tx.send(Message::ContextFileError(format!(
                         "Failed to load {filename}: {}",
-                        resp.status()
+                        extract_api_error(&resp.body)
                     )));
                 }
                 Err(e) => {
@@ -3902,22 +3852,29 @@ impl App {
     }
 
     fn save_context_file(&self, agent_id: &str, filename: &str, content: &str) {
+        let Some(client) = self.gateway_client.clone() else {
+            return;
+        };
         let tx = self.state.tx.clone();
-        let gateway_url = self.state.gateway_http_url.clone();
-        let url = format!("{gateway_url}/api/agents/{}/files/{}", agent_id, filename);
         let agent_id = agent_id.to_string();
         let filename = filename.to_string();
         let body = serde_json::json!({ "content": content });
         tokio::spawn(async move {
-            let client = http_client();
-            match client.put(&url).json(&body).send().await {
-                Ok(resp) if resp.status().is_success() => {
+            match ws_api_request_json(
+                &client,
+                "PUT",
+                &format!("/api/agents/{agent_id}/files/{filename}"),
+                Some(body),
+            )
+            .await
+            {
+                Ok(resp) if resp.status == 200 => {
                     let _ = tx.send(Message::ContextFileSaved(agent_id, filename));
                 }
                 Ok(resp) => {
                     let _ = tx.send(Message::ContextFileError(format!(
                         "Failed to save {filename}: {}",
-                        resp.status()
+                        extract_api_error(&resp.body)
                     )));
                 }
                 Err(e) => {
@@ -5594,7 +5551,6 @@ pub async fn run_app(
     config_path: PathBuf,
     vault_path: PathBuf,
     gateway_url: String,
-    gateway_http_url: String,
 ) -> Result<()> {
     use crate::event::{spawn_terminal_input, AppEvent, TerminalGuard};
 
@@ -5603,7 +5559,7 @@ pub async fn run_app(
     let (_guard, mut terminal) = TerminalGuard::enter()?;
 
     // Create and initialize app
-    let mut app = App::new(config_path, vault_path, gateway_url, gateway_http_url);
+    let mut app = App::new(config_path, vault_path, gateway_url);
     app.init().await?;
 
     // Unified event channel — terminal input task sends AppEvents here
@@ -6343,7 +6299,14 @@ async fn handle_gateway_event(
                 connected: true,
                 reason: None,
             });
+            let _ = tx.send(Message::ReloadAgents);
+            let _ = tx.send(Message::ReloadProviders);
+            let _ = tx.send(Message::ReloadSessions);
             if let Some(client) = client {
+                let health_client = client.clone();
+                tokio::spawn(async move {
+                    let _ = health_client.send_health_check().await;
+                });
                 let sender = client.sender();
                 tokio::spawn(async move {
                     let hostname = std::env::var("HOSTNAME")
@@ -6439,6 +6402,7 @@ async fn handle_gateway_event(
         GatewayEvent::NoiseHandshakeStep { .. }
         | GatewayEvent::RemoteCapabilitiesAck { .. }
         | GatewayEvent::RemoteToolRequest { .. } => {}
+        GatewayEvent::ApiResponse { .. } => {}
     }
 }
 
@@ -6447,121 +6411,70 @@ use crate::state::{
     GatewayStatus, ModelProvider, ModelProviderModel, RemoteExecutorInfo, VaultStatus,
 };
 
-/// Build a reqwest client that accepts self-signed TLS certificates.
-///
-/// All TUI HTTP calls go through this so that self-signed gateway certs work.
-fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .build()
-        .unwrap_or_default()
+async fn ws_api_request_json(
+    client: &rockbot_client::GatewayClient,
+    method: &str,
+    path: &str,
+    body: Option<serde_json::Value>,
+) -> Result<rockbot_client::client::ApiResponse> {
+    client
+        .send_api_request(method, path, body)
+        .await
+        .map_err(Into::into)
 }
 
-async fn check_gateway_status(gateway_url: &str) -> Result<GatewayStatus> {
-    use tokio::time::timeout;
-
-    // Try to fetch actual status from the gateway API
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .connect_timeout(Duration::from_millis(500))
-        .timeout(Duration::from_secs(3))
-        .build()
-        .unwrap_or_else(|_| http_client());
-    let status_result = timeout(
-        Duration::from_secs(3),
-        client.get(format!("{gateway_url}/api/status")).send(),
-    )
-    .await;
-
-    match status_result {
-        Ok(Ok(response)) if response.status().is_success() => {
-            // Parse the JSON response
-            if let Ok(json) = response.json::<serde_json::Value>().await {
-                return Ok(GatewayStatus {
-                    connected: true,
-                    version: json
-                        .get("version")
-                        .and_then(|v| v.as_str())
-                        .map(String::from),
-                    uptime_secs: json.get("uptime_secs").and_then(serde_json::Value::as_u64),
-                    active_connections: json
-                        .get("active_connections")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0) as usize,
-                    active_sessions: json
-                        .get("active_sessions")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0) as usize,
-                    pending_agents: json
-                        .get("pending_agents")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0) as usize,
-                });
-            }
-            // Connected but couldn't parse response
-            Ok(GatewayStatus {
-                connected: true,
-                version: Some("unknown".to_string()),
-                uptime_secs: None,
-                active_connections: 0,
-                active_sessions: 0,
-                pending_agents: 0,
-            })
-        }
-        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {
-            // Not connected or error
-            Ok(GatewayStatus {
-                connected: false,
-                version: None,
-                uptime_secs: None,
-                active_connections: 0,
-                active_sessions: 0,
-                pending_agents: 0,
-            })
-        }
-    }
+fn extract_api_error(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|json| json.get("error").and_then(|v| v.as_str()).map(String::from))
+        .unwrap_or_else(|| body.to_string())
 }
 
-async fn load_remote_executors_from_gateway(gateway_url: &str) -> Result<Vec<RemoteExecutorInfo>> {
-    let response = http_client()
-        .get(format!("{gateway_url}/api/executors"))
-        .send()
-        .await?;
-    if !response.status().is_success() {
-        anyhow::bail!("gateway returned {}", response.status());
+async fn check_gateway_status(client: &rockbot_client::GatewayClient) -> Result<GatewayStatus> {
+    let response = ws_api_request_json(client, "GET", "/api/status", None).await?;
+    if response.status != 200 {
+        anyhow::bail!("{}", extract_api_error(&response.body));
     }
-    Ok(response.json::<Vec<RemoteExecutorInfo>>().await?)
+    let json: serde_json::Value = serde_json::from_str(&response.body)?;
+    Ok(GatewayStatus {
+        connected: true,
+        version: json
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        uptime_secs: json.get("uptime_secs").and_then(serde_json::Value::as_u64),
+        active_connections: json
+            .get("active_connections")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize,
+        active_sessions: json
+            .get("active_sessions")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize,
+        pending_agents: json
+            .get("pending_agents")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize,
+    })
 }
 
-/// Load agents from the gateway API, falling back to the config file if the gateway is unreachable.
-async fn load_agents(config_path: &PathBuf, gateway_url: &str) -> Result<Vec<AgentInfo>> {
-    // Try loading from gateway first
-    if let Ok(agents) = load_agents_from_gateway(gateway_url).await {
-        if !agents.is_empty() {
-            return Ok(agents);
-        }
+async fn load_remote_executors_from_gateway(
+    client: &rockbot_client::GatewayClient,
+) -> Result<Vec<RemoteExecutorInfo>> {
+    let response = ws_api_request_json(client, "GET", "/api/executors", None).await?;
+    if response.status != 200 {
+        anyhow::bail!("{}", extract_api_error(&response.body));
     }
-
-    // Fallback: read from config file directly
-    load_agents_from_config(config_path).await
+    Ok(serde_json::from_str::<Vec<RemoteExecutorInfo>>(&response.body)?)
 }
 
-/// Load agents from the gateway's /api/agents endpoint
-async fn load_agents_from_gateway(gateway_url: &str) -> Result<Vec<AgentInfo>> {
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(3))
-        .build()?;
-
-    let resp = client
-        .get(format!("{gateway_url}/api/agents"))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("Gateway returned {}", resp.status());
+async fn load_agents(client: &rockbot_client::GatewayClient) -> Result<Vec<AgentInfo>> {
+    let response = ws_api_request_json(client, "GET", "/api/agents", None).await?;
+    if response.status != 200 {
+        anyhow::bail!("{}", extract_api_error(&response.body));
     }
 
-    let items: Vec<serde_json::Value> = resp.json().await?;
+    let items: Vec<serde_json::Value> = serde_json::from_str(&response.body)?;
     let mut agents = Vec::new();
 
     for entry in &items {
@@ -6632,102 +6545,6 @@ async fn load_agents_from_gateway(gateway_url: &str) -> Result<Vec<AgentInfo>> {
             temperature,
             max_tokens,
             enabled,
-        });
-    }
-
-    Ok(agents)
-}
-
-/// Load agents from the TOML config file (fallback when gateway is unavailable)
-async fn load_agents_from_config(config_path: &PathBuf) -> Result<Vec<AgentInfo>> {
-    let content = tokio::fs::read_to_string(config_path).await?;
-    let doc: toml::Value = content
-        .parse()
-        .unwrap_or(toml::Value::Table(toml::map::Map::new()));
-
-    let mut agents = Vec::new();
-
-    if let Some(agents_table) = doc.get("agents") {
-        if let Some(list) = agents_table.get("list").and_then(|v| v.as_array()) {
-            for entry in list {
-                let id = entry
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if id.is_empty() {
-                    continue;
-                }
-
-                let model = entry
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let parent_id = entry
-                    .get("parent_id")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let system_prompt = entry
-                    .get("system_prompt")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let workspace = entry
-                    .get("workspace")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let max_tool_calls = entry
-                    .get("max_tool_calls")
-                    .and_then(toml::Value::as_integer)
-                    .map(|n| n as u32);
-                let temperature = entry
-                    .get("temperature")
-                    .and_then(toml::Value::as_float)
-                    .map(|n| n as f32);
-                let max_tokens = entry
-                    .get("max_tokens")
-                    .and_then(toml::Value::as_integer)
-                    .map(|n| n as u32);
-                let enabled = entry
-                    .get("enabled")
-                    .and_then(toml::Value::as_bool)
-                    .unwrap_or(true);
-
-                let status = if enabled {
-                    AgentStatus::Active
-                } else {
-                    AgentStatus::Disabled
-                };
-
-                agents.push(AgentInfo {
-                    id,
-                    model,
-                    status,
-                    session_count: 0,
-                    parent_id,
-                    system_prompt,
-                    workspace,
-                    max_tool_calls,
-                    temperature,
-                    max_tokens,
-                    enabled,
-                });
-            }
-        }
-    }
-
-    if agents.is_empty() {
-        agents.push(AgentInfo {
-            id: "default".to_string(),
-            model: Some("claude-sonnet-4-20250514".to_string()),
-            status: AgentStatus::Active,
-            session_count: 0,
-            parent_id: None,
-            system_prompt: None,
-            workspace: None,
-            max_tool_calls: None,
-            temperature: Some(0.3),
-            max_tokens: Some(16000),
-            enabled: true,
         });
     }
 
@@ -6836,22 +6653,16 @@ async fn check_vault_status(vault_path: &PathBuf) -> Result<VaultStatus> {
 
 /// Send a chat message via the gateway
 /// Truncate a tool result string for display
-/// Load cron jobs from the gateway API
-async fn load_cron_jobs_from_gateway(gateway_url: &str) -> Result<Vec<CronJobInfo>> {
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(3))
-        .build()?;
-
-    let resp = client
-        .get(format!("{gateway_url}/api/cron/jobs"))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("Gateway returned {}", resp.status());
+/// Load cron jobs from the gateway WS API.
+async fn load_cron_jobs_from_gateway(
+    client: &rockbot_client::GatewayClient,
+) -> Result<Vec<CronJobInfo>> {
+    let resp = ws_api_request_json(client, "GET", "/api/cron/jobs", None).await?;
+    if resp.status != 200 {
+        anyhow::bail!("{}", extract_api_error(&resp.body));
     }
 
-    let items: Vec<serde_json::Value> = resp.json().await?;
+    let items: Vec<serde_json::Value> = serde_json::from_str(&resp.body)?;
     let mut jobs = Vec::new();
 
     for entry in &items {
@@ -6944,51 +6755,43 @@ async fn load_cron_jobs_from_gateway(gateway_url: &str) -> Result<Vec<CronJobInf
     Ok(jobs)
 }
 
-async fn toggle_cron_job(gateway_url: &str, job_id: &str, enabled: bool) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(5))
-        .build()?;
-
-    let resp = client
-        .put(format!("{gateway_url}/api/cron/jobs/{job_id}"))
-        .json(&serde_json::json!({ "enabled": enabled }))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("Gateway returned {}", resp.status());
+async fn toggle_cron_job(
+    client: &rockbot_client::GatewayClient,
+    job_id: &str,
+    enabled: bool,
+) -> Result<()> {
+    let resp = ws_api_request_json(
+        client,
+        "PUT",
+        &format!("/api/cron/jobs/{job_id}"),
+        Some(serde_json::json!({ "enabled": enabled })),
+    )
+    .await?;
+    if resp.status != 200 {
+        anyhow::bail!("{}", extract_api_error(&resp.body));
     }
     Ok(())
 }
 
-async fn delete_cron_job(gateway_url: &str, job_id: &str) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(5))
-        .build()?;
-
-    let resp = client
-        .delete(format!("{gateway_url}/api/cron/jobs/{job_id}"))
-        .send()
+async fn delete_cron_job(client: &rockbot_client::GatewayClient, job_id: &str) -> Result<()> {
+    let resp = ws_api_request_json(client, "DELETE", &format!("/api/cron/jobs/{job_id}"), None)
         .await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("Gateway returned {}", resp.status());
+    if resp.status != 200 {
+        anyhow::bail!("{}", extract_api_error(&resp.body));
     }
     Ok(())
 }
 
-async fn trigger_cron_job(gateway_url: &str, job_id: &str) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(5))
-        .build()?;
-
-    let resp = client
-        .post(format!("{gateway_url}/api/cron/jobs/{job_id}/trigger"))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("Gateway returned {}", resp.status());
+async fn trigger_cron_job(client: &rockbot_client::GatewayClient, job_id: &str) -> Result<()> {
+    let resp = ws_api_request_json(
+        client,
+        "POST",
+        &format!("/api/cron/jobs/{job_id}/trigger"),
+        None,
+    )
+    .await?;
+    if resp.status != 200 {
+        anyhow::bail!("{}", extract_api_error(&resp.body));
     }
     Ok(())
 }
@@ -7024,16 +6827,19 @@ async fn run_gateway_control(action: &str) -> Result<String> {
     }
 }
 
-/// Test a provider connection via the gateway API
-async fn test_provider_via_gateway(gateway_url: &str, provider_id: &str) -> Result<(u64, String)> {
-    let client = http_client();
-    let response = client
-        .post(format!("{gateway_url}/api/providers/{provider_id}/test"))
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await?;
-
-    let body: serde_json::Value = response.json().await?;
+/// Test a provider connection via the gateway WS API.
+async fn test_provider_via_gateway(
+    client: &rockbot_client::GatewayClient,
+    provider_id: &str,
+) -> Result<(u64, String)> {
+    let response = ws_api_request_json(
+        client,
+        "POST",
+        &format!("/api/providers/{provider_id}/test"),
+        None,
+    )
+    .await?;
+    let body: serde_json::Value = serde_json::from_str(&response.body)?;
 
     let status = body["status"].as_str().unwrap_or("error");
     if status == "ok" {
@@ -7045,42 +6851,35 @@ async fn test_provider_via_gateway(gateway_url: &str, provider_id: &str) -> Resu
     }
 }
 
-/// Kill a session via gateway API
-async fn kill_session(gateway_url: &str, session_key: &str) -> Result<()> {
-    let client = http_client();
-    let response = client
-        .delete(format!("{gateway_url}/api/sessions/{session_key}"))
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await?;
+/// Archive a session via the gateway WS API.
+async fn kill_session(client: &rockbot_client::GatewayClient, session_key: &str) -> Result<()> {
+    let response =
+        ws_api_request_json(client, "DELETE", &format!("/api/sessions/{session_key}"), None)
+            .await?;
 
-    if response.status().is_success() || response.status().as_u16() == 404 {
+    if response.status == 200 || response.status == 404 {
         // 404 means session already gone, which is fine
         Ok(())
     } else {
-        Err(anyhow::anyhow!(
-            "Failed to kill session: {}",
-            response.status()
-        ))
+        Err(anyhow::anyhow!("Failed to kill session: {}", response.status))
     }
 }
 
-/// Load message history for a session from the gateway
-async fn load_session_messages(gateway_url: &str, session_key: &str) -> Result<Vec<ChatMessage>> {
-    use tokio::time::timeout;
-
-    let client = http_client();
-    let result = timeout(
-        Duration::from_secs(3),
-        client
-            .get(format!("{gateway_url}/api/sessions/{session_key}/messages"))
-            .send(),
+/// Load message history for a session via the gateway WS API.
+async fn load_session_messages(
+    client: &rockbot_client::GatewayClient,
+    session_key: &str,
+) -> Result<Vec<ChatMessage>> {
+    match ws_api_request_json(
+        client,
+        "GET",
+        &format!("/api/sessions/{session_key}/messages"),
+        None,
     )
-    .await;
-
-    match result {
-        Ok(Ok(response)) if response.status().is_success() => {
-            let json: serde_json::Value = response.json().await?;
+    .await
+    {
+        Ok(response) if response.status == 200 => {
+            let json: serde_json::Value = serde_json::from_str(&response.body)?;
             let messages = json
                 .get("messages")
                 .and_then(|v| v.as_array())
@@ -7152,80 +6951,71 @@ fn base64_encode(input: &[u8]) -> String {
     out
 }
 
-/// Save provider credentials via gateway API
+/// Save provider credentials via the gateway WS API.
 async fn save_provider_via_gateway(
-    gateway_url: &str,
+    client: &rockbot_client::GatewayClient,
     provider_name: &str,
     endpoint_type: &str,
     base_url: &str,
     secret: &str,
 ) -> Result<()> {
-    let client = http_client();
-
     // Step 1: Create endpoint
-    let ep_response = client
-        .post(format!("{gateway_url}/api/credentials/endpoints"))
-        .json(&serde_json::json!({
+    let ep_response = ws_api_request_json(
+        client,
+        "POST",
+        "/api/credentials/endpoints",
+        Some(serde_json::json!({
             "name": provider_name,
             "endpoint_type": endpoint_type,
             "base_url": base_url,
-        }))
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await?;
+        })),
+    )
+    .await?;
 
-    if !ep_response.status().is_success() {
-        let status = ep_response.status();
-        let body = ep_response.text().await.unwrap_or_default();
+    if ep_response.status != 201 {
         return Err(anyhow::anyhow!(
-            "Failed to create endpoint ({status}): {body}"
+            "Failed to create endpoint ({}): {}",
+            ep_response.status,
+            extract_api_error(&ep_response.body)
         ));
     }
 
-    let ep: serde_json::Value = ep_response.json().await?;
+    let ep: serde_json::Value = serde_json::from_str(&ep_response.body)?;
     let ep_id = ep["id"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("No endpoint ID in response"))?;
 
     // Step 2: Store credential (base64 encoded)
     let encoded_secret = base64_encode(secret.as_bytes());
-    let cred_response = client
-        .post(format!(
-            "{gateway_url}/api/credentials/endpoints/{ep_id}/credential"
-        ))
-        .json(&serde_json::json!({
+    let cred_response = ws_api_request_json(
+        client,
+        "POST",
+        &format!("/api/credentials/endpoints/{ep_id}/credential"),
+        Some(serde_json::json!({
             "credential_type": "bearer_token",
             "secret": encoded_secret,
-        }))
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await?;
+        })),
+    )
+    .await?;
 
-    if !cred_response.status().is_success() {
-        let status = cred_response.status();
-        let body = cred_response.text().await.unwrap_or_default();
+    if cred_response.status != 200 {
         return Err(anyhow::anyhow!(
-            "Failed to store credential ({status}): {body}"
+            "Failed to store credential ({}): {}",
+            cred_response.status,
+            extract_api_error(&cred_response.body)
         ));
     }
 
     Ok(())
 }
 
-/// Load providers from the gateway API
-async fn load_providers_from_gateway(gateway_url: &str) -> Result<Vec<ModelProvider>> {
-    use tokio::time::timeout;
-
-    let client = http_client();
-    let result = timeout(
-        Duration::from_secs(2),
-        client.get(format!("{gateway_url}/api/providers")).send(),
-    )
-    .await;
-
-    match result {
-        Ok(Ok(response)) if response.status().is_success() => {
-            let json: serde_json::Value = response.json().await?;
+/// Load providers from the gateway WS API.
+async fn load_providers_from_gateway(
+    client: &rockbot_client::GatewayClient,
+) -> Result<Vec<ModelProvider>> {
+    match ws_api_request_json(client, "GET", "/api/providers", None).await {
+        Ok(response) if response.status == 200 => {
+            let json: serde_json::Value = serde_json::from_str(&response.body)?;
             let providers = json
                 .get("providers")
                 .and_then(|v| v.as_array())
@@ -7303,22 +7093,13 @@ async fn load_providers_from_gateway(gateway_url: &str) -> Result<Vec<ModelProvi
     }
 }
 
-/// Load credential schemas from the gateway API
-async fn load_credential_schemas(gateway_url: &str) -> Result<Vec<CredentialSchemaInfo>> {
-    use tokio::time::timeout;
-
-    let client = http_client();
-    let result = timeout(
-        Duration::from_secs(2),
-        client
-            .get(format!("{gateway_url}/api/credentials/schemas"))
-            .send(),
-    )
-    .await;
-
-    match result {
-        Ok(Ok(response)) if response.status().is_success() => {
-            let json: serde_json::Value = response.json().await?;
+/// Load credential schemas from the gateway WS API.
+async fn load_credential_schemas(
+    client: &rockbot_client::GatewayClient,
+) -> Result<Vec<CredentialSchemaInfo>> {
+    match ws_api_request_json(client, "GET", "/api/credentials/schemas", None).await {
+        Ok(response) if response.status == 200 => {
+            let json: serde_json::Value = serde_json::from_str(&response.body)?;
             let schemas = json
                 .get("schemas")
                 .and_then(|v| v.as_array())
@@ -7384,20 +7165,13 @@ async fn load_credential_schemas(gateway_url: &str) -> Result<Vec<CredentialSche
     }
 }
 
-/// Load sessions from the gateway API
-async fn load_sessions_from_gateway(gateway_url: &str) -> Result<Vec<super::state::SessionInfo>> {
-    use tokio::time::timeout;
-
-    let client = http_client();
-    let result = timeout(
-        Duration::from_secs(2),
-        client.get(format!("{gateway_url}/api/sessions")).send(),
-    )
-    .await;
-
-    match result {
-        Ok(Ok(response)) if response.status().is_success() => {
-            let json: serde_json::Value = response.json().await?;
+/// Load sessions from the gateway WS API.
+async fn load_sessions_from_gateway(
+    client: &rockbot_client::GatewayClient,
+) -> Result<Vec<super::state::SessionInfo>> {
+    match ws_api_request_json(client, "GET", "/api/sessions", None).await {
+        Ok(response) if response.status == 200 => {
+            let json: serde_json::Value = serde_json::from_str(&response.body)?;
             let sessions = if let Some(arr) = json.as_array() {
                 arr.iter()
                     .filter_map(|s| {
@@ -7442,17 +7216,12 @@ async fn load_sessions_from_gateway(gateway_url: &str) -> Result<Vec<super::stat
     }
 }
 
-/// Create a session via the gateway API
+/// Create a session via the gateway WS API.
 async fn create_session_via_gateway(
-    gateway_url: &str,
+    client: &rockbot_client::GatewayClient,
     agent_id: Option<&str>,
     model: Option<&str>,
 ) -> Result<String> {
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(Duration::from_secs(5))
-        .build()?;
-
     let mut body = serde_json::Map::new();
     if let Some(id) = agent_id {
         body.insert(
@@ -7467,14 +7236,12 @@ async fn create_session_via_gateway(
         );
     }
 
-    let response = client
-        .post(format!("{gateway_url}/api/sessions"))
-        .json(&serde_json::Value::Object(body))
-        .send()
-        .await?;
+    let response =
+        ws_api_request_json(client, "POST", "/api/sessions", Some(serde_json::Value::Object(body)))
+            .await?;
 
-    if response.status().is_success() {
-        let json: serde_json::Value = response.json().await?;
+    if response.status == 201 {
+        let json: serde_json::Value = serde_json::from_str(&response.body)?;
         let session_id = json
             .get("id")
             .and_then(|v| v.as_str())
@@ -7482,8 +7249,10 @@ async fn create_session_via_gateway(
             .to_string();
         Ok(session_id)
     } else {
-        let err_text = response.text().await.unwrap_or_default();
-        Err(anyhow::anyhow!("Gateway error: {err_text}"))
+        Err(anyhow::anyhow!(
+            "Gateway error: {}",
+            extract_api_error(&response.body)
+        ))
     }
 }
 
