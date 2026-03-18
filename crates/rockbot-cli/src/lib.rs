@@ -625,6 +625,9 @@ pub enum DoctorCommands {
         /// Path to config file (defaults to standard location)
         #[arg(short, long)]
         config: Option<PathBuf>,
+        /// Also run the embedded Doctor AI explanation layer
+        #[arg(long, default_value_t = false)]
+        with_ai: bool,
     },
     /// Download/update the doctor AI model
     #[cfg(feature = "doctor-ai")]

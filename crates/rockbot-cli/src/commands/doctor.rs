@@ -24,9 +24,9 @@ pub async fn run(command: &Option<DoctorCommands>, config_path: &PathBuf) -> Res
             run_migrate(path).await
         }
         #[cfg(feature = "doctor-ai")]
-        Some(DoctorCommands::Storage { config }) => {
+        Some(DoctorCommands::Storage { config, with_ai }) => {
             let path = config.as_ref().unwrap_or(config_path);
-            run_storage(path).await
+            run_storage(path, *with_ai).await
         }
         #[cfg(feature = "doctor-ai")]
         Some(DoctorCommands::Download) => run_download().await,
@@ -228,7 +228,7 @@ async fn run_migrate(config_path: &PathBuf) -> Result<()> {
 }
 
 #[cfg(feature = "doctor-ai")]
-async fn run_storage(config_path: &PathBuf) -> Result<()> {
+async fn run_storage(config_path: &PathBuf, with_ai: bool) -> Result<()> {
     use rockbot_doctor::{inspect_storage, recommended_actions, summarize_report, DoctorAi};
     use std::time::Duration;
 
@@ -241,6 +241,12 @@ async fn run_storage(config_path: &PathBuf) -> Result<()> {
         println!("- {action}");
     }
     println!();
+
+    if !with_ai {
+        println!("Doctor AI Assessment:\n");
+        println!("Skipped. Re-run with `--with-ai` to ask the embedded model for an additional explanation.");
+        return Ok(());
+    }
 
     let raw_toml = tokio::fs::read_to_string(config_path).await.unwrap_or_default();
     let doctor_config = try_parse_doctor_config_from_raw(&raw_toml);
