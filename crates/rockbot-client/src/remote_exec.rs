@@ -523,7 +523,11 @@ impl RemoteExecutorRegistry {
 
         match result {
             Ok(Ok(response)) => {
-                Self::schedule_pending_cleanup(Arc::clone(&self.pending), request_id);
+                Self::schedule_pending_cleanup(
+                    Arc::clone(&self.pending),
+                    Arc::clone(&self.recently_completed),
+                    request_id,
+                );
                 Some(response)
             }
             Ok(Err(_)) => {
