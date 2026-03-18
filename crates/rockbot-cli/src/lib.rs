@@ -356,6 +356,10 @@ pub enum EnrollCommands {
         /// Gateway address (e.g. https://host:port). Defaults to [client].gateway_host:[client].https_port from config.
         #[arg(long)]
         gateway: Option<String>,
+        /// Expected SHA-256 fingerprint of the gateway CA for first-time enrollment.
+        /// Required when no local CA file is configured.
+        #[arg(long)]
+        ca_fingerprint: Option<String>,
         /// Pre-shared enrollment key
         #[arg(long)]
         psk: String,

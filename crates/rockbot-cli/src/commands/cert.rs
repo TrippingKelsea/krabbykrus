@@ -792,10 +792,21 @@ async fn run_enroll(command: &EnrollCommands, config_path: &Path) -> Result<()> 
 
         EnrollCommands::Submit {
             gateway,
+            ca_fingerprint,
             psk,
             name,
             role,
-        } => cmd_enroll_submit(config_path, gateway.as_deref(), psk, name, role).await,
+        } => {
+            cmd_enroll_submit(
+                config_path,
+                gateway.as_deref(),
+                ca_fingerprint.as_deref(),
+                psk,
+                name,
+                role,
+            )
+            .await
+        }
     }
 }
 
@@ -803,6 +814,7 @@ async fn run_enroll(command: &EnrollCommands, config_path: &Path) -> Result<()> 
 async fn cmd_enroll_submit(
     config_path: &Path,
     gateway: Option<&str>,
+    ca_fingerprint: Option<&str>,
     psk: &str,
     name: &str,
     role_str: &str,
@@ -863,6 +875,11 @@ async fn cmd_enroll_submit(
             .add_root_certificate(ca_cert)
             .build()?
     } else {
+        let expected_fingerprint = ca_fingerprint.ok_or_else(|| {
+            anyhow::anyhow!(
+                "First-time enrollment requires `--ca-fingerprint <SHA256>` when no local CA file is configured"
+            )
+        })?;
         let bootstrap = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .build()?;
@@ -875,6 +892,13 @@ async fn cmd_enroll_submit(
             .json()
             .await
             .context("Invalid CA response from gateway")?;
+        let actual_fingerprint = sha256_fingerprint_for_pem(ca_info.ca_certificate.as_bytes())?;
+        if normalize_fingerprint(expected_fingerprint) != normalize_fingerprint(&actual_fingerprint)
+        {
+            anyhow::bail!(
+                "Gateway CA fingerprint mismatch: expected {expected_fingerprint}, got {actual_fingerprint}"
+            );
+        }
         let ca_cert = reqwest::Certificate::from_pem(ca_info.ca_certificate.as_bytes())?;
         reqwest::Client::builder()
             .add_root_certificate(ca_cert)
@@ -928,6 +952,23 @@ async fn cmd_enroll_submit(
     println!("Run 'rockbot cert install --name {name}' to update your config.");
 
     Ok(())
+}
+
+fn sha256_fingerprint_for_pem(pem: &[u8]) -> Result<String> {
+    let mut cursor = std::io::Cursor::new(pem);
+    let cert_der = rustls_pemfile::certs(&mut cursor)
+        .next()
+        .transpose()?
+        .ok_or_else(|| anyhow::anyhow!("No PEM certificate found"))?;
+    Ok(rockbot_pki::sha256_fingerprint(cert_der.as_ref()))
+}
+
+fn normalize_fingerprint(fingerprint: &str) -> String {
+    fingerprint
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
