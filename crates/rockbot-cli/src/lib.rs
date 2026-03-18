@@ -629,6 +629,14 @@ pub enum DoctorCommands {
         #[arg(long, default_value_t = false)]
         no_ai: bool,
     },
+    /// Internal storage doctor AI worker
+    #[cfg(feature = "doctor-ai")]
+    #[command(hide = true)]
+    StorageAi {
+        /// Path to config file
+        #[arg(short, long)]
+        config: PathBuf,
+    },
     /// Download/update the doctor AI model
     #[cfg(feature = "doctor-ai")]
     Download,

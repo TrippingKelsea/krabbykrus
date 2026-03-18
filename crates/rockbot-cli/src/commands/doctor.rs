@@ -29,6 +29,8 @@ pub async fn run(command: &Option<DoctorCommands>, config_path: &PathBuf) -> Res
             run_storage(path, !*no_ai).await
         }
         #[cfg(feature = "doctor-ai")]
+        Some(DoctorCommands::StorageAi { config }) => run_storage_ai_child(config).await,
+        #[cfg(feature = "doctor-ai")]
         Some(DoctorCommands::Download) => run_download().await,
         #[cfg(feature = "doctor-ai")]
         Some(DoctorCommands::Status) => run_status().await,
@@ -229,8 +231,9 @@ async fn run_migrate(config_path: &PathBuf) -> Result<()> {
 
 #[cfg(feature = "doctor-ai")]
 async fn run_storage(config_path: &PathBuf, with_ai: bool) -> Result<()> {
-    use rockbot_doctor::{inspect_storage, recommended_actions, summarize_report, DoctorAi};
+    use rockbot_doctor::{inspect_storage, recommended_actions, summarize_report};
     use std::time::Duration;
+    use tokio::process::Command;
 
     println!("Doctor AI: Inspecting storage state...\n");
     let report = inspect_storage(config_path);
@@ -238,16 +241,22 @@ async fn run_storage(config_path: &PathBuf, with_ai: bool) -> Result<()> {
     let actions = recommended_actions(&report);
 
     let analysis = if with_ai {
-        let raw_toml = tokio::fs::read_to_string(config_path).await.unwrap_or_default();
-        let doctor_config = try_parse_doctor_config_from_raw(&raw_toml);
-        let doctor = DoctorAi::init(doctor_config).await?;
-        Some(
-            tokio::time::timeout(
-                Duration::from_secs(10),
-                doctor.diagnose_storage_report(&report),
-            )
-            .await,
-        )
+        let exe = std::env::current_exe()?;
+        let child = Command::new(exe)
+            .arg("doctor")
+            .arg("storage-ai")
+            .arg("--config")
+            .arg(config_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        match tokio::time::timeout(Duration::from_secs(30), child.wait_with_output()).await {
+            Ok(Ok(output)) => Some(Ok((output.status.success(), output.stdout, output.stderr))),
+            Ok(Err(e)) => Some(Err(anyhow::anyhow!("doctor AI worker failed: {e}"))),
+            Err(_) => Some(Err(anyhow::anyhow!(
+                "doctor AI worker timed out after 30 seconds"
+            ))),
+        }
     } else {
         None
     };
@@ -260,14 +269,23 @@ async fn run_storage(config_path: &PathBuf, with_ai: bool) -> Result<()> {
     println!();
 
     match analysis {
-        Some(Ok(text)) if !text.trim().is_empty() => {
+        Some(Ok((true, stdout, _stderr))) => {
+            let text = String::from_utf8_lossy(&stdout);
             println!("Doctor AI Assessment:\n");
             println!("{text}");
         }
-        Some(Ok(_)) => {}
-        Some(Err(_)) => {
+        Some(Ok((false, _stdout, stderr))) => {
             println!("Doctor AI Assessment:\n");
-            println!("The deterministic storage report is complete, but the AI explanation timed out after 10 seconds.");
+            let err = String::from_utf8_lossy(&stderr);
+            if err.trim().is_empty() {
+                println!("The embedded Doctor AI worker failed.");
+            } else {
+                println!("The embedded Doctor AI worker failed:\n{err}");
+            }
+        }
+        Some(Err(err)) => {
+            println!("Doctor AI Assessment:\n");
+            println!("The deterministic storage report is complete, but the AI explanation failed: {err}");
         }
         None => {
             println!("Doctor AI Assessment:\n");
@@ -275,6 +293,19 @@ async fn run_storage(config_path: &PathBuf, with_ai: bool) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+#[cfg(feature = "doctor-ai")]
+async fn run_storage_ai_child(config_path: &PathBuf) -> Result<()> {
+    use rockbot_doctor::{inspect_storage, DoctorAi};
+
+    let report = inspect_storage(config_path);
+    let raw_toml = tokio::fs::read_to_string(config_path).await.unwrap_or_default();
+    let doctor_config = try_parse_doctor_config_from_raw(&raw_toml);
+    let doctor = DoctorAi::init(doctor_config).await?;
+    let analysis = doctor.diagnose_storage_report(&report).await;
+    println!("{analysis}");
     Ok(())
 }
 
