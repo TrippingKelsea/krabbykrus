@@ -230,7 +230,7 @@ external directory service needed.
 
 ### Storage Layer (Implemented)
 
-The `rockbot-store` crate provides the unified storage backend:
+The `rockbot-storage` crate provides the unified storage backend:
 
 - **redb** — Embedded key-value database (pure Rust, stable format)
 - **ChaCha20 encryption** — Block-level storage encryption via `redb::StorageBackend`

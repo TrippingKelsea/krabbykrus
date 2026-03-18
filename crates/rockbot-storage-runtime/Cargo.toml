@@ -1,0 +1,21 @@
+[package]
+name = "rockbot-storage-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Centralized storage resolution and runtime policy for RockBot"
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+rockbot-config = { path = "../rockbot-config" }
+rockbot-pki = { path = "../rockbot-pki" }
+rockbot-storage = { path = "../rockbot-storage" }
+rockbot-vdisk = { path = "../rockbot-vdisk" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

@@ -3,10 +3,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use rockbot_agent::{Agent, VaultCredentialAccessor};
-use rockbot_config::{
-    config::{AgentInstance, StorageEncryptionMode, StorageKeySource},
-    Config,
-};
+use rockbot_config::{config::AgentInstance, Config};
 use rockbot_credentials::{ClusterNodeRole, RegisteredNodeKey};
 use rockbot_gateway::{convert_security_config, convert_tool_config, Gateway};
 use rockbot_llm::LlmProviderRegistry;
@@ -15,10 +12,10 @@ use rockbot_pki::PkiManager;
 use rockbot_security::SecurityManager;
 use rockbot_session::SessionManager;
 #[cfg(feature = "overseer")]
-use rockbot_store::Store;
+use rockbot_storage::Store;
+use rockbot_storage_runtime::StorageRuntime;
 use rockbot_tools::ToolRegistry;
 use std::io::IsTerminal;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -26,35 +23,6 @@ use tracing::{debug, error, info, warn};
 
 use crate::commands::vault_unlock::unlock_vault_for_gateway;
 use crate::GatewayCommands;
-
-const SESSIONS_VOLUME_CAPACITY: u64 = 512 * 1024 * 1024;
-const AGENTS_VOLUME_CAPACITY: u64 = 128 * 1024 * 1024;
-
-fn safe_open_volume(
-    disk_path: &Path,
-    volume_name: &str,
-    capacity: u64,
-    key: Option<[u8; 32]>,
-) -> Result<rockbot_store::Store> {
-    match catch_unwind(AssertUnwindSafe(|| {
-        rockbot_store::Store::open_volume(disk_path, volume_name, capacity, key)
-    })) {
-        Ok(result) => result.map_err(Into::into),
-        Err(_) => Err(anyhow::anyhow!(
-            "redb panicked while opening virtual disk volume '{volume_name}'"
-        )),
-    }
-}
-
-fn safe_open_legacy_store(path: &Path) -> Result<rockbot_store::Store> {
-    match catch_unwind(AssertUnwindSafe(|| rockbot_store::Store::open(path))) {
-        Ok(result) => result.map_err(Into::into),
-        Err(_) => Err(anyhow::anyhow!(
-            "redb panicked while opening legacy store '{}'",
-            path.display()
-        )),
-    }
-}
 
 fn expand_tilde(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
@@ -64,36 +32,6 @@ fn expand_tilde(path: &Path) -> PathBuf {
         }
     }
     path.to_path_buf()
-}
-
-fn import_legacy_agents_volume(
-    vault_path: &Path,
-    disk_path: &Path,
-    store_key: Option<[u8; 32]>,
-) -> Result<bool> {
-    let legacy_agents_path = vault_path.join("agents.redb");
-    if !legacy_agents_path.exists() {
-        return Ok(false);
-    }
-
-    info!(
-        "Importing legacy agent store {} into virtual disk volume 'agents'",
-        legacy_agents_path.display()
-    );
-    rockbot_vdisk::replace_file(disk_path, "agents", &legacy_agents_path, store_key)?;
-    Ok(true)
-}
-
-fn repair_legacy_agents_volume_if_needed(
-    vault_path: &Path,
-    disk_path: &Path,
-    store_key: Option<[u8; 32]>,
-) -> Result<bool> {
-    let legacy_agents_path = vault_path.join("agents.redb");
-    if !legacy_agents_path.exists() {
-        return Ok(false);
-    }
-    import_legacy_agents_volume(vault_path, disk_path, store_key)
 }
 
 /// Run gateway commands
@@ -157,175 +95,33 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
                 as Arc<dyn rockbot_tools::CredentialAccessor>
         });
 
-    let storage_root = storage_root_dir(config_path, &config);
-    tokio::fs::create_dir_all(&storage_root).await?;
-    let disk_path = rockbot_store::Store::default_disk_path(&storage_root);
-    let pki_manager = open_pki_for_storage(&config)?;
-    if let (Some(vault_result), Some(pki_manager)) = (vault_result.as_ref(), pki_manager.as_ref()) {
+    let storage_runtime = StorageRuntime::new(config_path, &config).await?;
+    let pki_manager = storage_runtime.pki_manager();
+    if let (Some(vault_result), Some(pki_manager)) = (vault_result.as_ref(), pki_manager) {
         bootstrap_local_vault_node(&config, pki_manager, &vault_result.manager).await;
     }
-    let session_key = storage_key_for_label(&config, pki_manager.as_ref(), "sessions")?;
-    let legacy_sessions_path = storage_root.join("data").join("sessions.redb");
-    let (session_store, session_store_descriptor) = if legacy_sessions_path.exists() {
-        match safe_open_legacy_store(&legacy_sessions_path) {
-            Ok(store) => {
-                info!(
-                    "Session store opened via legacy store {}",
-                    legacy_sessions_path.display()
-                );
-                (
-                    Arc::new(store),
-                    format!("legacy store {}", legacy_sessions_path.display()),
-                )
-            }
-            Err(err) => {
-                warn!(
-                    "Could not open legacy session store {}: {err}. Falling back to recovery session store instead of touching the suspect virtual-disk volume.",
-                    legacy_sessions_path.display()
-                );
-                let recovery_sessions_path =
-                    storage_root.join("runtime").join("sessions.recovery.redb");
-                if let Some(parent) = recovery_sessions_path.parent() {
-                    tokio::fs::create_dir_all(parent).await?;
-                }
-                let recovery_store =
-                    rockbot_store::Store::open_with_optional_key(&recovery_sessions_path, session_key)?;
-                (
-                    Arc::new(recovery_store),
-                    format!("recovery store {}", recovery_sessions_path.display()),
-                )
-            }
-        }
-    } else {
-        match safe_open_volume(&disk_path, "sessions", SESSIONS_VOLUME_CAPACITY, session_key) {
-            Ok(store) => (
-                Arc::new(store),
-                encryption_mode_log(
-                    session_key.is_some(),
-                    &format!("virtual disk {} volume 'sessions'", disk_path.display()),
-                ),
-            ),
-            Err(volume_err) => {
-                let recovery_sessions_path =
-                    storage_root.join("runtime").join("sessions.recovery.redb");
-                warn!(
-                    "Could not open virtual-disk sessions volume: {volume_err}. Falling back to recovery session store {}.",
-                    recovery_sessions_path.display()
-                );
-                if let Some(parent) = recovery_sessions_path.parent() {
-                    tokio::fs::create_dir_all(parent).await?;
-                }
-                let recovery_store =
-                    rockbot_store::Store::open_with_optional_key(&recovery_sessions_path, session_key)?;
-                (
-                    Arc::new(recovery_store),
-                    format!("recovery store {}", recovery_sessions_path.display()),
-                )
-            }
-        }
-    };
+    let opened_sessions = storage_runtime.open_sessions_store().await?;
     let session_manager = Arc::new(
         SessionManager::new_with_store(
-            session_store,
+            opened_sessions.store,
             1000,
-            &session_store_descriptor,
+            &opened_sessions.descriptor,
         )
         .await?,
     );
 
-    let mut vault_store: Option<Arc<rockbot_store::Store>> = None;
-    let mut legacy_agent_store_failed = false;
+    let mut vault_store: Option<Arc<rockbot_storage::Store>> = None;
     if vault_result.is_some() {
-        let legacy_agents_path = vault_path.join("agents.redb");
-        if legacy_agents_path.exists() {
-            match safe_open_legacy_store(&legacy_agents_path) {
-                Ok(store) => {
-                    let store = Arc::new(store);
-                    #[cfg(feature = "overseer")]
-                    ensure_default_overseer_config(&mut config, store.as_ref())?;
-                    info!(
-                        "Vault store opened for agent persistence via legacy store {}",
-                        legacy_agents_path.display()
-                    );
-                    vault_store = Some(store);
-                }
-                Err(err) => {
-                    warn!(
-                        "Could not open legacy agent store {}: {err}. Disabling persisted agent store for this startup to avoid corrupt-store aborts.",
-                        legacy_agents_path.display()
-                    );
-                    legacy_agent_store_failed = true;
-                }
-            }
-        }
-    }
-
-    if vault_result.is_some() && vault_store.is_none() && !legacy_agent_store_failed {
-        let store_key = storage_key_for_label(&config, pki_manager.as_ref(), "agents")?;
-        if let Err(repair_err) = repair_legacy_agents_volume_if_needed(&vault_path, &disk_path, store_key) {
-            warn!(
-                "Could not preflight-repair the virtual disk agent store from legacy data: {repair_err}"
-            );
-        }
-        match safe_open_volume(&disk_path, "agents", AGENTS_VOLUME_CAPACITY, store_key) {
-            Ok(store) => {
-                let store = Arc::new(store);
+        match storage_runtime.open_agents_store(&vault_path).await {
+            Ok(opened_agents) => {
+                let store = opened_agents.store;
                 #[cfg(feature = "overseer")]
                 ensure_default_overseer_config(&mut config, store.as_ref())?;
-                info!(
-                    "{}",
-                    encryption_mode_log(
-                        store_key.is_some(),
-                        &format!(
-                            "Vault store opened for agent persistence via virtual disk {} volume 'agents'",
-                            disk_path.display()
-                        )
-                    )
-                );
+                info!("Vault store opened for agent persistence via {}", opened_agents.descriptor);
                 vault_store = Some(store);
             }
             Err(e) => {
-                warn!("Could not open vault store: {e}.");
-                match import_legacy_agents_volume(&vault_path, &disk_path, store_key) {
-                    Ok(true) => match safe_open_volume(
-                        &disk_path,
-                        "agents",
-                        AGENTS_VOLUME_CAPACITY,
-                        store_key,
-                    ) {
-                        Ok(store) => {
-                            let store = Arc::new(store);
-                            #[cfg(feature = "overseer")]
-                            ensure_default_overseer_config(&mut config, store.as_ref())?;
-                            info!(
-                                "{}",
-                                encryption_mode_log(
-                                    store_key.is_some(),
-                                    &format!(
-                                        "Vault store opened for agent persistence via virtual disk {} volume 'agents'",
-                                        disk_path.display()
-                                    )
-                                )
-                            );
-                            vault_store = Some(store);
-                        }
-                        Err(retry_err) => {
-                            warn!(
-                                "Legacy agent-store import completed but the virtual disk volume still failed to open: {retry_err}. Falling back to TOML persistence."
-                            );
-                        }
-                    },
-                    Ok(false) => {
-                        warn!(
-                            "No legacy agents.redb file found to repair the agent store. Falling back to TOML persistence."
-                        );
-                    }
-                    Err(import_err) => {
-                        warn!(
-                            "Could not import legacy agents.redb into the virtual disk: {import_err}. Falling back to TOML persistence."
-                        );
-                    }
-                }
+                warn!("Could not open vault store: {e}. Falling back to TOML persistence.");
             }
         }
     }
@@ -549,92 +345,6 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
     gateway.start().await?;
 
     Ok(())
-}
-
-fn open_pki_for_storage(config: &Config) -> Result<Option<PkiManager>> {
-    if !config.security.storage.enabled {
-        return Ok(None);
-    }
-    if matches!(
-        config.security.storage.mode,
-        StorageEncryptionMode::Disabled
-    ) {
-        return Ok(None);
-    }
-    if !matches!(
-        config.security.storage.key_source,
-        StorageKeySource::PkiLocal
-    ) {
-        return Ok(None);
-    }
-
-    let pki_dir = config
-        .effective_pki()
-        .pki_dir
-        .unwrap_or_else(default_pki_dir);
-    let manager = PkiManager::new(pki_dir).map_err(|e| {
-        anyhow::anyhow!(
-            "Encrypted storage is enabled, but the PKI manager could not be opened for storage keys: {e}"
-        )
-    })?;
-    Ok(Some(manager))
-}
-
-fn storage_key_for_label(
-    config: &Config,
-    pki_manager: Option<&PkiManager>,
-    label: &str,
-) -> Result<Option<[u8; 32]>> {
-    if !config.security.storage.enabled {
-        return Ok(None);
-    }
-    if matches!(
-        config.security.storage.mode,
-        StorageEncryptionMode::Disabled
-    ) {
-        return Ok(None);
-    }
-
-    match config.security.storage.key_source {
-        StorageKeySource::PkiLocal => match pki_manager {
-            Some(mgr) => Ok(Some(mgr.ensure_local_storage_key(label).map_err(|e| {
-                anyhow::anyhow!(
-                    "Encrypted storage is enabled, but the storage key for '{label}' could not be created or loaded: {e}"
-                )
-            })?)),
-            None => Err(anyhow::anyhow!(
-                "Encrypted storage is enabled, but no PKI manager is available for storage key '{label}'"
-            )),
-        },
-        StorageKeySource::DataLocal | StorageKeySource::External => Ok(None),
-    }
-}
-
-fn encryption_mode_log(encrypted: bool, base: &str) -> String {
-    if encrypted {
-        format!("{base} (encrypted)")
-    } else {
-        format!("{base} (plaintext)")
-    }
-}
-
-fn default_pki_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
-        .join("rockbot")
-        .join("pki")
-}
-
-fn storage_root_dir(config_path: &Path, config: &Config) -> PathBuf {
-    if let Some(parent) = config_path.parent() {
-        return parent.to_path_buf();
-    }
-    if let Some(parent) = config.credentials.vault_path.parent() {
-        return parent.to_path_buf();
-    }
-    dirs::config_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
-        .join("rockbot")
 }
 
 async fn bootstrap_local_vault_node(

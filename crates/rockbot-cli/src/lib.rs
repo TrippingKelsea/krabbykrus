@@ -1,7 +1,7 @@
 //! Command-line interface for RockBot
 
 use anyhow::Result;
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
 use rockbot_config::Config;
 use std::path::PathBuf;
 use tracing::info;
@@ -306,7 +306,10 @@ pub enum ClientCertCommands {
     /// Generate a new client certificate signed by the CA
     Generate {
         /// Client name (becomes CN and filename)
-        name: String,
+        #[arg(long, conflicts_with = "subject_name")]
+        name: Option<String>,
+        /// Client name (positional form)
+        subject_name: Option<String>,
         /// Additional Subject Alternative Names (hostnames or IPs)
         #[arg(long)]
         san: Vec<String>,
@@ -350,9 +353,14 @@ pub enum ClientCertCommands {
 pub enum EnrollCommands {
     /// Create a new enrollment token for remote CSR signing
     Create {
-        /// Role for certificates signed with this token
-        #[arg(long, default_value = "agent")]
-        role: String,
+        /// Authorization role(s) embedded in certificates signed with this token.
+        /// May be passed multiple times. If omitted, defaults to `agent`.
+        #[arg(long, action = ArgAction::Append)]
+        role: Vec<String>,
+        /// Primary certificate role used for issuance validation (gateway, agent, or tui).
+        /// If omitted, inferred from the provided roles or defaults to `agent`.
+        #[arg(long)]
+        cert_role: Option<String>,
         /// Maximum number of uses (omit for unlimited)
         #[arg(long)]
         uses: Option<u32>,

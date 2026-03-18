@@ -61,6 +61,35 @@ fn parse_role(s: &str) -> Result<CertRole> {
         .with_context(|| format!("Invalid role '{s}'. Must be: gateway, agent, or tui"))
 }
 
+fn resolve_client_cert_name(long_name: &Option<String>, positional_name: &Option<String>) -> Result<String> {
+    match (long_name, positional_name) {
+        (Some(name), None) | (None, Some(name)) => Ok(name.clone()),
+        (None, None) => anyhow::bail!("Client name is required. Use '<NAME>' or '--name <NAME>'."),
+        (Some(_), Some(_)) => anyhow::bail!("Specify the client name either positionally or with '--name', not both."),
+    }
+}
+
+fn resolve_enrollment_roles(
+    roles: &[String],
+    cert_role: &Option<String>,
+) -> Result<(CertRole, Vec<String>)> {
+    let roles = if roles.is_empty() {
+        vec![cert_role.clone().unwrap_or_else(|| "agent".to_string())]
+    } else {
+        roles.to_vec()
+    };
+
+    let primary = if let Some(cert_role) = cert_role {
+        parse_role(cert_role)?
+    } else if let Some(role) = roles.iter().find_map(|role| CertRole::from_str(role)) {
+        role
+    } else {
+        CertRole::Agent
+    };
+
+    Ok((primary, roles))
+}
+
 fn open_pki(pki_dir: PathBuf) -> Result<PkiManager> {
     PkiManager::new(pki_dir)
 }
@@ -282,15 +311,17 @@ async fn run_client(command: &ClientCertCommands, config_path: &Path) -> Result<
     match command {
         ClientCertCommands::Generate {
             name,
+            subject_name,
             san,
             days,
             role,
         } => {
             let dir = resolve_pki_dir_from_config(config_path).await?;
             let mut mgr = open_pki(dir)?;
+            let name = resolve_client_cert_name(name, subject_name)?;
             let role = parse_role(role)?;
 
-            let info = mgr.generate_client(name, role, san, *days, &[], &[])?;
+            let info = mgr.generate_client(&name, role, san, *days, &[], &[])?;
             println!("Client certificate generated:");
             println!("  Name: {name}");
             println!("  Role: {role}");
@@ -713,12 +744,13 @@ async fn run_enroll(command: &EnrollCommands, config_path: &Path) -> Result<()> 
     match command {
         EnrollCommands::Create {
             role,
+            cert_role,
             uses,
             expires,
         } => {
             let dir = resolve_pki_dir_from_config(config_path).await?;
             let mut mgr = open_pki(dir)?;
-            let role = parse_role(role)?;
+            let (primary_role, all_roles) = resolve_enrollment_roles(role, cert_role)?;
 
             let expires_at = expires
                 .as_deref()
@@ -727,11 +759,12 @@ async fn run_enroll(command: &EnrollCommands, config_path: &Path) -> Result<()> 
                     Ok::<_, anyhow::Error>(chrono::Utc::now() + dur)
                 })
                 .transpose()?;
-            let token = mgr.create_enrollment(role, *uses, expires_at)?;
+            let token = mgr.create_enrollment(primary_role, &all_roles, *uses, expires_at)?;
 
             println!("Enrollment token created:");
             println!("  Token: {token}");
-            println!("  Role:  {role}");
+            println!("  Cert role: {primary_role}");
+            println!("  Roles: {}", all_roles.join(", "));
             if let Some(n) = uses {
                 println!("  Uses:  {n}");
             } else {
@@ -755,8 +788,8 @@ async fn run_enroll(command: &EnrollCommands, config_path: &Path) -> Result<()> 
             }
 
             println!(
-                "{:<12} {:<10} {:<10} {:<20} TOKEN",
-                "ID", "ROLE", "USES", "EXPIRES"
+                "{:<12} {:<10} {:<24} {:<10} {:<20} TOKEN",
+                "ID", "CERT ROLE", "ROLES", "USES", "EXPIRES"
             );
             for t in tokens {
                 let uses_str = t
@@ -766,14 +799,19 @@ async fn run_enroll(command: &EnrollCommands, config_path: &Path) -> Result<()> 
                     || "never".to_string(),
                     |dt| dt.format("%Y-%m-%d %H:%M").to_string(),
                 );
+                let roles = if t.roles.is_empty() {
+                    t.role.to_string()
+                } else {
+                    t.roles.join(",")
+                };
                 let token_preview = if t.token.len() > 16 {
                     format!("{}…", &t.token[..16])
                 } else {
                     t.token.clone()
                 };
                 println!(
-                    "{:<12} {:<10} {:<10} {:<20} {}",
-                    t.id, t.role, uses_str, expires_str, token_preview
+                    "{:<12} {:<10} {:<24} {:<10} {:<20} {}",
+                    t.id, t.role, roles, uses_str, expires_str, token_preview
                 );
             }
 

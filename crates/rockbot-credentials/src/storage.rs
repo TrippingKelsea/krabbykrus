@@ -28,8 +28,8 @@ use crate::types::{
     VaultGrantKind, VaultGrantRecord, VaultObjectRecord,
 };
 
-use rockbot_store::tables;
-use rockbot_store::Store;
+use rockbot_storage::tables;
+use rockbot_storage::Store;
 
 /// Wraps a master key with an Age public key.
 /// Returns base64-encoded ciphertext.
@@ -257,7 +257,7 @@ const VERIFICATION_PLAINTEXT: &[u8] = b"rockbot-vault-v1";
 
 /// Credential vault for encrypted credential storage.
 ///
-/// Uses redb (via `rockbot-store`) for persistent storage of endpoints,
+/// Uses redb (via `rockbot-storage`) for persistent storage of endpoints,
 /// credentials, and permissions. Metadata is kept in a separate JSON file
 /// for backwards compatibility with the unlock flow.
 pub struct CredentialVault {
@@ -275,8 +275,8 @@ impl CredentialVault {
     fn disk_path_for_dir(data_dir: &Path) -> PathBuf {
         data_dir
             .parent()
-            .map(rockbot_store::Store::default_disk_path)
-            .unwrap_or_else(|| data_dir.join(rockbot_store::Store::DEFAULT_DATA_FILE))
+            .map(rockbot_storage::Store::default_disk_path)
+            .unwrap_or_else(|| data_dir.join(rockbot_storage::Store::DEFAULT_DATA_FILE))
     }
 
     fn migrate_legacy_redb_volume(
@@ -945,7 +945,7 @@ impl CredentialVault {
 
     fn grant_table(
         kind: VaultGrantKind,
-    ) -> rockbot_store::TableDefinition<'static, &'static str, &'static [u8]> {
+    ) -> rockbot_storage::TableDefinition<'static, &'static str, &'static [u8]> {
         match kind {
             VaultGrantKind::Provider => tables::VAULT_PROVIDER_GRANTS,
             VaultGrantKind::Node => tables::VAULT_NODE_GRANTS,

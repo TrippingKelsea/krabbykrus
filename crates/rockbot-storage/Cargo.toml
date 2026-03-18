@@ -1,5 +1,5 @@
 [package]
-name = "rockbot-store"
+name = "rockbot-storage"
 version.workspace = true
 edition = "2021"
 description = "Unified embedded storage layer for RockBot (redb + optional OpenRaft replication)"

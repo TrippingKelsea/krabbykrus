@@ -16,9 +16,7 @@
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use rockbot_agent::agent::{Agent, AgentResponse, ProcessMessageOptions};
-use rockbot_config::{
-    Config, CredentialsConfig, GatewayConfig, PkiConfig, StorageEncryptionMode, StorageKeySource,
-};
+use rockbot_config::{Config, CredentialsConfig, GatewayConfig, PkiConfig};
 use rockbot_credentials::CredentialManager;
 use rockbot_pki::PkiManager;
 
@@ -50,8 +48,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, RwLock};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, error, info, warn};
-
-const CRON_VOLUME_CAPACITY: u64 = 128 * 1024 * 1024;
 
 /// Response body type supporting both full and SSE streaming responses.
 type GatewayBody = http_body_util::Either<
@@ -172,7 +168,7 @@ pub struct Gateway {
     /// Path to the TOML config file (for persisting agent changes)
     config_path: Option<std::path::PathBuf>,
     /// Vault store for persisting agents (preferred over TOML when available)
-    store: Option<Arc<rockbot_store::Store>>,
+    store: Option<Arc<rockbot_storage::Store>>,
     /// Agent configurations from the config file (source of truth for declared agents)
     agents_config: Arc<RwLock<Vec<rockbot_config::AgentInstance>>>,
     /// Registered agents
@@ -772,35 +768,8 @@ impl Gateway {
 
         let effective_pki = config.effective_pki();
 
-        let cron_storage_key = if config.security.storage.enabled
-            && !matches!(
-                config.security.storage.mode,
-                StorageEncryptionMode::Disabled
-            )
-            && matches!(
-                config.security.storage.key_source,
-                StorageKeySource::PkiLocal
-            ) {
-            let pki_dir = effective_pki.pki_dir.clone().unwrap_or_else(|| {
-                dirs::config_dir()
-                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
-                    .join("rockbot")
-                    .join("pki")
-            });
-            Some(
-                PkiManager::new(pki_dir)
-                    .and_then(|mgr| mgr.ensure_local_storage_key("cron"))
-                    .map_err(|e| GatewayError::InvalidRequest {
-                        message: format!(
-                            "Encrypted storage is enabled, but the cron storage key could not be created or loaded: {e}"
-                        ),
-                    })?,
-            )
-        } else {
-            None
-        };
-
         let gateway_config = config.gateway.clone();
+        let credentials_config = config.credentials.clone();
         let storage_root = config
             .credentials
             .vault_path
@@ -817,7 +786,7 @@ impl Gateway {
         Ok(Self {
             config: gateway_config,
             pki: effective_pki,
-            credentials_config: config.credentials,
+            credentials_config,
             config_path: None,
             store: None,
             agents_config: Arc::new(RwLock::new(config.agents.list.clone())),
@@ -835,44 +804,26 @@ impl Gateway {
             blackboard: Arc::new(rockbot_agent::orchestration::SwarmBlackboard::new()),
             cron_scheduler: {
                 let _ = std::fs::create_dir_all(&storage_root);
-                let disk_path = rockbot_store::Store::default_disk_path(&storage_root);
-                let legacy_cron_path = storage_root.join("data").join("cron.redb");
-                let cron_store = if legacy_cron_path.exists() {
-                    match rockbot_store::Store::open(&legacy_cron_path) {
-                        Ok(store) => {
-                            info!(
-                                "Cron store opened via legacy store {}",
-                                legacy_cron_path.display()
-                            );
-                            Ok((store, format!("legacy store {}", legacy_cron_path.display())))
-                        }
-                        Err(e) => Err(e),
-                    }
-                } else {
-                    rockbot_store::Store::open_volume(
-                        &disk_path,
-                        "cron",
-                        CRON_VOLUME_CAPACITY,
-                        cron_storage_key,
-                    )
-                    .map(|store| {
-                        (
-                            store,
-                            format!(
-                                "virtual disk {} volume 'cron' ({})",
-                                disk_path.display(),
-                                if cron_storage_key.is_some() {
-                                    "encrypted"
-                                } else {
-                                    "plaintext"
-                                }
-                            ),
-                        )
-                    })
+                let cron_store = match rockbot_storage_runtime::StorageRuntime::new_with_root(
+                    &config,
+                    storage_root.clone(),
+                )
+                .await
+                {
+                    Ok(runtime) => runtime
+                        .open_cron_store()
+                        .await
+                        .map(|opened| (opened.store, opened.descriptor))
+                        .map_err(|e| GatewayError::InvalidRequest {
+                            message: format!("Failed to open cron store: {e}"),
+                        }),
+                    Err(e) => Err(GatewayError::InvalidRequest {
+                        message: format!("Failed to initialize storage runtime: {e}"),
+                    }),
                 };
                 match cron_store {
                     Ok((store, descriptor)) => match crate::cron::CronScheduler::new_with_store(
-                        Arc::new(store),
+                        store,
                         &descriptor,
                     )
                     .await
@@ -1194,7 +1145,7 @@ impl Gateway {
     /// table instead of the TOML `[[agents.list]]` section. On first startup
     /// with a non-empty `agents.list` and an empty vault, agents are
     /// auto-migrated.
-    pub fn set_store(&mut self, store: Arc<rockbot_store::Store>) {
+    pub fn set_store(&mut self, store: Arc<rockbot_storage::Store>) {
         self.store = Some(store);
     }
 
@@ -6937,12 +6888,15 @@ impl Gateway {
             }
         };
 
-        if let Err(e) = index.validate_enrollment(&sign_req.psk, role) {
-            return Ok(Self::json_error(
-                &format!("Enrollment failed: {e}"),
-                StatusCode::FORBIDDEN,
-            ));
-        }
+        let enrollment = match index.validate_enrollment(&sign_req.psk, role) {
+            Ok(enrollment) => enrollment,
+            Err(e) => {
+                return Ok(Self::json_error(
+                    &format!("Enrollment failed: {e}"),
+                    StatusCode::FORBIDDEN,
+                ));
+            }
+        };
 
         // Load CA cert and key
         let ca_cert_pem = match std::fs::read_to_string(&ca_cert_path) {
@@ -6984,7 +6938,7 @@ impl Gateway {
             role,
             sign_req.days,
             serial,
-            &[],
+            &enrollment.roles,
             &[],
         ) {
             Ok((cert_pem, entry)) => {

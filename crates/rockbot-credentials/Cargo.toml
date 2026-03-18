@@ -7,7 +7,7 @@ license = "MIT"
 
 [features]
 default = []
-vault-replication = ["rockbot-store/replication"]
+vault-replication = ["rockbot-storage/replication"]
 
 [lints]
 workspace = true
@@ -47,7 +47,7 @@ zeroize = { version = "1.7", features = ["derive"] }
 base64 = "0.22"
 
 # Unified storage backend
-rockbot-store = { path = "../rockbot-store" }
+rockbot-storage = { path = "../rockbot-storage" }
 rockbot-vdisk = { path = "../rockbot-vdisk" }
 
 # Logging

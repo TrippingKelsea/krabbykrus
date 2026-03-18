@@ -5,6 +5,7 @@
 
 use crate::load_config;
 use anyhow::Result;
+#[cfg(feature = "doctor-ai")]
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 

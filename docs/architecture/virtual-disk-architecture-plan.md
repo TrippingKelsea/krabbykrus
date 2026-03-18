@@ -92,7 +92,7 @@ The stack becomes:
 
 ```text
 Domain crates
-  -> rockbot-store / model cache / vault / PKI metadata
+  -> rockbot-storage / model cache / vault / PKI metadata
     -> rockbot-vdisk logical volume API
       -> rockbot.data container file
 ```
@@ -354,15 +354,15 @@ Suggested top-level types:
 
 ## Integration with Existing RockBot Crates
 
-### `rockbot-store`
+### `rockbot-storage`
 
-`rockbot-store` should stop owning the disk file directly.
+`rockbot-storage` should stop owning the disk file directly.
 
 Instead:
 
 - `rockbot-vdisk` owns `rockbot.data`
-- `rockbot-store` opens a named structured volume
-- `rockbot-store` wraps `redb` over that volume
+- `rockbot-storage` opens a named structured volume
+- `rockbot-storage` wraps `redb` over that volume
 
 This likely replaces:
 

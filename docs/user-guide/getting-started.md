@@ -142,6 +142,8 @@ certificates. This ensures only authorized clients can connect.
 ### Set Up the CA and Certificates
 
 ```bash
+# If you are running the repo-local build, use `./rockbot` instead of `rockbot`.
+
 # Initialize a Certificate Authority (valid 10 years)
 rockbot cert ca generate --days 3650
 
@@ -172,6 +174,8 @@ If you need to provision a client on a different machine:
 ```bash
 # On the CA host: create a one-time enrollment token
 rockbot cert enroll create --role agent --uses 1 --expires 24h
+# Tokens can embed multiple auth roles:
+rockbot cert enroll create --role client --role tui --role agent --uses 1 --expires 24h
 # Output: Token: <uuid>
 
 # On the remote client: enroll with the gateway

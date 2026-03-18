@@ -435,6 +435,7 @@ impl PkiManager {
     pub fn create_enrollment(
         &mut self,
         role: CertRole,
+        roles: &[String],
         uses: Option<u32>,
         expires: Option<DateTime<Utc>>,
     ) -> anyhow::Result<String> {
@@ -446,6 +447,7 @@ impl PkiManager {
             expires_at: expires,
             created_at: Utc::now(),
             role,
+            roles: roles.to_vec(),
         };
         self.index.add_enrollment(token);
         self.save_index()?;
@@ -473,10 +475,14 @@ impl PkiManager {
     /// Validate and consume an enrollment token.
     ///
     /// Returns `Ok(())` if the token is valid and was successfully consumed.
-    pub fn validate_enrollment(&mut self, token: &str, role: CertRole) -> anyhow::Result<()> {
-        self.index.validate_enrollment(token, role)?;
+    pub fn validate_enrollment(
+        &mut self,
+        token: &str,
+        role: CertRole,
+    ) -> anyhow::Result<EnrollmentToken> {
+        let enrollment = self.index.validate_enrollment(token, role)?;
         self.save_index()?;
-        Ok(())
+        Ok(enrollment)
     }
 
     // -------------------------------------------------------------------------
@@ -655,7 +661,7 @@ mod tests {
         mgr.init_ca(3650).unwrap();
 
         let token = mgr
-            .create_enrollment(CertRole::Agent, Some(2), None)
+            .create_enrollment(CertRole::Agent, &["agent".to_string()], Some(2), None)
             .unwrap();
         assert!(!token.is_empty());
 

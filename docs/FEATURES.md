@@ -453,7 +453,7 @@ cargo build --release --features "conservative,otel"
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| AGENTS table in redb | ✅ | rockbot-store |
+| AGENTS table in redb | ✅ | rockbot-storage |
 | Agent CRUD via vault | ✅ | store_agent/load_agent/list_agents/delete_agent |
 | Auto-migrate from TOML | ✅ | On gateway startup |
 | Vault-first agent loading | ✅ | Falls back to TOML |

@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 rockbot-config = { path = "../rockbot-config" }
-rockbot-store = { path = "../rockbot-store" }
+rockbot-storage = { path = "../rockbot-storage" }
 
 anyhow = { workspace = true }
 chrono = { workspace = true }

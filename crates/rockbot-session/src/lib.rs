@@ -5,7 +5,7 @@
 
 use chrono::{DateTime, Utc};
 use rockbot_config::{Message, SessionError};
-use rockbot_store::{tables, Store};
+use rockbot_storage::{tables, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;

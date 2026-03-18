@@ -29,7 +29,7 @@ subsystems:
 
 ## Current Problems
 
-- `rockbot-store` has an optional encrypted backend, but most production paths
+- `rockbot-storage` has an optional encrypted backend, but most production paths
   still open plaintext redb files.
 - The current encrypted backend is confidentiality-only and does not provide
   authenticated tamper detection.

@@ -8,7 +8,7 @@ use crate::error::{Result, RockBotError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use cron::Schedule as CronExpression;
-use rockbot_store::{tables, Store};
+use rockbot_storage::{tables, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;

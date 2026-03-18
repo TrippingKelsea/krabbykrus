@@ -506,9 +506,9 @@ impl App {
                 .parent()
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or(vault_path.clone());
-            let disk_path = rockbot_store::Store::default_disk_path(&storage_root);
+            let disk_path = rockbot_storage::Store::default_disk_path(&storage_root);
             let Ok(store) =
-                rockbot_store::Store::open_volume(&disk_path, "agents", 128 * 1024 * 1024, None)
+                rockbot_storage::Store::open_volume(&disk_path, "agents", 128 * 1024 * 1024, None)
             else {
                 return;
             };

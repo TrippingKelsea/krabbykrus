@@ -109,6 +109,9 @@ pub struct EnrollmentToken {
     pub created_at: DateTime<Utc>,
     /// The role that will be assigned to certificates issued via this token.
     pub role: CertRole,
+    /// Additional authorization roles embedded in issued certificates.
+    #[serde(default)]
+    pub roles: Vec<String>,
 }
 
 /// Persistent registry of all issued certificates and active enrollment tokens.
@@ -201,7 +204,11 @@ impl PkiIndex {
     /// - Token has remaining uses (or is unlimited).
     ///
     /// On success the use count is decremented and exhausted tokens are removed.
-    pub fn validate_enrollment(&mut self, token_str: &str, role: CertRole) -> anyhow::Result<()> {
+    pub fn validate_enrollment(
+        &mut self,
+        token_str: &str,
+        role: CertRole,
+    ) -> anyhow::Result<EnrollmentToken> {
         let now = Utc::now();
 
         let pos = self
@@ -244,6 +251,7 @@ impl PkiIndex {
         }
 
         // Decrement or remove
+        let matched = self.enrollments[pos].clone();
         let token = &mut self.enrollments[pos];
         if let Some(uses) = token.remaining_uses.as_mut() {
             *uses -= 1;
@@ -252,7 +260,7 @@ impl PkiIndex {
             }
         }
 
-        Ok(())
+        Ok(matched)
     }
 }
 
@@ -335,6 +343,7 @@ mod tests {
             expires_at: None,
             created_at: Utc::now(),
             role: CertRole::Agent,
+            roles: vec!["agent".to_string()],
         };
         idx.add_enrollment(token);
 
@@ -364,6 +373,7 @@ mod tests {
             expires_at: None,
             created_at: Utc::now(),
             role: CertRole::Tui,
+            roles: vec!["tui".to_string()],
         });
         assert!(idx
             .validate_enrollment("rolecheck", CertRole::Agent)

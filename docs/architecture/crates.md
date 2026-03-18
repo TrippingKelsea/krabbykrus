@@ -32,7 +32,7 @@ rockbot/
 │   ├── rockbot-channels-signal/   # Signal channel scaffold
 │   ├── rockbot-memory/            # Memory and search system
 │   ├── rockbot-security/          # Capability system and sandboxing
-│   ├── rockbot-store/             # Unified embedded storage (redb + optional OpenRaft)
+│   ├── rockbot-storage/             # Unified embedded storage (redb + optional OpenRaft)
 │   ├── rockbot-credentials/       # Encrypted credential vault
 │   ├── rockbot-credentials-schema/ # Shared credential schema types
 │   ├── rockbot-pki/               # PKI: CA, client certs, CRL, enrollment
@@ -59,8 +59,8 @@ rockbot-shell              (leaf-ish: shell helpers)
 rockbot-session            → rockbot-config
 rockbot-security           → (standalone)
 rockbot-memory             → (standalone)
-rockbot-store              → (standalone: redb, chacha20; optional: openraft)
-rockbot-credentials        → rockbot-store, rockbot-security
+rockbot-storage              → (standalone: redb, chacha20; optional: openraft)
+rockbot-credentials        → rockbot-storage, rockbot-security
 
 rockbot-llm                → rockbot-credentials-schema
 rockbot-tools              → rockbot-security, rockbot-credentials-schema
@@ -222,7 +222,7 @@ cargo build --profile release-small --no-default-features -F anthropic
 - `index.rs` — `PkiIndex`, `CertEntry`, `CertRole`, `CertStatus`, `EnrollmentToken`
 - `manager.rs` — `PkiManager` orchestrator, enrollment tokens
 
-### rockbot-store
+### rockbot-storage
 - `lib.rs` — `Store` struct wrapping redb: `put`/`get`/`delete`/`list`/`range` + KV convenience methods
 - `encrypted_backend.rs` — `redb::StorageBackend` impl with ChaCha20 stream encryption
 - `tables.rs` — All 10 table definitions (endpoints, credentials, permissions, KV, sessions, cron, routing, PKI)

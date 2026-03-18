@@ -231,8 +231,12 @@ CA access — useful for bootstrapping remote agents and TUIs. This endpoint is
 served from the public listener only when `gateway.public.enrollment_enabled = true`.
 
 ```bash
+# If you are running the repo-local build, use `./rockbot` instead of `rockbot`.
+
 # On the CA host: create a limited-use enrollment token
 rockbot cert enroll create --role agent --uses 1 --expires 24h
+# Tokens can embed multiple auth roles:
+rockbot cert enroll create --role client --role tui --role agent --uses 1 --expires 24h
 
 # On the client: enroll with the gateway
 rockbot cert enroll submit \
