@@ -12,6 +12,7 @@
 
 use std::fs::{self, File};
 use std::io::BufReader;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -278,24 +279,43 @@ impl CredentialVault {
             .unwrap_or_else(|| data_dir.join(rockbot_store::Store::DEFAULT_DATA_FILE))
     }
 
-    fn migrate_legacy_redb_volume(data_dir: &Path, disk_path: &Path, volume_name: &str) -> Result<()> {
+    fn migrate_legacy_redb_volume(
+        data_dir: &Path,
+        disk_path: &Path,
+        volume_name: &str,
+    ) -> Result<()> {
         let legacy_path = data_dir.join("vault.db");
         if !legacy_path.exists() {
             return Ok(());
         }
 
-        if rockbot_vdisk::has_volume(disk_path, volume_name)
-            .map_err(|e| CredentialError::Internal(format!("Failed to inspect virtual disk: {e}")))?
-        {
+        let legacy_size = fs::metadata(&legacy_path)?.len();
+        let volume_info = rockbot_vdisk::volume_info(disk_path, volume_name)
+            .map_err(|e| CredentialError::Internal(format!("Failed to inspect virtual disk: {e}")))?;
+        let needs_import = match volume_info {
+            None => true,
+            Some(info) if info.len != legacy_size => true,
+            Some(_) => {
+                let prefix = rockbot_vdisk::read_volume_prefix(disk_path, volume_name, 4)
+                    .map_err(|e| {
+                        CredentialError::Internal(format!(
+                            "Failed to inspect virtual disk contents: {e}"
+                        ))
+                    })?
+                    .unwrap_or_default();
+                prefix.as_slice() != b"redb"
+            }
+        };
+        if !needs_import {
             return Ok(());
         }
 
         tracing::info!(
-            "Migrating legacy {} into {} volume",
+            "Importing legacy {} into {} volume",
             legacy_path.display(),
             volume_name
         );
-        rockbot_vdisk::import_file(disk_path, volume_name, &legacy_path, None).map_err(|e| {
+        rockbot_vdisk::replace_file(disk_path, volume_name, &legacy_path, None).map_err(|e| {
             CredentialError::Internal(format!(
                 "Failed to import legacy vault store {} into virtual disk: {e}",
                 legacy_path.display()
@@ -315,13 +335,22 @@ impl CredentialVault {
 
         Self::migrate_legacy_redb_volume(&data_dir, &disk_path, "vault")?;
 
-        let store = Store::open_volume(
-            &disk_path,
-            "vault",
-            256 * 1024 * 1024,
-            None,
-        )
-        .map_err(|e| CredentialError::Internal(format!("Failed to open store: {e}")))?;
+        let store = match catch_unwind(AssertUnwindSafe(|| {
+            Store::open_volume(&disk_path, "vault", 256 * 1024 * 1024, None)
+        })) {
+            Ok(Ok(store)) => store,
+            Ok(Err(e)) => {
+                return Err(CredentialError::Internal(format!(
+                    "Failed to open store: {e}"
+                )))
+            }
+            Err(_) => {
+                return Err(CredentialError::Internal(
+                    "Failed to open store: redb panicked while opening the vault volume"
+                        .to_string(),
+                ))
+            }
+        };
 
         let mut vault = Self {
             data_dir,
@@ -1748,5 +1777,33 @@ mod tests {
             )
             .unwrap();
         assert_eq!(decrypted, b"secret-value");
+    }
+
+    #[test]
+    fn test_open_repairs_stale_vault_volume_from_legacy_file() {
+        let dir = tempdir().unwrap();
+        CredentialVault::init_with_password(dir.path(), "test").unwrap();
+
+        let legacy_path = dir.path().join("vault.db");
+        let disk_path = CredentialVault::disk_path_for_dir(dir.path());
+        rockbot_vdisk::materialize_file(&disk_path, "vault", &legacy_path, None).unwrap();
+        let legacy_bytes = fs::read(&legacy_path).unwrap();
+
+        rockbot_vdisk::import_bytes(&disk_path, "vault", b"bad!", None).unwrap();
+        let info_before = rockbot_vdisk::volume_info(&disk_path, "vault")
+            .unwrap()
+            .expect("vault volume exists");
+        assert_ne!(info_before.len, legacy_bytes.len() as u64);
+
+        let _vault = CredentialVault::open(dir.path()).unwrap();
+
+        let info_after = rockbot_vdisk::volume_info(&disk_path, "vault")
+            .unwrap()
+            .expect("vault volume exists after repair");
+        assert_eq!(info_after.len, legacy_bytes.len() as u64);
+        let prefix = rockbot_vdisk::read_volume_prefix(&disk_path, "vault", 4)
+            .unwrap()
+            .expect("vault volume prefix");
+        assert_eq!(prefix.as_slice(), b"redb");
     }
 }

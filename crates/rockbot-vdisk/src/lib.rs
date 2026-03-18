@@ -39,6 +39,13 @@ struct VolumeRecord {
     len: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VolumeInfo {
+    pub offset: u64,
+    pub capacity: u64,
+    pub len: u64,
+}
+
 #[derive(Debug)]
 struct VolumeState {
     file: File,
@@ -362,6 +369,45 @@ pub fn has_volume(disk_path: &Path, volume_name: &str) -> Result<bool> {
     Ok(manifest.volumes.contains_key(volume_name))
 }
 
+pub fn volume_info(disk_path: &Path, volume_name: &str) -> Result<Option<VolumeInfo>> {
+    if !disk_path.exists() {
+        return Ok(None);
+    }
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(disk_path)
+        .with_context(|| format!("failed to open virtual disk {}", disk_path.display()))?;
+    let manifest = VolumeBackend::load_or_initialize_manifest(&mut file)?;
+    Ok(manifest.volumes.get(volume_name).map(|record| VolumeInfo {
+        offset: record.offset,
+        capacity: record.capacity,
+        len: record.len,
+    }))
+}
+
+pub fn read_volume_prefix(disk_path: &Path, volume_name: &str, len: usize) -> Result<Option<Vec<u8>>> {
+    if len == 0 {
+        return Ok(Some(Vec::new()));
+    }
+    let Some(info) = volume_info(disk_path, volume_name)? else {
+        return Ok(None);
+    };
+    if info.len == 0 {
+        return Ok(Some(Vec::new()));
+    }
+
+    let to_read = usize::try_from(info.len.min(len as u64)).context("volume prefix length overflow")?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(disk_path)
+        .with_context(|| format!("failed to open virtual disk {}", disk_path.display()))?;
+    file.seek(SeekFrom::Start(info.offset))?;
+    let mut buf = vec![0u8; to_read];
+    file.read_exact(&mut buf)?;
+    Ok(Some(buf))
+}
+
 pub fn import_file(
     disk_path: &Path,
     volume_name: &str,
@@ -373,6 +419,17 @@ pub fn import_file(
     import_bytes(disk_path, volume_name, &bytes, key)
 }
 
+pub fn replace_file(
+    disk_path: &Path,
+    volume_name: &str,
+    source_path: &Path,
+    key: Option<[u8; 32]>,
+) -> Result<()> {
+    let bytes = std::fs::read(source_path)
+        .with_context(|| format!("failed to read blob source {}", source_path.display()))?;
+    replace_bytes(disk_path, volume_name, &bytes, key)
+}
+
 pub fn import_bytes(
     disk_path: &Path,
     volume_name: &str,
@@ -380,6 +437,61 @@ pub fn import_bytes(
     key: Option<[u8; 32]>,
 ) -> Result<()> {
     let capacity = align_up(bytes.len() as u64 + ALIGNMENT, ALIGNMENT);
+    let backend = VolumeBackend::open(disk_path, volume_name, capacity, key)?;
+    backend.write_all(bytes)?;
+    Ok(())
+}
+
+pub fn replace_bytes(
+    disk_path: &Path,
+    volume_name: &str,
+    bytes: &[u8],
+    key: Option<[u8; 32]>,
+) -> Result<()> {
+    let capacity = align_up(bytes.len() as u64 + ALIGNMENT, ALIGNMENT);
+
+    if let Some(parent) = disk_path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create parent directory for {}",
+                disk_path.display()
+            )
+        })?;
+    }
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(disk_path)
+        .with_context(|| format!("failed to open virtual disk {}", disk_path.display()))?;
+
+    let mut manifest = VolumeBackend::load_or_initialize_manifest(&mut file)?;
+    manifest.volumes.remove(volume_name);
+
+    let next_offset = manifest
+        .volumes
+        .values()
+        .map(|v| v.offset + v.capacity)
+        .max()
+        .unwrap_or(HEADER_BYTES);
+    let offset = align_up(next_offset, ALIGNMENT);
+    manifest.volumes.insert(
+        volume_name.to_string(),
+        VolumeRecord {
+            offset,
+            capacity,
+            len: 0,
+        },
+    );
+    VolumeBackend::persist_manifest(&mut file, &manifest)?;
+    let required_len = offset + capacity;
+    if file.metadata()?.len() < required_len {
+        file.set_len(required_len)?;
+    }
+    drop(file);
+
     let backend = VolumeBackend::open(disk_path, volume_name, capacity, key)?;
     backend.write_all(bytes)?;
     Ok(())

@@ -18,6 +18,7 @@ use rockbot_session::SessionManager;
 use rockbot_store::Store;
 use rockbot_tools::ToolRegistry;
 use std::io::IsTerminal;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -28,6 +29,32 @@ use crate::GatewayCommands;
 
 const SESSIONS_VOLUME_CAPACITY: u64 = 512 * 1024 * 1024;
 const AGENTS_VOLUME_CAPACITY: u64 = 128 * 1024 * 1024;
+
+fn safe_open_volume(
+    disk_path: &Path,
+    volume_name: &str,
+    capacity: u64,
+    key: Option<[u8; 32]>,
+) -> Result<rockbot_store::Store> {
+    match catch_unwind(AssertUnwindSafe(|| {
+        rockbot_store::Store::open_volume(disk_path, volume_name, capacity, key)
+    })) {
+        Ok(result) => result.map_err(Into::into),
+        Err(_) => Err(anyhow::anyhow!(
+            "redb panicked while opening virtual disk volume '{volume_name}'"
+        )),
+    }
+}
+
+fn safe_open_legacy_store(path: &Path) -> Result<rockbot_store::Store> {
+    match catch_unwind(AssertUnwindSafe(|| rockbot_store::Store::open(path))) {
+        Ok(result) => result.map_err(Into::into),
+        Err(_) => Err(anyhow::anyhow!(
+            "redb panicked while opening legacy store '{}'",
+            path.display()
+        )),
+    }
+}
 
 fn expand_tilde(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
@@ -53,8 +80,20 @@ fn import_legacy_agents_volume(
         "Importing legacy agent store {} into virtual disk volume 'agents'",
         legacy_agents_path.display()
     );
-    rockbot_vdisk::import_file(disk_path, "agents", &legacy_agents_path, store_key)?;
+    rockbot_vdisk::replace_file(disk_path, "agents", &legacy_agents_path, store_key)?;
     Ok(true)
+}
+
+fn repair_legacy_agents_volume_if_needed(
+    vault_path: &Path,
+    disk_path: &Path,
+    store_key: Option<[u8; 32]>,
+) -> Result<bool> {
+    let legacy_agents_path = vault_path.join("agents.redb");
+    if !legacy_agents_path.exists() {
+        return Ok(false);
+    }
+    import_legacy_agents_volume(vault_path, disk_path, store_key)
 }
 
 /// Run gateway commands
@@ -145,14 +184,40 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
     );
 
     let mut vault_store: Option<Arc<rockbot_store::Store>> = None;
+    let mut legacy_agent_store_failed = false;
     if vault_result.is_some() {
+        let legacy_agents_path = vault_path.join("agents.redb");
+        if legacy_agents_path.exists() {
+            match safe_open_legacy_store(&legacy_agents_path) {
+                Ok(store) => {
+                    let store = Arc::new(store);
+                    #[cfg(feature = "overseer")]
+                    ensure_default_overseer_config(&mut config, store.as_ref())?;
+                    info!(
+                        "Vault store opened for agent persistence via legacy store {}",
+                        legacy_agents_path.display()
+                    );
+                    vault_store = Some(store);
+                }
+                Err(err) => {
+                    warn!(
+                        "Could not open legacy agent store {}: {err}. Disabling persisted agent store for this startup to avoid corrupt-store aborts.",
+                        legacy_agents_path.display()
+                    );
+                    legacy_agent_store_failed = true;
+                }
+            }
+        }
+    }
+
+    if vault_result.is_some() && vault_store.is_none() && !legacy_agent_store_failed {
         let store_key = storage_key_for_label(&config, pki_manager.as_ref(), "agents")?;
-        match rockbot_store::Store::open_volume(
-            &disk_path,
-            "agents",
-            AGENTS_VOLUME_CAPACITY,
-            store_key,
-        ) {
+        if let Err(repair_err) = repair_legacy_agents_volume_if_needed(&vault_path, &disk_path, store_key) {
+            warn!(
+                "Could not preflight-repair the virtual disk agent store from legacy data: {repair_err}"
+            );
+        }
+        match safe_open_volume(&disk_path, "agents", AGENTS_VOLUME_CAPACITY, store_key) {
             Ok(store) => {
                 let store = Arc::new(store);
                 #[cfg(feature = "overseer")]
@@ -172,7 +237,7 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
             Err(e) => {
                 warn!("Could not open vault store: {e}.");
                 match import_legacy_agents_volume(&vault_path, &disk_path, store_key) {
-                    Ok(true) => match rockbot_store::Store::open_volume(
+                    Ok(true) => match safe_open_volume(
                         &disk_path,
                         "agents",
                         AGENTS_VOLUME_CAPACITY,
