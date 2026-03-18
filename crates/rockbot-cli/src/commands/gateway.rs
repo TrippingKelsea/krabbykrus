@@ -39,6 +39,24 @@ fn expand_tilde(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+fn import_legacy_agents_volume(
+    vault_path: &Path,
+    disk_path: &Path,
+    store_key: Option<[u8; 32]>,
+) -> Result<bool> {
+    let legacy_agents_path = vault_path.join("agents.redb");
+    if !legacy_agents_path.exists() {
+        return Ok(false);
+    }
+
+    info!(
+        "Importing legacy agent store {} into virtual disk volume 'agents'",
+        legacy_agents_path.display()
+    );
+    rockbot_vdisk::import_file(disk_path, "agents", &legacy_agents_path, store_key)?;
+    Ok(true)
+}
+
 /// Run gateway commands
 pub async fn run(command: &GatewayCommands, config_path: &PathBuf) -> Result<()> {
     match command {
@@ -152,7 +170,47 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
                 vault_store = Some(store);
             }
             Err(e) => {
-                warn!("Could not open vault store: {e}. Falling back to TOML persistence.");
+                warn!("Could not open vault store: {e}.");
+                match import_legacy_agents_volume(&vault_path, &disk_path, store_key) {
+                    Ok(true) => match rockbot_store::Store::open_volume(
+                        &disk_path,
+                        "agents",
+                        AGENTS_VOLUME_CAPACITY,
+                        store_key,
+                    ) {
+                        Ok(store) => {
+                            let store = Arc::new(store);
+                            #[cfg(feature = "overseer")]
+                            ensure_default_overseer_config(&mut config, store.as_ref())?;
+                            info!(
+                                "{}",
+                                encryption_mode_log(
+                                    store_key.is_some(),
+                                    &format!(
+                                        "Vault store opened for agent persistence via virtual disk {} volume 'agents'",
+                                        disk_path.display()
+                                    )
+                                )
+                            );
+                            vault_store = Some(store);
+                        }
+                        Err(retry_err) => {
+                            warn!(
+                                "Legacy agent-store import completed but the virtual disk volume still failed to open: {retry_err}. Falling back to TOML persistence."
+                            );
+                        }
+                    },
+                    Ok(false) => {
+                        warn!(
+                            "No legacy agents.redb file found to repair the agent store. Falling back to TOML persistence."
+                        );
+                    }
+                    Err(import_err) => {
+                        warn!(
+                            "Could not import legacy agents.redb into the virtual disk: {import_err}. Falling back to TOML persistence."
+                        );
+                    }
+                }
             }
         }
     }

@@ -63,6 +63,7 @@ rockbot-overseer = { path = "../rockbot-overseer", optional = true }
 rockbot-deploy = { path = "../rockbot-deploy", optional = true }
 rockbot-butler = { path = "../rockbot-butler", optional = true }
 rockbot-store = { path = "../rockbot-store" }
+rockbot-vdisk = { path = "../rockbot-vdisk" }
 rockbot-tui = { path = "../rockbot-tui", default-features = false }
 
 uuid = { workspace = true }
