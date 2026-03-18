@@ -966,7 +966,7 @@ fn sha256_fingerprint_for_pem(pem: &[u8]) -> Result<String> {
 fn normalize_fingerprint(fingerprint: &str) -> String {
     fingerprint
         .chars()
-        .filter(|c| c.is_ascii_hexdigit())
+        .filter(char::is_ascii_hexdigit)
         .map(|c| c.to_ascii_uppercase())
         .collect()
 }

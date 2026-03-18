@@ -15,7 +15,7 @@
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
-use rockbot_agent::agent::{Agent, AgentResponse};
+use rockbot_agent::agent::{Agent, AgentResponse, ProcessMessageOptions};
 use rockbot_config::{
     Config, CredentialsConfig, GatewayConfig, PkiConfig, StorageEncryptionMode, StorageKeySource,
 };
@@ -805,12 +805,14 @@ impl Gateway {
             .credentials
             .vault_path
             .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_else(|| {
+            .map_or_else(
+                || {
                 dirs::config_dir()
                     .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
                     .join("rockbot")
-            });
+                },
+                std::path::Path::to_path_buf,
+            );
 
         Ok(Self {
             config: gateway_config,
@@ -5150,11 +5152,13 @@ impl Gateway {
             .process_message_with_progress(
                 session_id.clone(),
                 message,
-                workspace_path,
-                resolved_executor_target.clone(),
-                strict_executor_target,
-                remote_workspace_override,
-                0,
+                ProcessMessageOptions {
+                    workspace_override: workspace_path,
+                    remote_executor_target: resolved_executor_target.clone(),
+                    remote_executor_strict: strict_executor_target,
+                    remote_workspace_override,
+                    delegation_depth: 0,
+                },
                 progress_tx,
             )
             .await;
@@ -5206,11 +5210,13 @@ impl Gateway {
                         .process_message(
                             session_id.clone(),
                             msg,
-                            None,
-                            resolved_executor_target.clone(),
-                            strict_executor_target,
-                            workspace.clone(),
-                            handoff_depth,
+                            ProcessMessageOptions {
+                                workspace_override: None,
+                                remote_executor_target: resolved_executor_target.clone(),
+                                remote_executor_strict: strict_executor_target,
+                                remote_workspace_override: workspace.clone(),
+                                delegation_depth: handoff_depth,
+                            },
                         )
                         .await;
                 } else {
@@ -6388,11 +6394,13 @@ impl Gateway {
             .process_message(
                 session_id,
                 message,
-                workspace_override,
-                executor_target,
-                strict_executor_target,
-                remote_workspace_override,
-                0,
+                ProcessMessageOptions {
+                    workspace_override,
+                    remote_executor_target: executor_target,
+                    remote_executor_strict: strict_executor_target,
+                    remote_workspace_override,
+                    delegation_depth: 0,
+                },
             )
             .await?)
     }
@@ -7164,7 +7172,14 @@ impl rockbot_tools::AgentInvoker for GatewayInvoker {
             .with_role(rockbot_config::message::MessageRole::User);
 
         match agent
-            .process_message(session_id.to_string(), msg, None, None, false, None, depth)
+            .process_message(
+                session_id.to_string(),
+                msg,
+                ProcessMessageOptions {
+                    delegation_depth: depth,
+                    ..ProcessMessageOptions::default()
+                },
+            )
             .await
         {
             Ok(response) => {
@@ -7294,7 +7309,11 @@ impl GatewayCronExecutor {
             .with_role(rockbot_config::message::MessageRole::User);
 
         match agent
-            .process_message(session_id, user_message, None, None, false, None, 0)
+            .process_message(
+                session_id,
+                user_message,
+                ProcessMessageOptions::default(),
+            )
             .await
         {
             Ok(response) => {

@@ -445,6 +445,15 @@ pub enum AgentProgressEvent {
 /// Convenience type for a progress sender
 pub type ProgressSender = tokio::sync::mpsc::UnboundedSender<AgentProgressEvent>;
 
+#[derive(Debug, Clone, Default)]
+pub struct ProcessMessageOptions {
+    pub workspace_override: Option<std::path::PathBuf>,
+    pub remote_executor_target: Option<String>,
+    pub remote_executor_strict: bool,
+    pub remote_workspace_override: Option<String>,
+    pub delegation_depth: u32,
+}
+
 /// Where a tool actually executed.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -605,23 +614,9 @@ impl Agent {
         &self,
         session_id: String,
         message: Message,
-        workspace_override: Option<std::path::PathBuf>,
-        remote_executor_target: Option<String>,
-        remote_executor_strict: bool,
-        remote_workspace_override: Option<String>,
-        delegation_depth: u32,
+        options: ProcessMessageOptions,
     ) -> Result<AgentResponse> {
-        self.process_message_inner(
-            session_id,
-            message,
-            workspace_override,
-            remote_executor_target,
-            remote_executor_strict,
-            remote_workspace_override,
-            delegation_depth,
-            None,
-        )
-        .await
+        self.process_message_inner(session_id, message, options, None).await
     }
 
     /// Like `process_message`, but sends real-time progress events to the
@@ -631,38 +626,27 @@ impl Agent {
         &self,
         session_id: String,
         message: Message,
-        workspace_override: Option<std::path::PathBuf>,
-        remote_executor_target: Option<String>,
-        remote_executor_strict: bool,
-        remote_workspace_override: Option<String>,
-        delegation_depth: u32,
+        options: ProcessMessageOptions,
         progress_tx: ProgressSender,
     ) -> Result<AgentResponse> {
-        self.process_message_inner(
-            session_id,
-            message,
+        self.process_message_inner(session_id, message, options, Some(progress_tx))
+            .await
+    }
+
+    async fn process_message_inner(
+        &self,
+        session_id: String,
+        message: Message,
+        options: ProcessMessageOptions,
+        progress_tx: Option<ProgressSender>,
+    ) -> Result<AgentResponse> {
+        let ProcessMessageOptions {
             workspace_override,
             remote_executor_target,
             remote_executor_strict,
             remote_workspace_override,
             delegation_depth,
-            Some(progress_tx),
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn process_message_inner(
-        &self,
-        session_id: String,
-        message: Message,
-        workspace_override: Option<std::path::PathBuf>,
-        remote_executor_target: Option<String>,
-        remote_executor_strict: bool,
-        remote_workspace_override: Option<String>,
-        delegation_depth: u32,
-        progress_tx: Option<ProgressSender>,
-    ) -> Result<AgentResponse> {
+        } = options;
         let start_time = std::time::Instant::now();
         let mut trajectory = Trajectory::new(&session_id, &self.config.id);
 
@@ -4089,10 +4073,7 @@ The user wants me to explore the codebase. I should start by listing the directo
             s.to_string()
         } else {
             let truncated: String = s.chars().take(max_chars).collect();
-            format!(
-                "{truncated}\n\n[... truncated — {total} total chars]",
-                total = total_chars
-            )
+            format!("{truncated}\n\n[... truncated — {total_chars} total chars]")
         }
     }
 
