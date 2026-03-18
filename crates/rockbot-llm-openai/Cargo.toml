@@ -1,0 +1,23 @@
+[package]
+name = "rockbot-llm-openai"
+version.workspace = true
+edition = "2021"
+description = "OpenAI provider for RockBot"
+license = "MIT"
+
+[lints]
+workspace = true
+
+[dependencies]
+rockbot-llm = { path = "../rockbot-llm", default-features = false }
+async-trait = "0.1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+async-stream = "0.3"
+bytes = "1.0"
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -1,11 +1,12 @@
 //! OpenAI GPT API provider
 
-use crate::{
+use async_trait::async_trait;
+use rockbot_llm::{
     AuthMethod, ChatCompletionRequest, ChatCompletionResponse, Choice, CompletionStream,
     CredentialCategory, CredentialField, CredentialSchema, FunctionCall, LlmError, LlmProvider,
-    Message, MessageRole, ModelInfo, ProviderCapabilities, Result, StreamingChunk, ToolCall, Usage,
+    Message, MessageRole, ModelInfo, ProviderCapabilities, ResponseFormat, Result, StreamingChunk,
+    ToolCall, Usage,
 };
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::env;
 
@@ -342,15 +343,15 @@ impl LlmProvider for OpenAiProvider {
         });
 
         let response_format = request.response_format.as_ref().map(|rf| match rf {
-            crate::ResponseFormat::Text => OpenAiResponseFormat {
+            ResponseFormat::Text => OpenAiResponseFormat {
                 r#type: "text".to_string(),
                 json_schema: None,
             },
-            crate::ResponseFormat::JsonObject => OpenAiResponseFormat {
+            ResponseFormat::JsonObject => OpenAiResponseFormat {
                 r#type: "json_object".to_string(),
                 json_schema: None,
             },
-            crate::ResponseFormat::JsonSchema { schema } => OpenAiResponseFormat {
+            ResponseFormat::JsonSchema { schema } => OpenAiResponseFormat {
                 r#type: "json_schema".to_string(),
                 json_schema: Some(schema.clone()),
             },

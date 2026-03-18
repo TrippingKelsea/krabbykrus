@@ -1,38 +1,20 @@
 //! LLM provider abstraction for RockBot
 //!
-//! This crate provides a unified interface for multiple LLM providers,
-//! each gated behind a feature flag:
+//! This crate provides the shared request/response types, the `LlmProvider`
+//! trait, and a provider registry.
 //!
-//! - **`bedrock`** (default) - AWS Bedrock via the Converse API
-//! - **`anthropic`** - Claude models via Claude Code SDK (OAuth only)
-//! - **`openai`** - GPT-4, o1, and other OpenAI models
-//! - **Mock** - Always available for development and testing
+//! Concrete providers live in separate crates and can register themselves into
+//! `LlmProviderRegistry` at runtime.
 //!
 //! # Feature Flags
 //!
 //! ```toml
-//! # Default: only Bedrock
+//! # No built-in cloud providers
 //! rockbot-llm = { path = "..." }
 //!
-//! # All providers
-//! rockbot-llm = { path = "...", features = ["anthropic", "openai"] }
-//!
-//! # Only Anthropic (no Bedrock)
-//! rockbot-llm = { path = "...", default-features = false, features = ["anthropic"] }
+//! # With local Ollama support
+//! rockbot-llm = { path = "...", features = ["ollama"] }
 //! ```
-//!
-//! # Authentication
-//!
-//! ## AWS Bedrock (default)
-//! - Uses standard AWS credential chain (env vars, config files, IAM roles)
-//! - Set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, or use IAM roles
-//!
-//! ## Anthropic (feature = "anthropic")
-//! - Requires Claude Code CLI: `npm install -g @anthropic-ai/claude-code`
-//! - Run `claude` to authenticate (OAuth flow)
-//!
-//! ## OpenAI (feature = "openai")
-//! - Set `OPENAI_API_KEY` environment variable
 //!
 //! # Example
 //!
@@ -43,7 +25,7 @@
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let registry = LlmProviderRegistry::new().await?;
 //!
-//!     let provider = registry.get_provider_for_model("bedrock/anthropic.claude-sonnet-4-20250514-v1:0").await?;
+//!     let provider = registry.get_provider("mock").expect("mock provider registered");
 //!
 //!     let request = ChatCompletionRequest {
 //!         model: "anthropic.claude-sonnet-4-20250514-v1:0".to_string(),
@@ -81,23 +63,10 @@ pub use rockbot_credentials_schema::{
     AuthMethod, CredentialCategory, CredentialField, CredentialSchema,
 };
 
-#[cfg(feature = "anthropic")]
-pub mod anthropic;
-#[cfg(feature = "bedrock")]
-pub mod bedrock;
 #[cfg(feature = "ollama")]
 pub mod ollama;
-#[cfg(feature = "openai")]
-pub mod openai;
-
-#[cfg(feature = "anthropic")]
-pub use anthropic::AnthropicProvider;
-#[cfg(feature = "bedrock")]
-pub use bedrock::BedrockProvider;
 #[cfg(feature = "ollama")]
 pub use ollama::OllamaProvider;
-#[cfg(feature = "openai")]
-pub use openai::OpenAiProvider;
 
 /// LLM provider errors
 #[derive(Debug, Error)]
@@ -358,40 +327,6 @@ impl LlmProviderRegistry {
         let mock_provider = Arc::new(MockLlmProvider::new());
         self.register_provider(mock_provider).await;
 
-        // Register Bedrock provider (default)
-        #[cfg(feature = "bedrock")]
-        {
-            match BedrockProvider::from_env().await {
-                Ok(bedrock) => {
-                    tracing::info!("Registered AWS Bedrock provider");
-                    self.register_provider(Arc::new(bedrock)).await;
-                }
-                Err(e) => {
-                    tracing::debug!("Bedrock provider not available: {}", e);
-                }
-            }
-        }
-
-        // Register Anthropic provider if Claude Code credentials exist
-        #[cfg(feature = "anthropic")]
-        {
-            if AnthropicProvider::has_credentials() {
-                if let Ok(anthropic) = AnthropicProvider::new() {
-                    tracing::info!("Registered Anthropic provider (Claude Code OAuth)");
-                    self.register_provider(Arc::new(anthropic)).await;
-                }
-            }
-        }
-
-        // Register OpenAI provider if API key is available
-        #[cfg(feature = "openai")]
-        {
-            if let Ok(openai) = OpenAiProvider::new() {
-                tracing::info!("Registered OpenAI provider");
-                self.register_provider(Arc::new(openai)).await;
-            }
-        }
-
         // Register Ollama provider (always available; probed at runtime)
         #[cfg(feature = "ollama")]
         {
@@ -434,19 +369,12 @@ impl LlmProviderRegistry {
             }
         };
 
-        self.providers.get(provider_id).cloned().ok_or_else(|| {
-            let hint = match provider_id {
-                "bedrock" => " (configure AWS credentials)",
-                "anthropic" => " (run 'claude' to authenticate, requires feature 'anthropic')",
-                "openai" => " (set OPENAI_API_KEY, requires feature 'openai')",
-                _ => "",
-            };
-            LlmError::ApiError {
-                message: format!(
-                    "Provider '{provider_id}' not available for model '{model_id}'{hint}"
-                ),
-            }
-        })
+        self.providers
+            .get(provider_id)
+            .cloned()
+            .ok_or_else(|| LlmError::ApiError {
+                message: format!("Provider '{provider_id}' not available for model '{model_id}'"),
+            })
     }
 
     /// Get a provider by its ID directly
@@ -470,12 +398,6 @@ impl LlmProviderRegistry {
             .values()
             .filter_map(|p| p.credential_schema())
             .collect()
-    }
-
-    /// Check if Anthropic (Claude) is available
-    #[cfg(feature = "anthropic")]
-    pub fn has_anthropic(&self) -> bool {
-        self.providers.contains_key("anthropic")
     }
 }
 

@@ -9,7 +9,7 @@
 //!
 //! ## Usage
 //! ```ignore
-//! use rockbot_llm::anthropic::AnthropicProvider;
+//! use rockbot_llm_anthropic::AnthropicProvider;
 //!
 //! // Create provider (uses Claude Code OAuth automatically)
 //! let provider = AnthropicProvider::new()?;
@@ -20,15 +20,15 @@
 //! }
 //! ```
 
-use crate::{
-    AuthMethod, ChatCompletionRequest, ChatCompletionResponse, Choice, CompletionStream,
-    CredentialCategory, CredentialField, CredentialSchema, LlmError, LlmProvider, Message,
-    MessageRole, ModelInfo, ProviderCapabilities, Result, StreamingChoice, StreamingChunk,
-    StreamingDelta, Usage,
-};
 use async_trait::async_trait;
 use claude_agent_sdk::{query, ClaudeAgentOptions, ContentBlock, Message as SdkMessage};
 use futures_util::StreamExt;
+use rockbot_llm::{
+    AuthMethod, ChatCompletionRequest, ChatCompletionResponse, Choice, CompletionStream,
+    CredentialCategory, CredentialField, CredentialSchema, LlmError, LlmProvider, Message,
+    MessageRole, ModelInfo, ProviderCapabilities, ResponseFormat, Result, StreamingChoice,
+    StreamingChunk, StreamingDelta, Usage,
+};
 use std::path::PathBuf;
 
 /// Anthropic provider using Claude Code SDK (OAuth only)
@@ -221,11 +221,11 @@ impl LlmProvider for AnthropicProvider {
         // Inject JSON mode hint into system prompt (Anthropic has no native json_mode)
         if let Some(ref response_format) = request.response_format {
             let json_hint = match response_format {
-                crate::ResponseFormat::Text => None,
-                crate::ResponseFormat::JsonObject => Some(
+                ResponseFormat::Text => None,
+                ResponseFormat::JsonObject => Some(
                     "IMPORTANT: You MUST respond with valid JSON only. No markdown, no explanation, no text outside the JSON object.".to_string()
                 ),
-                crate::ResponseFormat::JsonSchema { schema } => Some(
+                ResponseFormat::JsonSchema { schema } => Some(
                     format!(
                         "IMPORTANT: You MUST respond with valid JSON conforming to this schema:\n```json\n{}\n```\nNo markdown, no explanation, no text outside the JSON object.",
                         serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string())

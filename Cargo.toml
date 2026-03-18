@@ -14,6 +14,9 @@ members = [
     "crates/rockbot-credentials",
     "crates/rockbot-credentials-schema",
     "crates/rockbot-llm",
+    "crates/rockbot-llm-bedrock",
+    "crates/rockbot-llm-anthropic",
+    "crates/rockbot-llm-openai",
     "crates/rockbot-plugins",
     "crates/rockbot-cli",
     "crates/rockbot-overseer",
@@ -179,7 +182,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 # Package metadata for all crates
 [workspace.package]
-version = "0.3.63"
+version = "0.3.64"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"

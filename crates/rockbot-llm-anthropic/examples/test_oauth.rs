@@ -1,32 +1,13 @@
 //! Test Anthropic API provider
 //!
-//! Run with: cargo run --example test_oauth --package rockbot-llm --features anthropic
-//!
-//! Requires the `anthropic` feature flag and either:
-//! - ANTHROPIC_API_KEY environment variable, or
-//! - Claude Code credentials at ~/.claude/.credentials.json
+//! Run with:
+//! `cargo run --example test_oauth --package rockbot-llm-anthropic`
 
-#[cfg(feature = "anthropic")]
-use rockbot_llm::{
-    anthropic::AnthropicProvider, ChatCompletionRequest, LlmProvider, Message, MessageRole,
-};
+use rockbot_llm::{ChatCompletionRequest, LlmProvider, Message, MessageRole};
+use rockbot_llm_anthropic::AnthropicProvider;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(not(feature = "anthropic"))]
-    {
-        eprintln!("This example requires the 'anthropic' feature. Run with:");
-        eprintln!("  cargo run --example test_oauth --package rockbot-llm --features anthropic");
-        return Ok(());
-    }
-    #[cfg(feature = "anthropic")]
-    {
-        _main().await
-    }
-}
-
-#[cfg(feature = "anthropic")]
-async fn _main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Checking Anthropic credentials...");
 
     if !AnthropicProvider::has_credentials() {
@@ -50,7 +31,6 @@ async fn _main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Provider ID: {}", provider.id());
     println!("Capabilities: {:?}", provider.capabilities());
 
-    // Make a simple test request
     let request = ChatCompletionRequest {
         model: "claude-sonnet-4-20250514".to_string(),
         messages: vec![Message {

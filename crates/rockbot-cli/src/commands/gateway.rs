@@ -117,7 +117,10 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
                 ensure_default_overseer_config(&mut config, store.as_ref())?;
                 info!(
                     "{}",
-                    encryption_mode_log(store_key.is_some(), "Vault store opened for agent persistence")
+                    encryption_mode_log(
+                        store_key.is_some(),
+                        "Vault store opened for agent persistence"
+                    )
                 );
                 vault_store = Some(store);
             }
@@ -129,7 +132,9 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
 
     #[cfg(feature = "overseer")]
     if config.overseer.is_none() {
-        config.overseer = Some(serde_json::to_value(rockbot_overseer::OverseerConfig::default())?);
+        config.overseer = Some(serde_json::to_value(
+            rockbot_overseer::OverseerConfig::default(),
+        )?);
     }
 
     // Create gateway
@@ -146,8 +151,9 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
         Arc::new(ToolRegistry::new(convert_tool_config(config.tools.clone())).await?);
     let security_manager =
         Arc::new(SecurityManager::new(convert_security_config(config.security.clone())).await?);
-    // Create LLM registry (Anthropic uses Claude Code OAuth automatically)
-    let llm_registry = Arc::new(LlmProviderRegistry::new().await?);
+    let mut llm_registry = LlmProviderRegistry::new().await?;
+    register_compiled_llm_providers(&mut llm_registry).await?;
+    let llm_registry = Arc::new(llm_registry);
 
     // Create agent factory for hot reload
     let defaults = config.agents.defaults.clone();
@@ -355,7 +361,10 @@ fn open_pki_for_storage(config: &Config) -> Result<Option<PkiManager>> {
         return Ok(None);
     }
 
-    let pki_dir = config.effective_pki().pki_dir.unwrap_or_else(default_pki_dir);
+    let pki_dir = config
+        .effective_pki()
+        .pki_dir
+        .unwrap_or_else(default_pki_dir);
     let manager = PkiManager::new(pki_dir).map_err(|e| {
         anyhow::anyhow!(
             "Encrypted storage is enabled, but the PKI manager could not be opened for storage keys: {e}"
@@ -470,6 +479,41 @@ fn local_node_roles(config: &Config) -> Vec<ClusterNodeRole> {
         roles.push(ClusterNodeRole::Admin);
     }
     roles
+}
+
+async fn register_compiled_llm_providers(registry: &mut LlmProviderRegistry) -> Result<()> {
+    #[cfg(feature = "bedrock")]
+    {
+        match rockbot_llm_bedrock::BedrockProvider::from_env().await {
+            Ok(provider) => {
+                tracing::info!("Registered AWS Bedrock provider");
+                registry.register_provider(Arc::new(provider)).await;
+            }
+            Err(e) => {
+                tracing::debug!("Bedrock provider not available: {}", e);
+            }
+        }
+    }
+
+    #[cfg(feature = "anthropic")]
+    {
+        if rockbot_llm_anthropic::AnthropicProvider::has_credentials() {
+            if let Ok(provider) = rockbot_llm_anthropic::AnthropicProvider::new() {
+                tracing::info!("Registered Anthropic provider (Claude Code OAuth)");
+                registry.register_provider(Arc::new(provider)).await;
+            }
+        }
+    }
+
+    #[cfg(feature = "openai")]
+    {
+        if let Ok(provider) = rockbot_llm_openai::OpenAiProvider::new() {
+            tracing::info!("Registered OpenAI provider");
+            registry.register_provider(Arc::new(provider)).await;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "overseer")]
@@ -707,11 +751,12 @@ WantedBy=default.target
     let service_path = if system {
         PathBuf::from(format!("/etc/systemd/system/{name}.service"))
     } else {
-        dirs::config_dir().unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".config")
-        })
+        dirs::config_dir()
+            .unwrap_or_else(|| {
+                dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".config")
+            })
             .join("systemd/user")
             .join(format!("{name}.service"))
     };
@@ -804,11 +849,12 @@ async fn remove_service(system: bool, name: &str) -> Result<()> {
     let service_path = if system {
         PathBuf::from(format!("/etc/systemd/system/{name}.service"))
     } else {
-        dirs::config_dir().unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".config")
-        })
+        dirs::config_dir()
+            .unwrap_or_else(|| {
+                dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".config")
+            })
             .join("systemd/user")
             .join(format!("{name}.service"))
     };

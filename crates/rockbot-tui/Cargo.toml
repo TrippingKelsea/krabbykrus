@@ -8,10 +8,10 @@ license = "MIT"
 [features]
 default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "tools-mcp", "tools-markdown"]
 # LLM providers
-anthropic = ["rockbot-llm/anthropic"]
-openai = ["rockbot-llm/openai"]
+anthropic = ["dep:rockbot-llm-anthropic"]
+openai = []
 ollama = ["rockbot-llm/ollama"]
-bedrock = ["rockbot-llm/bedrock"]
+bedrock = []
 # Channel providers
 discord = []
 telegram = []
@@ -47,6 +47,7 @@ rockbot-security = { path = "../rockbot-security" }
 rockbot-credentials = { path = "../rockbot-credentials" }
 rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
 rockbot-llm = { path = "../rockbot-llm", default-features = false }
+rockbot-llm-anthropic = { path = "../rockbot-llm-anthropic", optional = true }
 rockbot-pki = { path = "../rockbot-pki" }
 rockbot-doctor = { path = "../rockbot-doctor", optional = true }
 rockbot-butler = { path = "../rockbot-butler", optional = true }

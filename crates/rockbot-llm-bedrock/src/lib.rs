@@ -25,7 +25,7 @@
 //!
 //! ## Usage
 //! ```ignore
-//! use rockbot_llm::bedrock::BedrockProvider;
+//! use rockbot_llm_bedrock::BedrockProvider;
 //!
 //! // Standard AWS credentials
 //! let provider = BedrockProvider::new("us-east-1").await?;
@@ -40,12 +40,6 @@
 //! let provider = BedrockProvider::with_agentcore_oauth2("us-east-1", config).await?;
 //! ```
 
-use crate::{
-    AuthMethod, ChatCompletionRequest, ChatCompletionResponse, Choice, CompletionStream,
-    CredentialCategory, CredentialField, CredentialSchema, FunctionCall, LlmError, LlmProvider,
-    Message, MessageRole, ModelInfo, ProviderCapabilities, Result, StreamingChoice, StreamingChunk,
-    StreamingDelta, ToolCall, ToolDefinition, Usage,
-};
 use async_trait::async_trait;
 use aws_sdk_bedrockruntime::config::ProvideCredentials;
 use aws_sdk_bedrockruntime::{
@@ -56,6 +50,12 @@ use aws_sdk_bedrockruntime::{
         ToolSpecification, ToolUseBlock,
     },
     Client,
+};
+use rockbot_llm::{
+    AuthMethod, ChatCompletionRequest, ChatCompletionResponse, Choice, CompletionStream,
+    CredentialCategory, CredentialField, CredentialSchema, FunctionCall, LlmError, LlmProvider,
+    Message, MessageRole, ModelInfo, ProviderCapabilities, ResponseFormat, Result, StreamingChoice,
+    StreamingChunk, StreamingDelta, ToolCall, ToolDefinition, Usage,
 };
 
 /// AgentCore OAuth2 auth flow type
@@ -414,8 +414,7 @@ impl BedrockProvider {
                     .rsplit('/')
                     .next()
                     .unwrap_or(profile_id);
-                let (context_window, max_output) =
-                    Self::estimate_model_limits(backing_model_hint);
+                let (context_window, max_output) = Self::estimate_model_limits(backing_model_hint);
                 let supports_vision = model_targets
                     .iter()
                     .any(|arn| arn.contains("claude") || arn.contains("nova"));
@@ -603,9 +602,8 @@ impl BedrockProvider {
         let mut pending_blocks: Vec<ContentBlock> = Vec::new();
         let mut bedrock_messages = Vec::new();
 
-        let flush = |kind: PendingMessageKind,
-                     blocks: Vec<ContentBlock>,
-                     out: &mut Vec<BedrockMessage>| {
+        let flush =
+            |kind: PendingMessageKind, blocks: Vec<ContentBlock>, out: &mut Vec<BedrockMessage>| {
                 if blocks.is_empty() {
                     return;
                 }
@@ -1063,11 +1061,11 @@ impl LlmProvider for BedrockProvider {
         // Inject JSON mode hint into system blocks (Bedrock Converse has no native json_mode)
         if let Some(ref response_format) = request.response_format {
             let json_hint = match response_format {
-                crate::ResponseFormat::Text => None,
-                crate::ResponseFormat::JsonObject => Some(
+                ResponseFormat::Text => None,
+                ResponseFormat::JsonObject => Some(
                     "IMPORTANT: You MUST respond with valid JSON only. No markdown, no explanation, no text outside the JSON object.".to_string()
                 ),
-                crate::ResponseFormat::JsonSchema { schema } => Some(
+                ResponseFormat::JsonSchema { schema } => Some(
                     format!(
                         "IMPORTANT: You MUST respond with valid JSON conforming to this schema:\n{}\nNo markdown, no explanation, no text outside the JSON object.",
                         serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string())

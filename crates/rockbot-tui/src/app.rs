@@ -27,9 +27,8 @@ use crate::effects::EffectState;
 use crate::state::{
     AddCredentialState, AgentLauncherState, AppState, ChatMessage, ChatTarget, ConfirmAction,
     ContextFileInfo, ContextMenuAction, ContextMenuState, CreateSessionState, EditAgentState,
-    EditCredentialState, EditProviderState, EndpointInfo, FontRole, InputMode, MenuItem,
-    Message, PasswordAction, SessionMode, ThemeToken, ToolCallInfo, UnlockMethod,
-    ViewContextFilesState,
+    EditCredentialState, EditProviderState, EndpointInfo, FontRole, InputMode, MenuItem, Message,
+    PasswordAction, SessionMode, ThemeToken, ToolCallInfo, UnlockMethod, ViewContextFilesState,
 };
 
 #[derive(Debug, Clone)]
@@ -42,7 +41,7 @@ enum AgentLauncherSelection {
 pub fn has_claude_credentials() -> bool {
     #[cfg(feature = "anthropic")]
     {
-        rockbot_llm::AnthropicProvider::has_credentials()
+        rockbot_llm_anthropic::AnthropicProvider::has_credentials()
     }
     #[cfg(not(feature = "anthropic"))]
     {
@@ -147,11 +146,7 @@ fn build_command_registry() -> rockbot_chat::ChatCommandRegistry {
 }
 
 impl App {
-    pub fn new(
-        config_path: PathBuf,
-        vault_path: PathBuf,
-        gateway_url: String,
-    ) -> Self {
+    pub fn new(config_path: PathBuf, vault_path: PathBuf, gateway_url: String) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
 
         Self {
@@ -1226,7 +1221,11 @@ impl App {
                         "Tool execution target: {}",
                         self.state
                             .remote_executors
-                            .get(self.state.selected_executor_index).map_or_else(|| "gateway".to_string(), RemoteExecutorInfo::display_name)
+                            .get(self.state.selected_executor_index)
+                            .map_or_else(
+                                || "gateway".to_string(),
+                                RemoteExecutorInfo::display_name
+                            )
                     ),
                     false,
                 ));
@@ -1641,12 +1640,17 @@ impl App {
                 query.clear();
                 selected_model = 0;
             }
-            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.state.providers.is_empty() => {
+            KeyCode::Char('e')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !self.state.providers.is_empty() =>
+            {
                 self.state.selected_provider = provider_index;
                 self.handle_edit_action();
                 return Ok(());
             }
-            KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            KeyCode::Char(c)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
                 query.push(c);
                 selected_model = 0;
             }
@@ -1673,10 +1677,13 @@ impl App {
         let Some(provider) = self.state.providers.get(provider_index) else {
             return;
         };
-        let filtered_for_query = self.filtered_provider_model_indices(provider_index, match &self.state.input_mode {
-            InputMode::ModelsOverlay { query, .. } => query,
-            _ => "",
-        });
+        let filtered_for_query = self.filtered_provider_model_indices(
+            provider_index,
+            match &self.state.input_mode {
+                InputMode::ModelsOverlay { query, .. } => query,
+                _ => "",
+            },
+        );
         let target_index = filtered_for_query
             .get(selected_model)
             .copied()
@@ -1695,10 +1702,7 @@ impl App {
         agent_state.populate_models(&self.state.providers);
         agent_state.select_model_value(&model_value);
         self.state.input_mode = InputMode::AddAgent(agent_state);
-        self.state.status_message = Some((
-            format!("Creating agent from {}", model.name),
-            false,
-        ));
+        self.state.status_message = Some((format!("Creating agent from {}", model.name), false));
     }
 
     fn handle_agent_launcher(
@@ -1728,16 +1732,14 @@ impl App {
                 state.query.clear();
                 state.selected = 0;
             }
-            KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            KeyCode::Char(c)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
                 state.query.push(c);
                 state.selected = 0;
             }
             KeyCode::Enter => {
-                if let Some(selection) = self
-                    .agent_launcher_items()
-                    .get(state.selected)
-                    .cloned()
-                {
+                if let Some(selection) = self.agent_launcher_items().get(state.selected).cloned() {
                     match selection {
                         AgentLauncherSelection::CreateNew => {
                             let mut agent_state = EditAgentState::new();
@@ -1745,8 +1747,11 @@ impl App {
                             self.state.input_mode = InputMode::AddAgent(agent_state);
                         }
                         AgentLauncherSelection::Agent(agent_id) => {
-                            if let Some(index) =
-                                self.state.agents.iter().position(|agent| agent.id == agent_id)
+                            if let Some(index) = self
+                                .state
+                                .agents
+                                .iter()
+                                .position(|agent| agent.id == agent_id)
                             {
                                 self.state.menu_item = MenuItem::Agents;
                                 self.state.menu_index = MenuItem::Agents as usize;
@@ -1808,15 +1813,23 @@ impl App {
     fn agent_launcher_items_for_query(&self, query: &str) -> Vec<AgentLauncherSelection> {
         let mut items = crate::search::fuzzy_indices(
             query,
-            self.state.agents.iter().enumerate().filter(|(_, agent)| agent.enabled).map(
-                |(idx, agent)| {
+            self.state
+                .agents
+                .iter()
+                .enumerate()
+                .filter(|(_, agent)| agent.enabled)
+                .map(|(idx, agent)| {
                     let model = agent.model.as_deref().unwrap_or("unconfigured");
                     (
                         idx,
-                        format!("{} {} {}", agent.id, model, agent.workspace.as_deref().unwrap_or("")),
+                        format!(
+                            "{} {} {}",
+                            agent.id,
+                            model,
+                            agent.workspace.as_deref().unwrap_or("")
+                        ),
                     )
-                },
-            ),
+                }),
         )
         .into_iter()
         .filter_map(|idx| self.state.agents.get(idx))
@@ -2685,11 +2698,7 @@ impl App {
                     None
                 };
             // Load messages if not already loaded
-            let already_loaded = self
-                .state
-                .session_chats
-                .get(&key)
-                .is_some_and(|c| c.loaded);
+            let already_loaded = self.state.session_chats.get(&key).is_some_and(|c| c.loaded);
             if !already_loaded {
                 self.spawn_load_session_messages(&key);
             }
@@ -3175,12 +3184,16 @@ impl App {
         let base_url = if state.provider_id == "bedrock" {
             state
                 .get_field_value_by_id("endpoint_url")
-                .filter(|v| !v.is_empty()).map_or_else(|| {
-                    format!(
-                        "https://bedrock-runtime.{}.amazonaws.com",
-                        state.aws_region()
-                    )
-                }, std::string::ToString::to_string)
+                .filter(|v| !v.is_empty())
+                .map_or_else(
+                    || {
+                        format!(
+                            "https://bedrock-runtime.{}.amazonaws.com",
+                            state.aws_region()
+                        )
+                    },
+                    std::string::ToString::to_string,
+                )
         } else {
             let url = state.base_url();
             if url.is_empty() {
@@ -3226,7 +3239,7 @@ impl App {
                 &base_url,
                 &secret,
             )
-                .await
+            .await
             {
                 Ok(()) => {
                     let _ = tx.send(Message::SetStatus(
@@ -3285,7 +3298,8 @@ impl App {
                 self.state.input_mode = set_mode(state);
             }
             KeyCode::Char('u')
-                if key.modifiers.contains(KeyModifiers::CONTROL) && state.is_model_picker_active() =>
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && state.is_model_picker_active() =>
             {
                 state.clear_model_query();
                 self.state.input_mode = set_mode(state);
@@ -4058,8 +4072,13 @@ impl App {
         let tx = self.state.tx.clone();
         let agent_id = agent_id.to_string();
         tokio::spawn(async move {
-            match ws_api_request_json(&client, "GET", &format!("/api/agents/{agent_id}/files"), None)
-                .await
+            match ws_api_request_json(
+                &client,
+                "GET",
+                &format!("/api/agents/{agent_id}/files"),
+                None,
+            )
+            .await
             {
                 Ok(resp) if resp.status == 200 => {
                     if let Ok(files) = serde_json::from_str::<Vec<ContextFileInfo>>(&resp.body) {
@@ -4261,7 +4280,9 @@ impl App {
                     self.state.input_cursor = self.state.input_buffer[self.state.input_cursor..]
                         .char_indices()
                         .nth(1)
-                        .map_or(self.state.input_buffer.len(), |(i, _)| self.state.input_cursor + i);
+                        .map_or(self.state.input_buffer.len(), |(i, _)| {
+                            self.state.input_cursor + i
+                        });
                 }
             }
             InputAction::Home => {
@@ -5199,7 +5220,8 @@ impl App {
                     Span::styled("RTT: ", Style::default().fg(Color::Cyan)),
                     Span::raw(
                         self.state
-                            .ws_last_rtt_ms.map_or_else(|| "--".to_string(), |ms| format!("{ms} ms")),
+                            .ws_last_rtt_ms
+                            .map_or_else(|| "--".to_string(), |ms| format!("{ms} ms")),
                     ),
                 ]));
                 lines.push(Line::from(vec![
@@ -5294,7 +5316,8 @@ impl App {
                     self.state
                         .remote_executors
                         .iter()
-                        .find(|executor| executor.target_id == target).map_or_else(|| target.to_string(), RemoteExecutorInfo::display_name)
+                        .find(|executor| executor.target_id == target)
+                        .map_or_else(|| target.to_string(), RemoteExecutorInfo::display_name)
                 } else {
                     "gateway".to_string()
                 };
@@ -5651,7 +5674,11 @@ impl App {
         frame.render_widget(paragraph, area);
     }
 
-    fn render_generic_detail(frame: &mut Frame, area: Rect, detail: &crate::state::CardDetailState) {
+    fn render_generic_detail(
+        frame: &mut Frame,
+        area: Rect,
+        detail: &crate::state::CardDetailState,
+    ) {
         let lines = vec![Line::from("Detail view for this mode.")];
         let paragraph = Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -5816,11 +5843,7 @@ fn update_credential_in_vault(
 ///
 /// Uses crossterm's `EventStream` for async terminal input (not poll/read),
 /// a `TerminalGuard` for RAII cleanup, and a unified `AppEvent` bus.
-pub async fn run_app(
-    config_path: PathBuf,
-    vault_path: PathBuf,
-    gateway_url: String,
-) -> Result<()> {
+pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: String) -> Result<()> {
     use crate::event::{spawn_terminal_input, AppEvent, TerminalGuard};
 
     // TerminalGuard owns raw mode, alternate screen, keyboard enhancement,
@@ -6459,8 +6482,10 @@ async fn handle_gateway_event(
                 locality: locality.clone(),
             });
             if !result.is_empty() && !session_key.is_empty() {
-                let prefix = locality
-                    .as_ref().map_or_else(|| format!("\n[{tool_name}]\n"), |value| format!("\n[{tool_name} | executed on: {value}]\n"));
+                let prefix = locality.as_ref().map_or_else(
+                    || format!("\n[{tool_name}]\n"),
+                    |value| format!("\n[{tool_name} | executed on: {value}]\n"),
+                );
                 let _ = tx.send(Message::ChatStreamChunk(format!(
                     "{session_key}:{prefix}{result}"
                 )));
@@ -6742,7 +6767,9 @@ async fn load_remote_executors_from_gateway(
     if response.status != 200 {
         anyhow::bail!("{}", extract_api_error(&response.body));
     }
-    Ok(serde_json::from_str::<Vec<RemoteExecutorInfo>>(&response.body)?)
+    Ok(serde_json::from_str::<Vec<RemoteExecutorInfo>>(
+        &response.body,
+    )?)
 }
 
 async fn load_agents(client: &rockbot_client::GatewayClient) -> Result<Vec<AgentInfo>> {
@@ -6995,7 +7022,8 @@ async fn load_cron_jobs_from_gateway(
             .and_then(|s| s.get("last_run_at_ms"))
             .and_then(serde_json::Value::as_u64)
             .map(|ms| {
-                chrono::DateTime::from_timestamp_millis(ms as i64).map_or_else(|| format!("{ms}"), |dt| dt.format("%H:%M:%S").to_string())
+                chrono::DateTime::from_timestamp_millis(ms as i64)
+                    .map_or_else(|| format!("{ms}"), |dt| dt.format("%H:%M:%S").to_string())
             });
         let last_status = state_val
             .and_then(|s| s.get("last_run_status"))
@@ -7005,7 +7033,10 @@ async fn load_cron_jobs_from_gateway(
             .and_then(|s| s.get("next_run_at_ms"))
             .and_then(serde_json::Value::as_u64)
             .map(|ms| {
-                chrono::DateTime::from_timestamp_millis(ms as i64).map_or_else(|| format!("{ms}"), |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                chrono::DateTime::from_timestamp_millis(ms as i64).map_or_else(
+                    || format!("{ms}"),
+                    |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+                )
             });
 
         jobs.push(CronJobInfo {
@@ -7052,8 +7083,8 @@ async fn toggle_cron_job(
 }
 
 async fn delete_cron_job(client: &rockbot_client::GatewayClient, job_id: &str) -> Result<()> {
-    let resp = ws_api_request_json(client, "DELETE", &format!("/api/cron/jobs/{job_id}"), None)
-        .await?;
+    let resp =
+        ws_api_request_json(client, "DELETE", &format!("/api/cron/jobs/{job_id}"), None).await?;
     if resp.status != 200 {
         anyhow::bail!("{}", extract_api_error(&resp.body));
     }
@@ -7131,15 +7162,22 @@ async fn test_provider_via_gateway(
 
 /// Archive a session via the gateway WS API.
 async fn kill_session(client: &rockbot_client::GatewayClient, session_key: &str) -> Result<()> {
-    let response =
-        ws_api_request_json(client, "DELETE", &format!("/api/sessions/{session_key}"), None)
-            .await?;
+    let response = ws_api_request_json(
+        client,
+        "DELETE",
+        &format!("/api/sessions/{session_key}"),
+        None,
+    )
+    .await?;
 
     if response.status == 200 || response.status == 404 {
         // 404 means session already gone, which is fine
         Ok(())
     } else {
-        Err(anyhow::anyhow!("Failed to kill session: {}", response.status))
+        Err(anyhow::anyhow!(
+            "Failed to kill session: {}",
+            response.status
+        ))
     }
 }
 
@@ -7518,9 +7556,13 @@ async fn create_session_via_gateway(
         );
     }
 
-    let response =
-        ws_api_request_json(client, "POST", "/api/sessions", Some(serde_json::Value::Object(body)))
-            .await?;
+    let response = ws_api_request_json(
+        client,
+        "POST",
+        "/api/sessions",
+        Some(serde_json::Value::Object(body)),
+    )
+    .await?;
 
     if response.status == 201 {
         let json: serde_json::Value = serde_json::from_str(&response.body)?;

@@ -1,0 +1,24 @@
+[package]
+name = "rockbot-llm-anthropic"
+version.workspace = true
+edition = "2021"
+description = "Anthropic Claude provider for RockBot"
+license = "MIT"
+
+[lints]
+workspace = true
+
+[dependencies]
+rockbot-llm = { path = "../rockbot-llm", default-features = false }
+async-trait = "0.1"
+async-stream = "0.3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures-util = { workspace = true }
+claude-agent-sdk = { workspace = true }
+dirs = "5"
+tokio = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

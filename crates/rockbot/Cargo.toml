@@ -19,10 +19,10 @@ enhanced = ["conservative", "overseer", "doctor-ai", "butler", "vault-replicatio
 experimental = ["enhanced", "otel", "bedrock-deploy"]
 enshitify = ["discord"]
 # LLM providers
-anthropic = ["rockbot-cli/anthropic", "rockbot-llm/anthropic"]
-openai = ["rockbot-cli/openai", "rockbot-llm/openai"]
+anthropic = ["rockbot-cli/anthropic"]
+openai = ["rockbot-cli/openai"]
 ollama = ["rockbot-cli/ollama", "rockbot-llm/ollama"]
-bedrock = ["rockbot-cli/bedrock", "rockbot-llm/bedrock"]
+bedrock = ["rockbot-cli/bedrock"]
 all-providers = ["anthropic", "openai", "ollama", "bedrock"]
 # Channel providers
 discord = ["rockbot-cli/discord"]

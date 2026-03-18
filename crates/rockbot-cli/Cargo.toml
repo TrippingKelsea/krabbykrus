@@ -8,10 +8,10 @@ license = "MIT"
 [features]
 default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "tools-mcp", "tools-markdown"]
 # LLM providers
-anthropic = ["rockbot-llm/anthropic", "rockbot-gateway/anthropic", "rockbot-tui/anthropic"]
-openai = ["rockbot-llm/openai", "rockbot-gateway/openai", "rockbot-tui/openai"]
+anthropic = ["dep:rockbot-llm-anthropic", "rockbot-tui/anthropic"]
+openai = ["dep:rockbot-llm-openai"]
 ollama = ["rockbot-llm/ollama", "rockbot-gateway/ollama", "rockbot-tui/ollama"]
-bedrock = ["rockbot-llm/bedrock", "rockbot-gateway/bedrock", "rockbot-tui/bedrock"]
+bedrock = ["dep:rockbot-llm-bedrock"]
 # Channel providers
 discord = ["rockbot-gateway/discord", "rockbot-tui/discord"]
 telegram = ["rockbot-gateway/telegram", "rockbot-tui/telegram"]
@@ -52,6 +52,9 @@ rockbot-security = { path = "../rockbot-security" }
 rockbot-credentials = { path = "../rockbot-credentials" }
 rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
 rockbot-llm = { path = "../rockbot-llm", default-features = false }
+rockbot-llm-anthropic = { path = "../rockbot-llm-anthropic", optional = true }
+rockbot-llm-bedrock = { path = "../rockbot-llm-bedrock", optional = true }
+rockbot-llm-openai = { path = "../rockbot-llm-openai", optional = true }
 rockbot-pki = { path = "../rockbot-pki" }
 rockbot-doctor = { path = "../rockbot-doctor", optional = true }
 rockbot-overseer = { path = "../rockbot-overseer", optional = true }

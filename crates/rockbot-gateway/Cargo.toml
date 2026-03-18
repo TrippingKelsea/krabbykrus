@@ -8,10 +8,10 @@ license = "MIT"
 [features]
 default = ["bedrock", "discord", "telegram", "signal", "tools-credentials", "tools-mcp", "tools-markdown"]
 # LLM providers
-anthropic = ["rockbot-llm/anthropic"]
-openai = ["rockbot-llm/openai"]
+anthropic = []
+openai = []
 ollama = ["rockbot-llm/ollama"]
-bedrock = ["rockbot-llm/bedrock"]
+bedrock = []
 # Channel providers
 discord = ["dep:rockbot-channels-discord"]
 telegram = ["dep:rockbot-channels-telegram"]
