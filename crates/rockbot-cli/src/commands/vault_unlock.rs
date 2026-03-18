@@ -18,14 +18,29 @@ pub struct VaultUnlockResult {
     pub llm_credentials: std::collections::HashMap<String, String>,
 }
 
-/// Known LLM provider endpoint names in the vault
+/// Known vault/API-key-backed provider endpoint names.
+///
+/// Providers that use ambient or non-API-key auth (for example AWS Bedrock via
+/// the standard AWS credential chain) are intentionally not listed here.
 const LLM_PROVIDERS: &[(&str, &str)] = &[
-    ("anthropic", "ANTHROPIC_API_KEY"),
     ("openai", "OPENAI_API_KEY"),
     ("google", "GOOGLE_API_KEY"),
     ("mistral", "MISTRAL_API_KEY"),
     ("cohere", "COHERE_API_KEY"),
 ];
+
+#[cfg(feature = "anthropic")]
+const ANTHROPIC_PROVIDER: Option<(&str, &str)> = Some(("anthropic", "ANTHROPIC_API_KEY"));
+#[cfg(not(feature = "anthropic"))]
+const ANTHROPIC_PROVIDER: Option<(&str, &str)> = None;
+
+fn known_llm_providers() -> Vec<(&'static str, &'static str)> {
+    let mut providers = LLM_PROVIDERS.to_vec();
+    if let Some(provider) = ANTHROPIC_PROVIDER {
+        providers.push(provider);
+    }
+    providers
+}
 
 /// Initialize and unlock the credential vault
 ///
@@ -202,7 +217,7 @@ async fn retrieve_llm_credentials(
     // Get all endpoints
     let endpoints = manager.list_endpoints().await;
 
-    for (provider_name, env_var_name) in LLM_PROVIDERS {
+    for (provider_name, env_var_name) in known_llm_providers() {
         // Look for endpoint with matching name
         if let Some(_endpoint) = endpoints.iter().find(|e| {
             e.name.to_lowercase() == *provider_name || e.name.to_lowercase().contains(provider_name)
@@ -235,8 +250,8 @@ async fn retrieve_llm_credentials(
     }
 
     // Also check environment for credentials not in vault
-    for (provider_name, env_var_name) in LLM_PROVIDERS {
-        if !credentials.contains_key(*provider_name) {
+    for (provider_name, env_var_name) in known_llm_providers() {
+        if !credentials.contains_key(provider_name) {
             if let Ok(api_key) = std::env::var(env_var_name) {
                 debug!("{} API key found in environment", provider_name);
                 credentials.insert(provider_name.to_string(), api_key);
@@ -246,8 +261,8 @@ async fn retrieve_llm_credentials(
 
     if credentials.is_empty() {
         warn!(
-            "No LLM API keys found in vault or environment. \
-             Add credentials with 'rockbot credentials add anthropic' or set environment variables."
+            "No vault-managed LLM API keys found in vault or environment. \
+             Providers that use ambient auth, such as AWS Bedrock via the standard AWS credential chain, may still work."
         );
     } else {
         info!(
@@ -292,7 +307,9 @@ mod tests {
 
     #[test]
     fn test_llm_providers_list() {
-        assert!(LLM_PROVIDERS.iter().any(|(name, _)| *name == "anthropic"));
-        assert!(LLM_PROVIDERS.iter().any(|(name, _)| *name == "openai"));
+        let providers = known_llm_providers();
+        assert!(providers.iter().any(|(name, _)| *name == "openai"));
+        #[cfg(feature = "anthropic")]
+        assert!(providers.iter().any(|(name, _)| *name == "anthropic"));
     }
 }

@@ -273,6 +273,13 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
             agents_created, agents_pending
         );
         info!("Add credentials, then POST /api/gateway/reload to activate pending agents");
+    } else if agents_created == 0 {
+        info!("Gateway initialized: 0 agent(s) active");
+        info!(
+            "No agents are currently configured in the replicated store. \
+             Providers are ready, but the gateway will not serve model requests until an agent is created."
+        );
+        info!("Create an agent from the TUI or via POST /api/agents.");
     } else {
         info!("Gateway initialized: {} agent(s) active", agents_created);
     }
