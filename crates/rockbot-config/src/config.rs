@@ -661,6 +661,15 @@ pub struct AgentInstance {
     /// Parent agent ID (for subagents)
     #[serde(default)]
     pub parent_id: Option<String>,
+    /// Immutable provenance: which agent originally created this agent
+    #[serde(default)]
+    pub creator_agent_id: Option<String>,
+    /// Current owner/steward of this agent
+    #[serde(default)]
+    pub owner_agent_id: Option<String>,
+    /// Execution/communication zone assignment
+    #[serde(default)]
+    pub zone_id: Option<String>,
     /// Custom system prompt override
     #[serde(default)]
     pub system_prompt: Option<String>,

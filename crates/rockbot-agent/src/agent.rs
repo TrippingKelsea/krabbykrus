@@ -2142,14 +2142,14 @@ impl Agent {
              - Execution target: {}\n\
              - Execution working directory hint: {}\n\
              - Gateway workspace hint: {}\n\
-             - Agent context directory: {}\n\n\
+             - Agent context store: {}\n\n\
              Environment-sensitive claims MUST be verified with tool calls against the execution target. \
              This includes hostname, current user, working directory, filesystem contents, installed tools, \
              operating system details, running processes, and any other live machine state. \
              Do NOT infer these from the gateway context, prior messages, or model knowledge.\n\n\
-             Your managed agent context lives at `{}`. Your SOUL.md file there defines your \
+             Your managed agent context is stored canonically in `{}`. SOUL.md defines your \
              identity, and AGENTS.md / MEMORY.md / SYSTEM-PROMPT.md refine your behavior over \
-             time. Treat those files as canonical context, but verify live environment state with tools.",
+             time. Treat those markdown documents as canonical context, but verify live environment state with tools.",
             self.config.id,
             context.session_id,
             context.available_tools.join(", "),
@@ -4359,8 +4359,9 @@ The user wants me to explore the codebase. I should start by listing the directo
             .storage_root
             .clone()
             .unwrap_or_else(rockbot_storage_runtime::default_storage_root);
-        rockbot_storage_runtime::agent_context_dir(&storage_root, &self.config.id)
-            .unwrap_or_else(|_| storage_root.join("agents").join(&self.config.id))
+        rockbot_storage_runtime::StorageRuntime::new_with_root_sync(&rockbot_config::Config::default(), storage_root.clone())
+            .and_then(|runtime| runtime.agent_vdisk_path(&self.config.id))
+            .unwrap_or_else(|_| storage_root.join("agents").join(format!("{}.data", self.config.id)))
     }
 
     /// Get the workspace path for this agent (used for tool execution and system prompt context).

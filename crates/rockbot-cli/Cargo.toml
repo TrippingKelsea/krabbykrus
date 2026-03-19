@@ -64,6 +64,7 @@ rockbot-deploy = { path = "../rockbot-deploy", optional = true }
 rockbot-butler = { path = "../rockbot-butler", optional = true }
 rockbot-storage = { path = "../rockbot-storage" }
 rockbot-storage-runtime = { path = "../rockbot-storage-runtime" }
+rockbot-storage-utility = { path = "../rockbot-storage-utility" }
 rockbot-vdisk = { path = "../rockbot-vdisk" }
 rockbot-tui = { path = "../rockbot-tui", default-features = false }
 

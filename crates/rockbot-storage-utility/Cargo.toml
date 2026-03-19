@@ -1,0 +1,22 @@
+[package]
+name = "rockbot-storage-utility"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Operator-facing storage export/import/projection utilities for RockBot"
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+rockbot-storage-runtime = { path = "../rockbot-storage-runtime" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+rockbot-config = { path = "../rockbot-config" }
+tempfile = { workspace = true }

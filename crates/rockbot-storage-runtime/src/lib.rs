@@ -1,10 +1,13 @@
 use anyhow::{anyhow, Result};
+use chrono::Utc;
 use rockbot_config::{
     config::{StorageEncryptionMode, StorageKeySource},
     Config,
 };
 use rockbot_pki::PkiManager;
 use rockbot_storage::Store;
+use rockbot_storage::tables;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -26,6 +29,7 @@ pub enum StoreKind {
     Sessions,
     Cron,
     Routing,
+    Topology,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +101,88 @@ pub struct StorageRuntime {
     pki_manager: Option<Arc<PkiManager>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplicationClass {
+    Required,
+    Preferred,
+    LocalOnly,
+    ManualPromote,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentDocumentRecord {
+    pub document_name: String,
+    pub markdown_content: String,
+    pub content_hash: String,
+    pub version: u64,
+    pub updated_at: String,
+    pub updated_by: String,
+    pub replication_class: ReplicationClass,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentObjectRecord {
+    pub object_id: String,
+    pub content_type: String,
+    pub size_bytes: u64,
+    pub hash: String,
+    pub replication_class: ReplicationClass,
+    pub promoted_for_replication: bool,
+    pub last_replicated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentVdiskRecord {
+    pub agent_id: String,
+    pub disk_path: String,
+    pub key_label: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopologyNodeRecord {
+    pub agent_id: String,
+    pub creator_agent_id: Option<String>,
+    pub owner_agent_id: Option<String>,
+    pub zone_id: Option<String>,
+    pub role: Option<String>,
+    pub state: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub ownership_changed_at: Option<String>,
+    pub created_via: String,
+    pub agent_vdisk_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopologyEdgeRecord {
+    pub edge_id: String,
+    pub from_agent_id: String,
+    pub to_agent_id: String,
+    pub edge_kind: String,
+    pub policy_id: Option<String>,
+    pub created_by: String,
+    pub observed_count: u64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZoneRecord {
+    pub zone_id: String,
+    pub owner_agent_id: Option<String>,
+    pub root_agent_id: Option<String>,
+    pub max_agents: u32,
+    pub max_depth: u32,
+    pub max_cross_zone_calls: u32,
+    pub allowed_models: Vec<String>,
+    pub allowed_tool_classes: Vec<String>,
+    pub allow_cross_zone_delegation: bool,
+    pub allow_subagent_creation: bool,
+}
+
 impl StorageRuntime {
     pub async fn new(config_path: &Path, config: &Config) -> Result<Self> {
         let storage_root = storage_root_dir(config_path, config);
@@ -147,6 +233,7 @@ impl StorageRuntime {
                 self.plan_store(StoreKind::Sessions, &vault_path)?,
                 self.plan_store(StoreKind::Cron, &vault_path)?,
                 self.plan_store(StoreKind::Routing, &vault_path)?,
+                self.plan_store(StoreKind::Topology, &vault_path)?,
             ],
         })
     }
@@ -265,6 +352,19 @@ impl StorageRuntime {
                         encryption_mode_log(
                             self.key_for_label("routing")?.is_some(),
                             &format!("virtual disk {} volume 'routing'", self.disk_path.display()),
+                        ),
+                    )
+                } else {
+                    (ResolutionSource::Missing, "unavailable".to_string())
+                }
+            }
+            StoreKind::Topology => {
+                if volume.exists {
+                    (
+                        ResolutionSource::VirtualDisk,
+                        encryption_mode_log(
+                            self.key_for_label("topology")?.is_some(),
+                            &format!("virtual disk {} volume 'topology'", self.disk_path.display()),
                         ),
                     )
                 } else {
@@ -419,6 +519,19 @@ impl StorageRuntime {
         })
     }
 
+    pub async fn open_topology_store(&self) -> Result<OpenedStore> {
+        let key = self.key_for_label("topology")?;
+        let store = Store::open_volume(&self.disk_path, "topology", 128 * 1024 * 1024, key)?;
+        Ok(OpenedStore {
+            store: Arc::new(store),
+            descriptor: encryption_mode_log(
+                key.is_some(),
+                &format!("virtual disk {} volume 'topology'", self.disk_path.display()),
+            ),
+            mode: StoreMode::Persistent,
+        })
+    }
+
     pub async fn open_vault_volume(&self, data_dir: &Path) -> Result<OpenedStore> {
         self.open_vault_volume_sync(data_dir)
     }
@@ -489,7 +602,11 @@ impl StorageRuntime {
                     "no legacy vault.db available; left vault volume unchanged".to_string()
                 }
             }
-            StoreKind::Agents | StoreKind::Sessions | StoreKind::Cron | StoreKind::Routing => {
+            StoreKind::Agents
+            | StoreKind::Sessions
+            | StoreKind::Cron
+            | StoreKind::Routing
+            | StoreKind::Topology => {
                 if plan.legacy.exists {
                     let key = self.key_for_label(kind.label())?;
                     rockbot_vdisk::replace_file(
@@ -506,6 +623,7 @@ impl StorageRuntime {
                         StoreKind::Agents => "removed suspect agents volume; gateway will fall back to non-vdisk agent persistence".to_string(),
                         StoreKind::Cron => "removed suspect cron volume; gateway will recreate or fall back in memory".to_string(),
                         StoreKind::Routing => "removed suspect routing volume; gateway will recreate it on demand".to_string(),
+                        StoreKind::Topology => "removed suspect topology volume; gateway will recreate it on demand".to_string(),
                         StoreKind::Vault => unreachable!(),
                     }
                 } else {
@@ -537,58 +655,209 @@ impl StorageRuntime {
         self.storage_root.join("agents")
     }
 
+    pub fn agent_vdisk_dir(&self) -> PathBuf {
+        self.storage_root.join("agents")
+    }
+
+    pub fn agent_vdisk_path(&self, agent_id: &str) -> Result<PathBuf> {
+        if !is_valid_agent_id(agent_id) {
+            return Err(anyhow!("invalid agent id"));
+        }
+        Ok(self.agent_vdisk_dir().join(format!("{agent_id}.data")))
+    }
+
+    fn open_agent_state_store_sync(&self, agent_id: &str) -> Result<Store> {
+        let disk_path = self.agent_vdisk_path(agent_id)?;
+        if let Some(parent) = disk_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let key = self.key_for_label(&format!("agent:{agent_id}"))?;
+        Store::open_volume(&disk_path, "state", 64 * 1024 * 1024, key)
+    }
+
+    pub async fn open_agent_state_store(&self, agent_id: &str) -> Result<Arc<Store>> {
+        Ok(Arc::new(self.open_agent_state_store_sync(agent_id)?))
+    }
+
+    fn upsert_agent_vdisk_registry(&self, agent_id: &str, disk_path: &Path) -> Result<()> {
+        let topology = self.open_topology_store_sync()?;
+        let now = now_rfc3339();
+        let existing: Option<AgentVdiskRecord> = topology.get_json(tables::AGENT_VDISKS, agent_id)?;
+        let record = AgentVdiskRecord {
+            agent_id: agent_id.to_string(),
+            disk_path: disk_path.display().to_string(),
+            key_label: format!("agent:{agent_id}"),
+            created_at: existing
+                .as_ref()
+                .map(|record| record.created_at.clone())
+                .unwrap_or_else(|| now.clone()),
+            updated_at: now,
+        };
+        topology.put_json(tables::AGENT_VDISKS, agent_id, &record)?;
+        Ok(())
+    }
+
+    fn open_topology_store_sync(&self) -> Result<Store> {
+        let key = self.key_for_label("topology")?;
+        Store::open_volume(&self.disk_path, "topology", 128 * 1024 * 1024, key)
+    }
+
+    pub fn upsert_topology_node(&self, node: &TopologyNodeRecord) -> Result<()> {
+        let topology = self.open_topology_store_sync()?;
+        topology.put_json(tables::TOPOLOGY_NODES, &node.agent_id, node)
+    }
+
+    pub fn ensure_zone(&self, zone: &ZoneRecord) -> Result<()> {
+        let topology = self.open_topology_store_sync()?;
+        topology.put_json(tables::ZONES, &zone.zone_id, zone)?;
+        Ok(())
+    }
+
+    pub fn record_topology_edge(&self, edge: &TopologyEdgeRecord) -> Result<()> {
+        let topology = self.open_topology_store_sync()?;
+        topology.put_json(tables::TOPOLOGY_EDGES, &edge.edge_id, edge)?;
+        topology.put_json(
+            tables::TOPOLOGY_EDGES_FROM,
+            &format!("{}\0{}", edge.from_agent_id, edge.edge_id),
+            edge,
+        )?;
+        topology.put_json(
+            tables::TOPOLOGY_EDGES_TO,
+            &format!("{}\0{}", edge.to_agent_id, edge.edge_id),
+            edge,
+        )?;
+        Ok(())
+    }
+
+    pub fn ensure_agent_topology(
+        &self,
+        config: &rockbot_config::AgentInstance,
+        created_via: &str,
+    ) -> Result<()> {
+        let disk_path = self.agent_vdisk_path(&config.id)?;
+        self.upsert_agent_vdisk_registry(&config.id, &disk_path)?;
+
+        let zone_id = config
+            .zone_id
+            .clone()
+            .or_else(|| config.owner_agent_id.clone().map(|owner| format!("zone:{owner}")))
+            .unwrap_or_else(|| "zone:default".to_string());
+        self.ensure_zone(&ZoneRecord {
+            zone_id: zone_id.clone(),
+            owner_agent_id: config.owner_agent_id.clone(),
+            root_agent_id: config.owner_agent_id.clone().or_else(|| Some(config.id.clone())),
+            max_agents: 32,
+            max_depth: 8,
+            max_cross_zone_calls: 8,
+            allowed_models: Vec::new(),
+            allowed_tool_classes: Vec::new(),
+            allow_cross_zone_delegation: false,
+            allow_subagent_creation: true,
+        })?;
+        self.upsert_topology_node(&TopologyNodeRecord {
+            agent_id: config.id.clone(),
+            creator_agent_id: config.creator_agent_id.clone(),
+            owner_agent_id: config.owner_agent_id.clone(),
+            zone_id: Some(zone_id),
+            role: None,
+            state: if config.enabled { "active" } else { "disabled" }.to_string(),
+            created_at: now_rfc3339(),
+            updated_at: now_rfc3339(),
+            ownership_changed_at: None,
+            created_via: created_via.to_string(),
+            agent_vdisk_path: Some(disk_path.display().to_string()),
+        })?;
+        if let Some(owner) = &config.owner_agent_id {
+            self.record_topology_edge(&TopologyEdgeRecord {
+                edge_id: format!("spawn:{}:{}", owner, config.id),
+                from_agent_id: owner.clone(),
+                to_agent_id: config.id.clone(),
+                edge_kind: "spawn".to_string(),
+                policy_id: None,
+                created_by: owner.clone(),
+                observed_count: 0,
+                created_at: now_rfc3339(),
+                updated_at: now_rfc3339(),
+            })?;
+            self.record_topology_edge(&TopologyEdgeRecord {
+                edge_id: format!("delegate:{}:{}", owner, config.id),
+                from_agent_id: owner.clone(),
+                to_agent_id: config.id.clone(),
+                edge_kind: "delegate".to_string(),
+                policy_id: None,
+                created_by: owner.clone(),
+                observed_count: 0,
+                created_at: now_rfc3339(),
+                updated_at: now_rfc3339(),
+            })?;
+        }
+        Ok(())
+    }
+
     pub async fn initialize_agent_context(
         &self,
         agent_id: &str,
         system_prompt: Option<&str>,
     ) -> Result<PathBuf> {
-        let agent_dir = agent_context_dir(&self.storage_root, agent_id)?;
-        tokio::fs::create_dir_all(&agent_dir).await?;
-
-        ensure_agent_context_file(
-            &agent_dir.join("SOUL.md"),
-            "# Agent Identity\n\n\
-             You are a capable autonomous agent. You accomplish tasks by taking direct action \
-             using your tools — never by describing what you would do.\n\n\
-             ## Principles\n\n\
-             - Act decisively. Start working immediately when given a task.\n\
-             - Be thorough. Complete every step before reporting results.\n\
-             - Be resilient. When something fails, analyze the error and try a different approach.\n\
-             - Be self-sufficient. Never ask the user to do something you can do with your tools.\n",
-        )
-        .await?;
-
-        ensure_agent_context_file(
-            &agent_dir.join("SYSTEM-PROMPT.md"),
-            system_prompt
-                .unwrap_or("# System Prompt\n\nCustomize this agent's system prompt here.\n"),
-        )
-        .await?;
-
-        ensure_agent_context_file(
-            &agent_dir.join("AGENTS.md"),
-            "# Operational Guidelines\n\n\
-             Define behavioral rules, constraints, and standard operating procedures here.\n",
-        )
-        .await?;
-
-        ensure_agent_context_file(
-            &agent_dir.join("MEMORY.md"),
-            "# Memory Guidelines\n\n\
-             Describe how this agent should use its memory tools, what to remember,\n\
-             and how to organize stored knowledge.\n",
-        )
-        .await?;
-
-        Ok(agent_dir)
+        let store = self.open_agent_state_store_sync(agent_id)?;
+        let docs = [
+            (
+                "SOUL.md",
+                "# Agent Identity\n\n\
+                 You are a capable autonomous agent. You accomplish tasks by taking direct action \
+                 using your tools — never by describing what you would do.\n\n\
+                 ## Principles\n\n\
+                 - Act decisively. Start working immediately when given a task.\n\
+                 - Be thorough. Complete every step before reporting results.\n\
+                 - Be resilient. When something fails, analyze the error and try a different approach.\n\
+                 - Be self-sufficient. Never ask the user to do something you can do with your tools.\n",
+            ),
+            (
+                "SYSTEM-PROMPT.md",
+                system_prompt.unwrap_or(
+                    "# System Prompt\n\nCustomize this agent's system prompt here.\n",
+                ),
+            ),
+            (
+                "AGENTS.md",
+                "# Operational Guidelines\n\n\
+                 Define behavioral rules, constraints, and standard operating procedures here.\n",
+            ),
+            (
+                "MEMORY.md",
+                "# Memory Guidelines\n\n\
+                 Describe how this agent should use its memory tools, what to remember,\n\
+                 and how to organize stored knowledge.\n",
+            ),
+        ];
+        for (name, content) in docs {
+            if store.get_json::<AgentDocumentRecord>(tables::AGENT_DOCUMENTS, name)?.is_none() {
+                store.put_json(
+                    tables::AGENT_DOCUMENTS,
+                    name,
+                    &AgentDocumentRecord {
+                        document_name: name.to_string(),
+                        markdown_content: content.to_string(),
+                        content_hash: sha256_hex(content.as_bytes()),
+                        version: 1,
+                        updated_at: now_rfc3339(),
+                        updated_by: "system".to_string(),
+                        replication_class: ReplicationClass::Required,
+                    },
+                )?;
+            }
+        }
+        let disk_path = self.agent_vdisk_path(agent_id)?;
+        self.upsert_agent_vdisk_registry(agent_id, &disk_path)?;
+        Ok(disk_path)
     }
 
     pub async fn list_agent_context_files(&self, agent_id: &str) -> Result<Vec<AgentContextFileInfo>> {
-        list_agent_context_files(&self.storage_root, agent_id).await
+        list_agent_context_files_with_runtime(self, agent_id).await
     }
 
     pub async fn read_agent_context_file(&self, agent_id: &str, filename: &str) -> Result<String> {
-        read_agent_context_file(&self.storage_root, agent_id, filename).await
+        read_agent_context_file_with_runtime(self, agent_id, filename).await
     }
 
     pub async fn write_agent_context_file(
@@ -597,11 +866,11 @@ impl StorageRuntime {
         filename: &str,
         content: &str,
     ) -> Result<()> {
-        write_agent_context_file(&self.storage_root, agent_id, filename, content).await
+        write_agent_context_file_with_runtime(self, agent_id, filename, content).await
     }
 
     pub async fn delete_agent_context_file(&self, agent_id: &str, filename: &str) -> Result<()> {
-        delete_agent_context_file(&self.storage_root, agent_id, filename).await
+        delete_agent_context_file_with_runtime(self, agent_id, filename).await
     }
 }
 
@@ -613,6 +882,7 @@ impl StoreKind {
             StoreKind::Sessions => "sessions",
             StoreKind::Cron => "cron",
             StoreKind::Routing => "routing",
+            StoreKind::Topology => "topology",
         }
     }
 
@@ -627,6 +897,7 @@ impl StoreKind {
             StoreKind::Sessions => storage_root.join("data").join("sessions.redb"),
             StoreKind::Cron => storage_root.join("data").join("cron.redb"),
             StoreKind::Routing => storage_root.join("data").join("routing.redb"),
+            StoreKind::Topology => storage_root.join("data").join("topology.redb"),
         }
     }
 }
@@ -674,27 +945,28 @@ pub fn agent_context_dir(storage_root: &Path, agent_id: &str) -> Result<PathBuf>
     Ok(storage_root.join("agents").join(agent_id))
 }
 
-async fn ensure_agent_context_file(path: &Path, content: &str) -> Result<()> {
-    if tokio::fs::metadata(path).await.is_err() {
-        tokio::fs::write(path, content).await?;
-    }
-    Ok(())
-}
-
 pub async fn list_agent_context_files(
     storage_root: &Path,
     agent_id: &str,
 ) -> Result<Vec<AgentContextFileInfo>> {
-    let agent_dir = agent_context_dir(storage_root, agent_id)?;
+    let runtime = compat_runtime_for_storage_root(storage_root)?;
+    list_agent_context_files_with_runtime(&runtime, agent_id).await
+}
+
+async fn list_agent_context_files_with_runtime(
+    runtime: &StorageRuntime,
+    agent_id: &str,
+) -> Result<Vec<AgentContextFileInfo>> {
+    let store = runtime.open_agent_state_store_sync(agent_id)?;
     let mut files: Vec<AgentContextFileInfo> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     for &name in WELL_KNOWN_AGENT_CONTEXT_FILES {
-        let file_path = agent_dir.join(name);
-        let (exists, size) = match tokio::fs::metadata(&file_path).await {
-            Ok(meta) => (true, meta.len()),
-            Err(_) => (false, 0),
-        };
+        let record = store.get_json::<AgentDocumentRecord>(tables::AGENT_DOCUMENTS, name)?;
+        let (exists, size) = record
+            .as_ref()
+            .map(|record| (true, record.markdown_content.len() as u64))
+            .unwrap_or((false, 0));
         seen.insert(name.to_string());
         files.push(AgentContextFileInfo {
             name: name.to_string(),
@@ -704,18 +976,14 @@ pub async fn list_agent_context_files(
         });
     }
 
-    if let Ok(mut entries) = tokio::fs::read_dir(&agent_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.ends_with(".md") && !seen.contains(&name) {
-                let size = entry.metadata().await.map(|m| m.len()).unwrap_or(0);
-                files.push(AgentContextFileInfo {
-                    name,
-                    exists: true,
-                    size_bytes: size,
-                    well_known: false,
-                });
-            }
+    for (name, record) in store.list_json::<AgentDocumentRecord>(tables::AGENT_DOCUMENTS)? {
+        if !seen.contains(&name) {
+            files.push(AgentContextFileInfo {
+                name,
+                exists: true,
+                size_bytes: record.markdown_content.len() as u64,
+                well_known: false,
+            });
         }
     }
 
@@ -730,8 +998,20 @@ pub async fn read_agent_context_file(
     if !is_valid_agent_context_filename(filename) {
         return Err(anyhow!("invalid filename"));
     }
-    let path = agent_context_dir(storage_root, agent_id)?.join(filename);
-    Ok(tokio::fs::read_to_string(path).await?)
+    let runtime = compat_runtime_for_storage_root(storage_root)?;
+    read_agent_context_file_with_runtime(&runtime, agent_id, filename).await
+}
+
+async fn read_agent_context_file_with_runtime(
+    runtime: &StorageRuntime,
+    agent_id: &str,
+    filename: &str,
+) -> Result<String> {
+    let store = runtime.open_agent_state_store_sync(agent_id)?;
+    store
+        .get_json::<AgentDocumentRecord>(tables::AGENT_DOCUMENTS, filename)?
+        .map(|record| record.markdown_content)
+        .ok_or_else(|| anyhow!(std::io::Error::from(std::io::ErrorKind::NotFound)))
 }
 
 pub async fn write_agent_context_file(
@@ -743,9 +1023,35 @@ pub async fn write_agent_context_file(
     if !is_valid_agent_context_filename(filename) {
         return Err(anyhow!("invalid filename"));
     }
-    let agent_dir = agent_context_dir(storage_root, agent_id)?;
-    tokio::fs::create_dir_all(&agent_dir).await?;
-    tokio::fs::write(agent_dir.join(filename), content).await?;
+    let runtime = compat_runtime_for_storage_root(storage_root)?;
+    write_agent_context_file_with_runtime(&runtime, agent_id, filename, content).await
+}
+
+async fn write_agent_context_file_with_runtime(
+    runtime: &StorageRuntime,
+    agent_id: &str,
+    filename: &str,
+    content: &str,
+) -> Result<()> {
+    runtime.initialize_agent_context(agent_id, None).await?;
+    let store = runtime.open_agent_state_store_sync(agent_id)?;
+    let next_version = store
+        .get_json::<AgentDocumentRecord>(tables::AGENT_DOCUMENTS, filename)?
+        .map(|record| record.version + 1)
+        .unwrap_or(1);
+    store.put_json(
+        tables::AGENT_DOCUMENTS,
+        filename,
+        &AgentDocumentRecord {
+            document_name: filename.to_string(),
+            markdown_content: content.to_string(),
+            content_hash: sha256_hex(content.as_bytes()),
+            version: next_version,
+            updated_at: now_rfc3339(),
+            updated_by: "runtime".to_string(),
+            replication_class: ReplicationClass::Required,
+        },
+    )?;
     Ok(())
 }
 
@@ -760,9 +1066,46 @@ pub async fn delete_agent_context_file(
     if !is_valid_agent_context_filename(filename) {
         return Err(anyhow!("invalid filename"));
     }
-    let path = agent_context_dir(storage_root, agent_id)?.join(filename);
-    tokio::fs::remove_file(path).await?;
+    let runtime = compat_runtime_for_storage_root(storage_root)?;
+    delete_agent_context_file_with_runtime(&runtime, agent_id, filename).await
+}
+
+async fn delete_agent_context_file_with_runtime(
+    runtime: &StorageRuntime,
+    agent_id: &str,
+    filename: &str,
+) -> Result<()> {
+    let store = runtime.open_agent_state_store_sync(agent_id)?;
+    if !store.delete(tables::AGENT_DOCUMENTS, filename)? {
+        return Err(anyhow!(std::io::Error::from(std::io::ErrorKind::NotFound)));
+    }
     Ok(())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
+    let mut out = String::with_capacity(digest.as_ref().len() * 2);
+    for byte in digest.as_ref() {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
+fn now_rfc3339() -> String {
+    Utc::now().to_rfc3339()
+}
+
+fn compat_runtime_for_storage_root(storage_root: &Path) -> Result<StorageRuntime> {
+    let config = Config::default();
+    match StorageRuntime::new_with_root_sync(&config, storage_root.to_path_buf()) {
+        Ok(runtime) => Ok(runtime),
+        Err(_) => {
+            let mut fallback = Config::default();
+            fallback.security.storage.enabled = false;
+            StorageRuntime::new_with_root_sync(&fallback, storage_root.to_path_buf())
+        }
+    }
 }
 
 pub fn storage_root_dir(config_path: &Path, config: &Config) -> PathBuf {
@@ -837,6 +1180,15 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn workspace_tempdir() -> TempDir {
+        let base = std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("target")
+            .join("tmp-tests");
+        std::fs::create_dir_all(&base).unwrap();
+        tempfile::tempdir_in(base).unwrap()
+    }
+
     fn cfg_with_root(root: &Path) -> Config {
         let mut cfg = Config::default();
         cfg.credentials.vault_path = root.join("vault");
@@ -846,7 +1198,7 @@ mod tests {
 
     #[tokio::test]
     async fn sessions_plan_prefers_legacy_when_present() {
-        let dir = TempDir::new().unwrap();
+        let dir = workspace_tempdir();
         let root = dir.path();
         std::fs::create_dir_all(root.join("data")).unwrap();
         let legacy = root.join("data").join("sessions.redb");
@@ -861,7 +1213,7 @@ mod tests {
 
     #[tokio::test]
     async fn sessions_open_uses_recovery_when_legacy_is_invalid() {
-        let dir = TempDir::new().unwrap();
+        let dir = workspace_tempdir();
         let root = dir.path();
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::write(root.join("data").join("sessions.redb"), b"not-redb").unwrap();
@@ -875,7 +1227,7 @@ mod tests {
 
     #[tokio::test]
     async fn agents_plan_prefers_vdisk_when_legacy_missing() {
-        let dir = TempDir::new().unwrap();
+        let dir = workspace_tempdir();
         let root = dir.path();
         std::fs::create_dir_all(root.join("vault")).unwrap();
         let cfg = cfg_with_root(root);
@@ -889,7 +1241,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_context_files_round_trip_through_runtime_interface() {
-        let dir = TempDir::new().unwrap();
+        let dir = workspace_tempdir();
         let root = dir.path();
         let cfg = cfg_with_root(root);
         let runtime = StorageRuntime::new_with_root_sync(&cfg, root.to_path_buf()).unwrap();
@@ -909,5 +1261,71 @@ mod tests {
 
         let memory = runtime.read_agent_context_file("hex", "MEMORY.md").await.unwrap();
         assert_eq!(memory, "# mem");
+    }
+
+    #[tokio::test]
+    async fn canonical_documents_live_in_agent_vdisk() {
+        let dir = workspace_tempdir();
+        let root = dir.path();
+        let cfg = cfg_with_root(root);
+        let runtime = StorageRuntime::new_with_root_sync(&cfg, root.to_path_buf()).unwrap();
+
+        let disk_path = runtime
+            .initialize_agent_context("callisto", Some("# custom prompt"))
+            .await
+            .unwrap();
+        assert!(disk_path.ends_with("callisto.data"));
+
+        let prompt = runtime
+            .read_agent_context_file("callisto", "SYSTEM-PROMPT.md")
+            .await
+            .unwrap();
+        assert_eq!(prompt, "# custom prompt");
+    }
+
+    #[test]
+    fn topology_records_are_written_for_agents() {
+        let dir = workspace_tempdir();
+        let root = dir.path();
+        let cfg = cfg_with_root(root);
+        let runtime = StorageRuntime::new_with_root_sync(&cfg, root.to_path_buf()).unwrap();
+        let config = rockbot_config::AgentInstance {
+            id: "nova".to_string(),
+            primary: false,
+            workspace: None,
+            model: Some("test-model".to_string()),
+            max_tool_calls: Some(8),
+            temperature: Some(0.2),
+            max_tokens: Some(2048),
+            parent_id: Some("hex".to_string()),
+            creator_agent_id: Some("hex".to_string()),
+            owner_agent_id: Some("hex".to_string()),
+            zone_id: Some("zone:hex".to_string()),
+            system_prompt: None,
+            enabled: true,
+            mcp_servers: std::collections::HashMap::new(),
+            config: std::collections::HashMap::new(),
+            max_context_tokens: 128000,
+            guardrails: Vec::new(),
+            reflection_enabled: false,
+            breakpoint_tools: Vec::new(),
+            planning_mode: "never".to_string(),
+            expose_as_tool: None,
+            episodic_memory: false,
+            workflow: None,
+            llm_timeout_secs: 45,
+            tool_timeout_secs: 120,
+        };
+
+        runtime.ensure_agent_topology(&config, "test").unwrap();
+
+        let topology = runtime.open_topology_store_sync().unwrap();
+        let node: TopologyNodeRecord = topology
+            .get_json(tables::TOPOLOGY_NODES, "nova")
+            .unwrap()
+            .unwrap();
+        assert_eq!(node.creator_agent_id.as_deref(), Some("hex"));
+        assert_eq!(node.owner_agent_id.as_deref(), Some("hex"));
+        assert_eq!(node.zone_id.as_deref(), Some("zone:hex"));
     }
 }

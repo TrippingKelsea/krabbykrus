@@ -378,6 +378,7 @@ fn probe_store(config_path: &Path, kind: StoreKind) -> Result<bool> {
         StoreKind::Sessions => "sessions",
         StoreKind::Cron => "cron",
         StoreKind::Routing => "routing",
+        StoreKind::Topology => "topology",
     };
     let status = Command::new(exe)
         .arg("storage")

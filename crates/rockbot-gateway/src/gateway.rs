@@ -3592,39 +3592,20 @@ impl Gateway {
         }
     }
 
-    /// Get the directory path for an agent
-    #[allow(clippy::unused_self)]
-    fn agent_directory(&self, agent_id: &str) -> Result<std::path::PathBuf> {
+    /// Initialize an agent's canonical document state.
+    async fn initialize_agent_state(
+        &self,
+        agent_id: &str,
+        system_prompt: Option<&str>,
+    ) -> std::result::Result<(), std::io::Error> {
         let storage_root = self
             .credentials_config
             .vault_path
             .parent()
             .map_or_else(rockbot_storage_runtime::default_storage_root, std::path::PathBuf::from);
-        rockbot_storage_runtime::agent_context_dir(&storage_root, agent_id).map_err(|_| {
-            GatewayError::InvalidRequest {
-                message: "invalid agent id".to_string(),
-            }
-            .into()
-        })
-    }
-
-    /// Initialize an agent's directory with default files
-    async fn initialize_agent_directory(
-        &self,
-        agent_dir: &std::path::Path,
-        system_prompt: Option<&str>,
-    ) -> std::result::Result<(), std::io::Error> {
-        let storage_root = agent_dir
-            .parent()
-            .and_then(|parent| parent.parent())
-            .ok_or_else(|| std::io::Error::other("invalid agent context path"))?;
-        let agent_id = agent_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| std::io::Error::other("invalid agent directory"))?;
         rockbot_storage_runtime::StorageRuntime::new_with_root_sync(
             &Config::default(),
-            storage_root.to_path_buf(),
+            storage_root,
         )
         .map_err(std::io::Error::other)?
         .initialize_agent_context(agent_id, system_prompt)
@@ -5556,6 +5537,9 @@ impl Gateway {
             id: String,
             model: Option<String>,
             parent_id: Option<String>,
+            creator_agent_id: Option<String>,
+            owner_agent_id: Option<String>,
+            zone_id: Option<String>,
             workspace: Option<String>,
             primary: Option<bool>,
             max_tool_calls: Option<u32>,
@@ -5592,6 +5576,9 @@ impl Gateway {
             temperature: req.temperature,
             max_tokens: req.max_tokens,
             parent_id: req.parent_id,
+            creator_agent_id: req.creator_agent_id.clone().or(req.owner_agent_id.clone()),
+            owner_agent_id: req.owner_agent_id.clone(),
+            zone_id: req.zone_id.clone(),
             system_prompt: req.system_prompt.clone(),
             enabled: req.enabled,
             mcp_servers: std::collections::HashMap::new(),
@@ -5628,20 +5615,21 @@ impl Gateway {
             configs.push(config.clone());
         }
 
-        // Create agent directory with SOUL.md and SYSTEM-PROMPT.md
-        match self.agent_directory(&config.id) {
-            Ok(agent_dir) => {
-                if let Err(e) = self
-                    .initialize_agent_directory(&agent_dir, req.system_prompt.as_deref())
-                    .await
-                {
-                    error!("Failed to create agent directory: {}", e);
-                    // Non-fatal — continue creating the agent
-                }
-            }
-            Err(e) => {
-                return Ok(Self::json_error(&e.to_string(), StatusCode::BAD_REQUEST));
-            }
+        if let Err(e) = self
+            .initialize_agent_state(&config.id, req.system_prompt.as_deref())
+            .await
+        {
+            error!("Failed to initialize canonical agent state: {}", e);
+        }
+        let storage_root = self
+            .credentials_config
+            .vault_path
+            .parent()
+            .map_or_else(rockbot_storage_runtime::default_storage_root, std::path::PathBuf::from);
+        if let Ok(runtime) =
+            rockbot_storage_runtime::StorageRuntime::new_with_root_sync(&Config::default(), storage_root)
+        {
+            let _ = runtime.ensure_agent_topology(&config, "gateway_api");
         }
 
         // Persist to authoritative store when available; otherwise keep runtime-only.
@@ -5718,6 +5706,8 @@ impl Gateway {
         struct UpdateAgentRequest {
             model: Option<String>,
             parent_id: Option<String>,
+            owner_agent_id: Option<String>,
+            zone_id: Option<String>,
             workspace: Option<String>,
             primary: Option<bool>,
             max_tool_calls: Option<u32>,
@@ -5768,6 +5758,20 @@ impl Gateway {
                     Some(parent_id.clone())
                 };
             }
+            if let Some(owner_agent_id) = &update.owner_agent_id {
+                cfg.owner_agent_id = if owner_agent_id.is_empty() {
+                    None
+                } else {
+                    Some(owner_agent_id.clone())
+                };
+            }
+            if let Some(zone_id) = &update.zone_id {
+                cfg.zone_id = if zone_id.is_empty() {
+                    None
+                } else {
+                    Some(zone_id.clone())
+                };
+            }
             if let Some(workspace) = &update.workspace {
                 cfg.workspace = if workspace.is_empty() {
                     None
@@ -5793,11 +5797,18 @@ impl Gateway {
                 } else {
                     Some(system_prompt.clone())
                 };
-                // Also update SYSTEM-PROMPT.md in agent directory
-                if let Ok(agent_dir) = self.agent_directory(&agent_id) {
-                    let prompt_path = agent_dir.join("SYSTEM-PROMPT.md");
-                    let _ = tokio::fs::write(&prompt_path, system_prompt).await;
-                }
+                let storage_root = self
+                    .credentials_config
+                    .vault_path
+                    .parent()
+                    .map_or_else(rockbot_storage_runtime::default_storage_root, std::path::PathBuf::from);
+                let _ = rockbot_storage_runtime::write_agent_context_file(
+                    &storage_root,
+                    &agent_id,
+                    "SYSTEM-PROMPT.md",
+                    system_prompt,
+                )
+                .await;
             }
             if let Some(enabled) = update.enabled {
                 cfg.enabled = enabled;
@@ -5809,6 +5820,16 @@ impl Gateway {
         let updated_config = configs.iter().find(|c| c.id == agent_id).cloned();
         if let Some(ref cfg) = updated_config {
             self.persist_agent_to_store(cfg);
+            let storage_root = self
+                .credentials_config
+                .vault_path
+                .parent()
+                .map_or_else(rockbot_storage_runtime::default_storage_root, std::path::PathBuf::from);
+            if let Ok(runtime) =
+                rockbot_storage_runtime::StorageRuntime::new_with_root_sync(&Config::default(), storage_root)
+            {
+                let _ = runtime.ensure_agent_topology(cfg, "gateway_update");
+            }
         }
         drop(configs);
 

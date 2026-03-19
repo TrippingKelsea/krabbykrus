@@ -32,6 +32,7 @@ members = [
     "crates/rockbot-doctor",
     "crates/rockbot-storage",
     "crates/rockbot-storage-runtime",
+    "crates/rockbot-storage-utility",
     "crates/rockbot-ui-model",
     "crates/rockbot-deploy",
     "crates/rockbot-butler",
@@ -189,7 +190,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 # Package metadata for all crates
 [workspace.package]
-version = "0.4.3"
+version = "0.4.4"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"

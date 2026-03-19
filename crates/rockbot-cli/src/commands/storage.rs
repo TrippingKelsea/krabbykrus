@@ -34,6 +34,7 @@ pub async fn run(command: &StorageCommands, config_path: &PathBuf) -> Result<()>
                 StoreKind::Sessions,
                 StoreKind::Cron,
                 StoreKind::Routing,
+                StoreKind::Topology,
             ] {
                 let probe_ok = probe_store(config_path, kind).unwrap_or(false);
                 let outcome = if probe_ok {
@@ -69,6 +70,9 @@ pub async fn run(command: &StorageCommands, config_path: &PathBuf) -> Result<()>
                 StoreKind::Routing => {
                     let _ = runtime.open_routing_store().await?;
                 }
+                StoreKind::Topology => {
+                    let _ = runtime.open_topology_store().await?;
+                }
             }
             Ok(())
         }
@@ -82,6 +86,7 @@ fn map_probe_store(store: &StorageProbeStore) -> StoreKind {
         StorageProbeStore::Sessions => StoreKind::Sessions,
         StorageProbeStore::Cron => StoreKind::Cron,
         StorageProbeStore::Routing => StoreKind::Routing,
+        StorageProbeStore::Topology => StoreKind::Topology,
     }
 }
 
@@ -93,6 +98,7 @@ fn probe_store(config_path: &PathBuf, kind: StoreKind) -> Result<bool> {
         StoreKind::Sessions => "sessions",
         StoreKind::Cron => "cron",
         StoreKind::Routing => "routing",
+        StoreKind::Topology => "topology",
     };
     let status = Command::new(exe)
         .arg("storage")

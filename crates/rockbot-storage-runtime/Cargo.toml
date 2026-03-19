@@ -14,6 +14,9 @@ rockbot-config = { path = "../rockbot-config" }
 rockbot-pki = { path = "../rockbot-pki" }
 rockbot-storage = { path = "../rockbot-storage" }
 rockbot-vdisk = { path = "../rockbot-vdisk" }
+ring = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 

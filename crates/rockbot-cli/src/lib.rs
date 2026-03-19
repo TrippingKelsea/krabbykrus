@@ -484,6 +484,14 @@ pub enum AgentCommands {
         #[arg(long)]
         exec: bool,
     },
+    /// Extract an agent vdisk into flat files
+    Extract {
+        /// Agent ID to export
+        agent_id: String,
+        /// Output directory root
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
 }
 
 /// Tool commands
@@ -693,6 +701,7 @@ pub enum StorageProbeStore {
     Sessions,
     Cron,
     Routing,
+    Topology,
 }
 
 /// Migration commands

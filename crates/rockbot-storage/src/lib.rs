@@ -86,6 +86,19 @@ impl Store {
             let _ = write_txn.open_table(tables::ROUTE_BINDINGS)?;
             let _ = write_txn.open_table(tables::PKI_INDEX)?;
             let _ = write_txn.open_table(tables::AGENTS)?;
+            let _ = write_txn.open_table(tables::AGENT_DOCUMENTS)?;
+            let _ = write_txn.open_table(tables::AGENT_OBJECTS)?;
+            let _ = write_txn.open_table(tables::TOPOLOGY_NODES)?;
+            let _ = write_txn.open_table(tables::TOPOLOGY_EDGES)?;
+            let _ = write_txn.open_table(tables::TOPOLOGY_EDGES_FROM)?;
+            let _ = write_txn.open_table(tables::TOPOLOGY_EDGES_TO)?;
+            let _ = write_txn.open_table(tables::ZONES)?;
+            let _ = write_txn.open_table(tables::ZONE_MEMBERS)?;
+            let _ = write_txn.open_table(tables::BLACKBOARDS)?;
+            let _ = write_txn.open_table(tables::BLACKBOARD_ACL)?;
+            let _ = write_txn.open_table(tables::OWNERSHIP_EVENTS)?;
+            let _ = write_txn.open_table(tables::AGENT_VDISKS)?;
+            let _ = write_txn.open_table(tables::REPLICATION_META)?;
             let _ = write_txn.open_table(tables::NODE_KEYS)?;
             let _ = write_txn.open_table(tables::VAULT_OBJECTS)?;
             let _ = write_txn.open_table(tables::VAULT_PROVIDER_GRANTS)?;
@@ -286,6 +299,40 @@ impl Store {
     pub fn delete_agent(&self, id: &str) -> anyhow::Result<bool> {
         self.delete(tables::AGENTS, id)
     }
+
+    /// Store any serde value as JSON in the provided byte table.
+    pub fn put_json<T: serde::Serialize>(
+        &self,
+        table: TableDefinition<'static, &str, &[u8]>,
+        key: &str,
+        value: &T,
+    ) -> anyhow::Result<()> {
+        let bytes = serde_json::to_vec(value)?;
+        self.put(table, key, &bytes)
+    }
+
+    /// Load a JSON-serialized serde value by key.
+    pub fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        table: TableDefinition<'static, &str, &[u8]>,
+        key: &str,
+    ) -> anyhow::Result<Option<T>> {
+        match self.get(table, key)? {
+            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// List all JSON-serialized rows in a table.
+    pub fn list_json<T: serde::de::DeserializeOwned>(
+        &self,
+        table: TableDefinition<'static, &str, &[u8]>,
+    ) -> anyhow::Result<Vec<(String, T)>> {
+        self.list(table)?
+            .into_iter()
+            .map(|(key, bytes)| Ok((key, serde_json::from_slice(&bytes)?)))
+            .collect()
+    }
 }
 
 // =============================================================================
@@ -371,6 +418,9 @@ mod tests {
             temperature: Some(0.3),
             max_tokens: Some(16000),
             parent_id: None,
+            creator_agent_id: None,
+            owner_agent_id: None,
+            zone_id: None,
             system_prompt: None,
             enabled: true,
             mcp_servers: std::collections::HashMap::new(),

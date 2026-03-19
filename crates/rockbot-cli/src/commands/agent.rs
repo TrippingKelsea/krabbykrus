@@ -65,6 +65,21 @@ pub async fn run(command: &AgentCommands, config_path: &PathBuf) -> Result<()> {
             });
             run_agent_session(agent_id, &gateway_target, config.effective_pki(), *exec).await?;
         }
+        AgentCommands::Extract { agent_id, out } => {
+            let runtime =
+                rockbot_storage_runtime::StorageRuntime::new(config_path, &config).await?;
+            let out_root = out.clone().unwrap_or_else(|| {
+                rockbot_storage_utility::default_agent_extract_dir(config_path)
+            });
+            let manifest =
+                rockbot_storage_utility::extract_agent_vdisk(&runtime, agent_id, &out_root).await?;
+            println!("📦 Extracted agent '{}' to {}", agent_id, out_root.join(agent_id).display());
+            println!("   Source vdisk: {}", manifest.source_vdisk);
+            println!("   Files:");
+            for file in manifest.files {
+                println!("   • {} ({} bytes)", file.name, file.size_bytes);
+            }
+        }
     }
 
     Ok(())
