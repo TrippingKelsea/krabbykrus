@@ -7465,6 +7465,8 @@ mod tests {
                     mode: "tools".to_string(),
                     scope: "session".to_string(),
                     image: None,
+                    allowed_command_patterns: vec![],
+                    blocked_command_patterns: vec![],
                 },
                 capabilities: Default::default(),
                 storage: Default::default(),

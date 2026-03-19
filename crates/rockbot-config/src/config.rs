@@ -792,6 +792,8 @@ impl Default for SecurityConfig {
                 mode: default_sandbox_mode(),
                 scope: default_sandbox_scope(),
                 image: None,
+                allowed_command_patterns: vec![],
+                blocked_command_patterns: vec![],
             },
             capabilities: CapabilityConfig::default(),
             storage: StorageSecurityConfig::default(),
@@ -1170,6 +1172,12 @@ pub struct SandboxConfig {
     /// Container image for sandboxing
     #[serde(default)]
     pub image: Option<String>,
+    /// Shell command allowlist patterns (full command glob patterns)
+    #[serde(default)]
+    pub allowed_command_patterns: Vec<String>,
+    /// Shell command denylist patterns (full command glob patterns)
+    #[serde(default)]
+    pub blocked_command_patterns: Vec<String>,
 }
 
 impl Default for SandboxConfig {
@@ -1178,6 +1186,8 @@ impl Default for SandboxConfig {
             mode: default_sandbox_mode(),
             scope: default_sandbox_scope(),
             image: None,
+            allowed_command_patterns: vec![],
+            blocked_command_patterns: vec![],
         }
     }
 }
@@ -1652,6 +1662,8 @@ mod tests {
                     mode: "tools".to_string(),
                     scope: "session".to_string(),
                     image: None,
+                    allowed_command_patterns: vec![],
+                    blocked_command_patterns: vec![],
                 },
                 capabilities: CapabilityConfig::default(),
                 storage: StorageSecurityConfig::default(),

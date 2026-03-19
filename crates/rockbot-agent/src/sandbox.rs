@@ -10,26 +10,60 @@ use std::time::Duration;
 use tokio::process::Command;
 use tracing::{debug, warn};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ParsedCommand {
-    program: String,
-    args: Vec<String>,
-}
-
-fn parse_command_line(command: &str) -> Result<ParsedCommand, SandboxError> {
-    let parts = shell_words::split(command)
-        .map_err(|e| SandboxError::ExecutionFailed(format!("Invalid command syntax: {e}")))?;
-
-    let Some((program, args)) = parts.split_first() else {
+fn sanitize_shell_command(command: &str) -> Result<String, SandboxError> {
+    if command.trim().is_empty() {
         return Err(SandboxError::ExecutionFailed(
             "Command cannot be empty".to_string(),
         ));
-    };
+    }
 
-    Ok(ParsedCommand {
-        program: program.clone(),
-        args: args.to_vec(),
-    })
+    if command
+        .chars()
+        .any(|c| c == '\0' || c == '\n' || c == '\r' || (c.is_control() && c != '\t'))
+    {
+        return Err(SandboxError::ExecutionFailed(
+            "Command contains unsupported control characters".to_string(),
+        ));
+    }
+
+    shell_words::split(command)
+        .map_err(|e| SandboxError::ExecutionFailed(format!("Invalid command syntax: {e}")))?;
+    Ok(command.to_string())
+}
+
+fn extract_executable(command: &str) -> String {
+    shell_words::split(command)
+        .ok()
+        .and_then(|parts| parts.into_iter().next())
+        .unwrap_or_default()
+}
+
+fn enforce_shell_policy(config: &SandboxConfig, command: &str) -> Result<(), SandboxError> {
+    let executable = extract_executable(command);
+
+    if rockbot_security::command_matches_any_pattern(
+        command,
+        &executable,
+        &config.blocked_command_patterns,
+    ) {
+        return Err(SandboxError::ExecutionFailed(format!(
+            "Command '{command}' is blocked by sandbox policy"
+        )));
+    }
+
+    if !config.allowed_command_patterns.is_empty()
+        && !rockbot_security::command_matches_any_pattern(
+            command,
+            &executable,
+            &config.allowed_command_patterns,
+        )
+    {
+        return Err(SandboxError::ExecutionFailed(format!(
+            "Command '{command}' is not allowed by sandbox policy"
+        )));
+    }
+
+    Ok(())
 }
 
 /// Result of a sandboxed command execution.
@@ -79,7 +113,8 @@ pub async fn execute_in_container(
     command: &str,
     timeout: Duration,
 ) -> Result<SandboxResult, SandboxError> {
-    let parsed = parse_command_line(command)?;
+    let command = sanitize_shell_command(command)?;
+    enforce_shell_policy(config, &command)?;
     let image = config.image.as_deref().unwrap_or("ubuntu:22.04");
 
     let workspace_str = workspace
@@ -106,15 +141,16 @@ pub async fn execute_in_container(
         "-w",
         "/workspace",
         image,
+        "sh",
+        "-c",
+        &command,
     ]);
-    docker_cmd.arg(&parsed.program);
-    docker_cmd.args(&parsed.args);
 
     docker_cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    debug!("Executing in container (image={image}): {:?}", parsed);
+    debug!("Executing in container (image={image}): {command}");
 
     let child = docker_cmd
         .spawn()
@@ -158,19 +194,21 @@ pub async fn execute_sandboxed(
     }
 
     // Direct execution fallback
-    execute_direct(workspace, command, timeout).await
+    execute_direct(config, workspace, command, timeout).await
 }
 
 /// Execute a command directly (no container).
 async fn execute_direct(
+    config: &SandboxConfig,
     workspace: &Path,
     command: &str,
     timeout: Duration,
 ) -> Result<SandboxResult, SandboxError> {
-    let parsed = parse_command_line(command)?;
+    let command = sanitize_shell_command(command)?;
+    enforce_shell_policy(config, &command)?;
 
-    let mut cmd = Command::new(&parsed.program);
-    cmd.args(&parsed.args)
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", &command])
         .current_dir(workspace)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -226,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_direct_echo() {
         let dir = tempfile::tempdir().unwrap();
-        let result = execute_direct(dir.path(), "echo hello", Duration::from_secs(5))
+        let result = execute_direct(&SandboxConfig::default(), dir.path(), "echo hello", Duration::from_secs(5))
             .await
             .unwrap();
         assert_eq!(result.stdout.trim(), "hello");
@@ -237,16 +275,22 @@ mod tests {
     #[tokio::test]
     async fn test_execute_direct_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let result = execute_direct(dir.path(), "false", Duration::from_secs(5))
+        let result = execute_direct(&SandboxConfig::default(), dir.path(), "exit 42", Duration::from_secs(5))
             .await
             .unwrap();
-        assert_eq!(result.exit_code, Some(1));
+        assert_eq!(result.exit_code, Some(42));
     }
 
     #[tokio::test]
     async fn test_execute_direct_timeout() {
         let dir = tempfile::tempdir().unwrap();
-        let result = execute_direct(dir.path(), "sleep 60", Duration::from_millis(100)).await;
+        let result = execute_direct(
+            &SandboxConfig::default(),
+            dir.path(),
+            "sleep 60",
+            Duration::from_millis(100),
+        )
+        .await;
         assert!(matches!(result, Err(SandboxError::Timeout(_))));
     }
 
@@ -257,6 +301,8 @@ mod tests {
             mode: "disabled".to_string(),
             scope: "none".to_string(),
             image: None,
+            allowed_command_patterns: vec![],
+            blocked_command_patterns: vec![],
         };
         let result = execute_sandboxed(&config, dir.path(), "echo test", Duration::from_secs(5))
             .await
@@ -266,31 +312,55 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_command_line_supports_quoted_args() {
-        let parsed = parse_command_line("printf 'hello world'").unwrap();
-        assert_eq!(parsed.program, "printf");
-        assert_eq!(parsed.args, vec!["hello world"]);
+    fn test_sanitize_shell_command_accepts_quoted_args() {
+        let sanitized = sanitize_shell_command("printf 'hello world'").unwrap();
+        assert_eq!(sanitized, "printf 'hello world'");
     }
 
     #[tokio::test]
-    async fn test_execute_direct_does_not_interpret_shell_redirects() {
+    async fn test_execute_direct_preserves_shell_features() {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("marker.txt");
 
         let result = execute_direct(
+            &SandboxConfig::default(),
             dir.path(),
-            &format!("printf '%s\\n' safe '>' '{}'", marker.display()),
+            &format!("printf safe > {}", marker.display()),
             Duration::from_secs(5),
         )
         .await
         .unwrap();
 
         assert_eq!(result.exit_code, Some(0));
-        assert!(!marker.exists(), "shell redirection should not be interpreted");
-        assert!(
-            result.stdout.contains(">\n"),
-            "expected shell metacharacters to remain literal: {}",
-            result.stdout
-        );
+        assert!(marker.exists(), "shell redirection should be interpreted");
+    }
+
+    #[test]
+    fn test_sanitize_shell_command_rejects_newlines() {
+        let err = sanitize_shell_command("echo hello\nrm -rf /").unwrap_err();
+        assert!(matches!(err, SandboxError::ExecutionFailed(_)));
+    }
+
+    #[tokio::test]
+    async fn test_execute_direct_blocks_denied_patterns() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SandboxConfig {
+            mode: "disabled".to_string(),
+            scope: "none".to_string(),
+            image: None,
+            allowed_command_patterns: vec![],
+            blocked_command_patterns: vec!["*curl*".to_string()],
+        };
+
+        let err = execute_direct(
+            &config,
+            dir.path(),
+            "curl https://example.com",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, SandboxError::ExecutionFailed(_)));
     }
 }
