@@ -128,7 +128,7 @@ pub struct PkiIndex {
 impl Default for PkiIndex {
     fn default() -> Self {
         Self {
-            next_serial: 1,
+            next_serial: 2,
             entries: Vec::new(),
             enrollments: Vec::new(),
         }
@@ -292,7 +292,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("index.json");
         let idx = PkiIndex::load(&path).unwrap();
-        assert_eq!(idx.next_serial, 1);
+        assert_eq!(idx.next_serial, 2);
         assert!(idx.entries.is_empty());
     }
 
