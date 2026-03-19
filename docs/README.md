@@ -16,6 +16,7 @@
 - [Encrypted Storage + PKI Refactor Proposal](architecture/encrypted-storage-pki-refactor-proposal.md) — High-level scope for encrypted-by-default redb, distributed vault authority, and role separation
 - [Encrypted Storage + PKI Architecture Plan](architecture/encrypted-storage-pki-architecture-plan.md) — Formal architecture plan for roles, key hierarchy, grants, replication, and rollout
 - [Virtual Disk Architecture Plan](architecture/virtual-disk-architecture-plan.md) — Formal plan for the `rockbot.data` virtual disk container, named volumes, encrypted local persistence, and model storage
+- [Agent Topology and Per-Agent Virtual Disk Architecture Proposal](architecture/agent-topology-and-vdisk-architecture-proposal.md) — Proposed topology, per-agent vdisk layout, replicated markdown storage, extraction tooling, and management UI flows
 - [Responsive WASM WebUI Migration Plan](architecture/webui-wasm-migration-plan.md) — Phased plan for replacing the bootstrap shell with a responsive authenticated browser app
 - [Browser Plugin Architecture Plan](architecture/browser-plugin-architecture-plan.md) — Extension architecture for page-aware workflows, page-context capture, and safe browser actions
 - [Tooling Gap Analysis](architecture/tooling-gap-analysis.md) — Practical comparison of current RockBot workflow gaps against adjacent coding/agent tools
