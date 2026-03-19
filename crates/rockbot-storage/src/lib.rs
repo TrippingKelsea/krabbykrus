@@ -16,6 +16,7 @@ pub use redb::TableDefinition;
 use encrypted_backend::EncryptedBackend;
 use redb::{Database, ReadableTable};
 use rockbot_vdisk::VolumeBackend;
+use std::convert::TryInto;
 use std::path::Path;
 
 /// The unified embedded store.
@@ -64,6 +65,7 @@ impl Store {
         capacity: u64,
         key: Option<[u8; 32]>,
     ) -> anyhow::Result<Self> {
+        validate_redb_volume_header(disk_path, volume_name)?;
         let backend = VolumeBackend::open(disk_path, volume_name, capacity, key)?;
         let db = Database::builder().create_with_backend(backend)?;
         let store = Self { db };
@@ -372,6 +374,82 @@ impl Store {
     }
 }
 
+const REDB_MAGIC: [u8; 9] = [b'r', b'e', b'd', b'b', 0x1A, 0x0A, 0xA9, 0x0D, 0x0A];
+const REDB_PAGE_SIZE_OFFSET: usize = 12;
+const REDB_REGION_HEADER_PAGES_OFFSET: usize = 16;
+const REDB_REGION_MAX_DATA_PAGES_OFFSET: usize = 20;
+const REDB_NUM_FULL_REGIONS_OFFSET: usize = 24;
+const REDB_TRAILING_REGION_DATA_PAGES_OFFSET: usize = 28;
+const REDB_HEADER_PREFIX_LEN: usize = 32;
+
+fn validate_redb_volume_header(disk_path: &Path, volume_name: &str) -> anyhow::Result<()> {
+    let Some(info) = rockbot_vdisk::volume_info(disk_path, volume_name)? else {
+        return Ok(());
+    };
+    if info.len < REDB_HEADER_PREFIX_LEN as u64 {
+        return Ok(());
+    }
+
+    let Some(prefix) =
+        rockbot_vdisk::read_volume_prefix(disk_path, volume_name, REDB_HEADER_PREFIX_LEN)?
+    else {
+        return Ok(());
+    };
+    if prefix.len() < REDB_HEADER_PREFIX_LEN || prefix[..REDB_MAGIC.len()] != REDB_MAGIC {
+        return Ok(());
+    }
+
+    let page_size = read_u32_le(&prefix, REDB_PAGE_SIZE_OFFSET)? as u64;
+    let region_header_pages = read_u32_le(&prefix, REDB_REGION_HEADER_PAGES_OFFSET)? as u64;
+    let region_max_data_pages = read_u32_le(&prefix, REDB_REGION_MAX_DATA_PAGES_OFFSET)? as u64;
+    let num_full_regions = read_u32_le(&prefix, REDB_NUM_FULL_REGIONS_OFFSET)? as u64;
+    let trailing_region_data_pages =
+        read_u32_le(&prefix, REDB_TRAILING_REGION_DATA_PAGES_OFFSET)? as u64;
+
+    if page_size == 0 || region_header_pages == 0 {
+        return Ok(());
+    }
+
+    let full_region_len = page_size
+        .checked_mul(region_header_pages + region_max_data_pages)
+        .ok_or_else(|| anyhow::anyhow!("redb volume header overflow"))?;
+    let mut expected_len = page_size
+        .checked_add(
+            num_full_regions
+                .checked_mul(full_region_len)
+                .ok_or_else(|| anyhow::anyhow!("redb volume header overflow"))?,
+        )
+        .ok_or_else(|| anyhow::anyhow!("redb volume header overflow"))?;
+
+    if trailing_region_data_pages > 0 {
+        expected_len = expected_len
+            .checked_add(
+                page_size
+                    .checked_mul(region_header_pages + trailing_region_data_pages)
+                    .ok_or_else(|| anyhow::anyhow!("redb volume header overflow"))?,
+            )
+            .ok_or_else(|| anyhow::anyhow!("redb volume header overflow"))?;
+    }
+
+    if info.len < expected_len {
+        anyhow::bail!(
+            "virtual disk volume '{volume_name}' is truncated: redb header expects {expected_len} bytes, found {}",
+            info.len
+        );
+    }
+
+    Ok(())
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> anyhow::Result<u32> {
+    let value: [u8; 4] = bytes
+        .get(offset..offset + 4)
+        .ok_or_else(|| anyhow::anyhow!("redb header truncated"))?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid redb header field width"))?;
+    Ok(u32::from_le_bytes(value))
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -520,5 +598,29 @@ mod tests {
 
         let value = store.get(tables::CREDENTIALS, "secret").unwrap();
         assert_eq!(value.as_deref(), Some(b"passphrase".as_ref()));
+    }
+
+    #[test]
+    fn truncated_redb_volume_returns_error_instead_of_panicking() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source.redb");
+        let disk = dir.path().join("rockbot.data");
+
+        let store = Store::open(&source).unwrap();
+        store.put(tables::KV_STORE, "health", b"ok").unwrap();
+        drop(store);
+
+        let mut bytes = std::fs::read(&source).unwrap();
+        bytes.truncate(bytes.len().saturating_sub(4096));
+        rockbot_vdisk::import_bytes(&disk, "vault", &bytes, None).unwrap();
+
+        let err = match Store::open_volume(&disk, "vault", 256 * 1024 * 1024, None) {
+            Ok(_) => panic!("truncated volume unexpectedly opened"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("is truncated"),
+            "unexpected error: {err}"
+        );
     }
 }
