@@ -6032,6 +6032,33 @@ fn update_credential_in_vault(
 /// Uses crossterm's `EventStream` for async terminal input (not poll/read),
 /// a `TerminalGuard` for RAII cleanup, and a unified `AppEvent` bus.
 pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: String) -> Result<()> {
+    use crate::event::{force_restore_terminal, PanicTerminalRestoreGuard};
+    use futures_util::FutureExt;
+    use std::panic::AssertUnwindSafe;
+
+    let _panic_restore = PanicTerminalRestoreGuard::install();
+    let result = AssertUnwindSafe(run_app_inner(config_path, vault_path, gateway_url))
+        .catch_unwind()
+        .await;
+    match result {
+        Ok(result) => result,
+        Err(payload) => {
+            force_restore_terminal();
+            let message = if let Some(message) = payload.downcast_ref::<&str>() {
+                *message
+            } else if let Some(message) = payload.downcast_ref::<String>() {
+                message.as_str()
+            } else {
+                "unknown panic"
+            };
+            Err(anyhow::anyhow!(
+                "RockBot TUI panicked; terminal state was restored: {message}"
+            ))
+        }
+    }
+}
+
+async fn run_app_inner(config_path: PathBuf, vault_path: PathBuf, gateway_url: String) -> Result<()> {
     use crate::event::{spawn_terminal_input, AppEvent, TerminalGuard};
 
     // TerminalGuard owns raw mode, alternate screen, keyboard enhancement,

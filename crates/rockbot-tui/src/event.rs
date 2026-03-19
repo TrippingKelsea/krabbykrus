@@ -7,6 +7,7 @@
 //! keyboard enhancement, bracketed paste, focus change) and restores state on drop.
 
 use anyhow::Result;
+use crossterm::cursor::Show;
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, EventStream, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
@@ -20,6 +21,8 @@ use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
+use std::panic::{self, PanicHookInfo};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::state::Message;
@@ -144,17 +147,52 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let mut stdout = io::stdout();
-        if self.keyboard_enhanced {
-            let _ = execute!(stdout, PopKeyboardEnhancementFlags);
-        }
-        let _ = execute!(
-            stdout,
-            DisableBracketedPaste,
-            DisableFocusChange,
-            LeaveAlternateScreen,
-        );
+        restore_terminal_state(self.keyboard_enhanced);
+    }
+}
+
+/// Best-effort terminal restoration for panic and error paths.
+pub fn force_restore_terminal() {
+    restore_terminal_state(true);
+}
+
+fn restore_terminal_state(pop_keyboard_flags: bool) {
+    let _ = disable_raw_mode();
+    let mut stdout = io::stdout();
+    if pop_keyboard_flags {
+        let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+    }
+    let _ = execute!(
+        stdout,
+        DisableBracketedPaste,
+        DisableFocusChange,
+        LeaveAlternateScreen,
+        Show,
+    );
+}
+
+pub struct PanicTerminalRestoreGuard {
+    previous_hook: Arc<dyn Fn(&PanicHookInfo<'_>) + Sync + Send + 'static>,
+}
+
+impl PanicTerminalRestoreGuard {
+    pub fn install() -> Self {
+        let previous_hook: Arc<dyn Fn(&PanicHookInfo<'_>) + Sync + Send + 'static> =
+            Arc::from(panic::take_hook());
+        let previous_for_hook = Arc::clone(&previous_hook);
+        let hook = move |info: &PanicHookInfo<'_>| {
+            force_restore_terminal();
+            previous_for_hook(info);
+        };
+        panic::set_hook(Box::new(hook));
+        Self { previous_hook }
+    }
+}
+
+impl Drop for PanicTerminalRestoreGuard {
+    fn drop(&mut self) {
+        let previous_hook = Arc::clone(&self.previous_hook);
+        panic::set_hook(Box::new(move |info| previous_hook(info)));
     }
 }
 
