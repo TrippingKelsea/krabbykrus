@@ -3423,7 +3423,6 @@ The user wants me to explore the codebase. I should start by listing the directo
         .with_session_id(session_id)
         .with_agent_id(&self.config.id)
         .with_role(MessageRole::User);
-        context.messages.push(plan_prompt);
 
         // Build request WITHOUT tools so the model produces only text
         let system_prompt = self.assemble_system_prompt(context).await?;
@@ -3438,6 +3437,13 @@ The user wants me to explore the codebase. I should start by listing the directo
             });
         }
         messages.extend(self.llm_messages_from_context(context));
+        messages.push(rockbot_llm::Message {
+            role: rockbot_llm::MessageRole::User,
+            content: plan_prompt.extract_text().unwrap_or_default(),
+            images: vec![],
+            tool_calls: None,
+            tool_call_id: None,
+        });
 
         let model = self
             .config
@@ -3467,17 +3473,6 @@ The user wants me to explore the codebase. I should start by listing the directo
         if clean_plan.is_empty() {
             return Ok(None);
         }
-
-        // Add the plan as assistant message in context
-        let plan_assistant = rockbot_llm::Message {
-            role: rockbot_llm::MessageRole::Assistant,
-            content: clean_plan.clone(),
-            images: vec![],
-            tool_calls: None,
-            tool_call_id: None,
-        };
-        let plan_msg = crate::from_llm_message(plan_assistant, session_id, &self.config.id)?;
-        context.messages.push(plan_msg);
 
         info!(
             "Planning phase produced {} char plan for session {}",
@@ -4859,6 +4854,43 @@ mod tests {
 
         let state = agent.state.read().await;
         assert_eq!(state.active_contexts.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_planning_phase_does_not_mutate_main_context_messages() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut agent = build_test_agent(temp.path(), None).await;
+        agent.config.planning_mode = "always".to_string();
+
+        let user_message = Message::text("implement a small feature");
+        let session = agent
+            .get_or_create_session("planning-context", &user_message)
+            .await
+            .unwrap();
+        let available_tools = agent.get_available_tools(&session).await.unwrap();
+        let mut context = agent
+            .update_processing_context(
+                session.id.clone(),
+                user_message,
+                available_tools,
+                None,
+                None,
+                false,
+                None,
+                0,
+            )
+            .await
+            .unwrap();
+        let original_len = context.messages.len();
+        let trajectory = Trajectory::new(&session.id, &agent.config.id);
+
+        let plan = agent
+            .run_planning_phase(&session.id, &mut context, &trajectory)
+            .await
+            .unwrap();
+
+        assert!(plan.is_some());
+        assert_eq!(context.messages.len(), original_len);
     }
 
     #[test]
