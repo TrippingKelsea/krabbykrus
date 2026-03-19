@@ -1408,13 +1408,41 @@ impl Gateway {
                     .map_err(|e| tls_config_err(format!("Invalid CA certificate: {e}")))?;
             }
 
+            let crls = if self.pki.require_client_cert || matches!(listener_kind, ListenerKind::Client)
+            {
+                let crl_path = ca_path.with_file_name("crl.pem");
+                if crl_path.exists() {
+                    let crl_pem = std::fs::read(&crl_path).map_err(|e| {
+                        tls_config_err(format!("Failed to read CRL {}: {e}", crl_path.display()))
+                    })?;
+                    let crls: Vec<rustls::pki_types::CertificateRevocationListDer<'static>> =
+                        rustls_pemfile::crls(&mut &crl_pem[..])
+                            .collect::<std::result::Result<Vec<_>, _>>()
+                            .map_err(|e| tls_config_err(format!("Invalid CRL PEM: {e}")))?;
+                    Some(crls)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let verifier_builder = rustls::server::WebPkiClientVerifier::builder(Arc::new(
+                root_store,
+            ));
+            let verifier_builder = if let Some(crls) = crls {
+                verifier_builder.with_crls(crls)
+            } else {
+                verifier_builder
+            };
+
             let verifier = match listener_kind {
                 ListenerKind::Client if self.pki.require_client_cert => {
                     info!(
                         "Client listener mTLS enabled: requiring client certificates (CA: {})",
                         ca_path.display()
                     );
-                    rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store))
+                    verifier_builder
                         .build()
                         .map_err(|e| tls_config_err(format!("Client cert verifier error: {e}")))?
                 }
@@ -1423,7 +1451,7 @@ impl Gateway {
                         "Client listener TLS enabled: accepting optional client certificates (CA: {})",
                         ca_path.display()
                     );
-                    rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store))
+                    verifier_builder
                         .allow_unauthenticated()
                         .build()
                         .map_err(|e| tls_config_err(format!("Client cert verifier error: {e}")))?
@@ -1433,7 +1461,7 @@ impl Gateway {
                         "Public listener TLS enabled: server-auth only (client certs not required) (CA: {})",
                         ca_path.display()
                     );
-                    rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store))
+                    verifier_builder
                         .allow_unauthenticated()
                         .build()
                         .map_err(|e| tls_config_err(format!("Client cert verifier error: {e}")))?
