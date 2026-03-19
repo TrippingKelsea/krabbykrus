@@ -9,11 +9,12 @@ use rockbot_llm::{
 };
 use serde::{Deserialize, Serialize};
 use std::env;
+use zeroize::Zeroizing;
 
 /// OpenAI API provider
 pub struct OpenAiProvider {
     client: reqwest::Client,
-    api_key: String,
+    api_key: Zeroizing<String>,
     base_url: String,
 }
 
@@ -174,7 +175,7 @@ impl OpenAiProvider {
 
         Ok(Self {
             client: Self::build_client(),
-            api_key,
+            api_key: Zeroizing::new(api_key),
             base_url: "https://api.openai.com".to_string(),
         })
     }
@@ -183,7 +184,7 @@ impl OpenAiProvider {
     pub fn with_api_key(api_key: String) -> Self {
         Self {
             client: Self::build_client(),
-            api_key,
+            api_key: Zeroizing::new(api_key),
             base_url: "https://api.openai.com".to_string(),
         }
     }
@@ -192,7 +193,7 @@ impl OpenAiProvider {
     pub fn with_config(api_key: String, base_url: String) -> Self {
         Self {
             client: Self::build_client(),
-            api_key,
+            api_key: Zeroizing::new(api_key),
             base_url,
         }
     }
@@ -370,7 +371,7 @@ impl LlmProvider for OpenAiProvider {
         let response = self
             .client
             .post(format!("{}/v1/chat/completions", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {}", self.api_key.as_str()))
             .header("Content-Type", "application/json")
             .json(&api_request)
             .send()
@@ -494,7 +495,7 @@ impl LlmProvider for OpenAiProvider {
         let response = self
             .client
             .post(format!("{}/v1/chat/completions", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {}", self.api_key.as_str()))
             .header("Content-Type", "application/json")
             .json(&api_request)
             .send()
@@ -594,7 +595,7 @@ impl LlmProvider for OpenAiProvider {
         let response = self
             .client
             .post(format!("{}/v1/embeddings", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {}", self.api_key.as_str()))
             .header("Content-Type", "application/json")
             .json(&request)
             .send()
@@ -742,7 +743,7 @@ mod tests {
     fn test_normalize_model() {
         let provider = OpenAiProvider {
             client: reqwest::Client::new(),
-            api_key: "test".to_string(),
+            api_key: Zeroizing::new("test".to_string()),
             base_url: "https://api.openai.com".to_string(),
         };
 
@@ -754,7 +755,7 @@ mod tests {
     fn test_convert_message() {
         let provider = OpenAiProvider {
             client: reqwest::Client::new(),
-            api_key: "test".to_string(),
+            api_key: Zeroizing::new("test".to_string()),
             base_url: "https://api.openai.com".to_string(),
         };
 
@@ -779,7 +780,7 @@ mod tests {
         use rockbot_llm::ImageContent;
         let provider = OpenAiProvider {
             client: reqwest::Client::new(),
-            api_key: "test".to_string(),
+            api_key: Zeroizing::new("test".to_string()),
             base_url: "https://api.openai.com".to_string(),
         };
 

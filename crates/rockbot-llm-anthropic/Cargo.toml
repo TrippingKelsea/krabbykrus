@@ -19,6 +19,7 @@ reqwest = { workspace = true }
 dirs = "5"
 tokio = { workspace = true }
 uuid = { workspace = true }
+zeroize = "1.7"
 
 [dev-dependencies]
 tokio = { workspace = true }

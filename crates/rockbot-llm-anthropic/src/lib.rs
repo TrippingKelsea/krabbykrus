@@ -10,6 +10,7 @@ use rockbot_llm::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use zeroize::Zeroizing;
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const DEFAULT_MODEL: &str = "claude-sonnet-4-20250514";
@@ -17,7 +18,7 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 pub struct AnthropicProvider {
     client: reqwest::Client,
-    api_key: String,
+    api_key: Zeroizing<String>,
     base_url: String,
     default_model: String,
 }
@@ -154,7 +155,7 @@ impl AnthropicProvider {
                 .timeout(std::time::Duration::from_secs(120))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
-            api_key,
+            api_key: Zeroizing::new(api_key),
             base_url: base_url.trim_end_matches('/').to_string(),
             default_model,
         }
@@ -298,7 +299,7 @@ impl AnthropicProvider {
     async fn send_request(&self, request: &AnthropicRequest) -> Result<reqwest::Response> {
         self.client
             .post(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", &self.api_key)
+            .header("x-api-key", self.api_key.as_str())
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json")
             .json(request)
