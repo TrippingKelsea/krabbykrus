@@ -1633,15 +1633,7 @@ impl Agent {
                 context.messages.push(tool_message);
             }
 
-            // Check context compaction
-            let estimated_tokens: usize = context
-                .messages
-                .iter()
-                .map(|m| m.extract_text().unwrap_or_default().len() / 4)
-                .sum();
-            if estimated_tokens > 80_000 {
-                self.compact_context(context).await?;
-            }
+            self.compact_context_if_needed(context).await?;
 
             // Next LLM call uses streaming
             let next_request = self.build_llm_request_streaming(context).await?;
@@ -1798,20 +1790,30 @@ impl Agent {
         context.messages.push(message);
         context.available_tools = available_tools;
 
-        // Count tokens using BPE tokenizer
+        self.refresh_context_token_count(context);
+        self.compact_context_if_needed(context).await?;
+
+        Ok(context.clone())
+    }
+
+    fn refresh_context_token_count(&self, context: &mut ProcessingContext) {
         context.token_count = context
             .messages
             .iter()
             .map(|m| crate::tokenizer::count_tokens(&m.extract_text().unwrap_or_default()))
             .sum();
+    }
 
-        // If context is too large, perform compaction
-        let compaction_threshold = self.config.max_context_tokens * 80 / 100;
-        if context.token_count > compaction_threshold {
+    fn compaction_threshold(&self) -> usize {
+        self.config.max_context_tokens * 80 / 100
+    }
+
+    async fn compact_context_if_needed(&self, context: &mut ProcessingContext) -> Result<()> {
+        self.refresh_context_token_count(context);
+        if context.token_count > self.compaction_threshold() {
             self.compact_context(context).await?;
         }
-
-        Ok(context.clone())
+        Ok(())
     }
 
     /// Compact conversation context using LLM-based semantic summarization.
@@ -3324,16 +3326,11 @@ The user wants me to explore the codebase. I should start by listing the directo
             }
 
             // --- Check if context needs compaction before next LLM call ---
-            let estimated_tokens: usize = context
-                .messages
-                .iter()
-                .map(|m| crate::tokenizer::count_tokens(&m.extract_text().unwrap_or_default()))
-                .sum();
-            let compaction_threshold = self.config.max_context_tokens * 80 / 100;
-            if estimated_tokens > compaction_threshold {
+            self.refresh_context_token_count(context);
+            if context.token_count > self.compaction_threshold() {
                 info!(
                     "Context approaching limit ({} est. tokens), compacting for session {}",
-                    estimated_tokens, session_id
+                    context.token_count, session_id
                 );
                 self.compact_context(context).await?;
             }
@@ -4891,6 +4888,34 @@ mod tests {
 
         assert!(plan.is_some());
         assert_eq!(context.messages.len(), original_len);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_context_token_count_uses_bpe_consistently() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut agent = build_test_agent(temp.path(), None).await;
+        agent.config.max_context_tokens = 100;
+
+        let message = Message::text("token counting should use the tokenizer consistently")
+            .with_role(MessageRole::User);
+        let expected_tokens =
+            crate::tokenizer::count_tokens(&message.extract_text().unwrap_or_default());
+        let mut context = ProcessingContext {
+            session_id: "test-agent:session".to_string(),
+            messages: vec![message],
+            available_tools: vec![],
+            token_count: 0,
+            workspace_override: None,
+            remote_executor_target: None,
+            remote_executor_strict: false,
+            remote_workspace_override: None,
+            delegation_depth: 0,
+        };
+
+        agent.refresh_context_token_count(&mut context);
+
+        assert_eq!(context.token_count, expected_tokens);
+        assert_eq!(agent.compaction_threshold(), 80);
     }
 
     #[test]
