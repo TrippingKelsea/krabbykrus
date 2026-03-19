@@ -210,7 +210,7 @@ impl VolumeBackend {
             let zeros = vec![0u8; remaining];
             file.write_all(&zeros)?;
         }
-        file.flush()?;
+        file.sync_data()?;
         Ok(())
     }
 
