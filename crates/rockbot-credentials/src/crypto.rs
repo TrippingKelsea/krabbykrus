@@ -13,7 +13,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Nonce,
 };
-use argon2::{password_hash::SaltString, Argon2, PasswordHasher};
+use argon2::{password_hash::SaltString, Algorithm, Argon2, Params, PasswordHasher, Version};
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -28,6 +28,22 @@ pub const KEY_SIZE: usize = 32;
 
 /// Salt size for Argon2 (16 bytes recommended).
 pub const SALT_SIZE: usize = 16;
+
+/// Explicit Argon2id parameters for vault master key derivation.
+pub const ARGON2_MEMORY_COST_KIB: u32 = 65_536;
+pub const ARGON2_TIME_COST: u32 = 3;
+pub const ARGON2_LANES: u32 = 1;
+
+fn vault_argon2() -> Result<Argon2<'static>> {
+    let params = Params::new(
+        ARGON2_MEMORY_COST_KIB,
+        ARGON2_TIME_COST,
+        ARGON2_LANES,
+        Some(KEY_SIZE),
+    )
+    .map_err(|e| CredentialError::Internal(format!("invalid Argon2 params: {e}")))?;
+    Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
+}
 
 /// Master key derived from password, zeroized on drop.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
@@ -46,8 +62,7 @@ impl MasterKey {
             )));
         }
 
-        // Use Argon2id with recommended parameters
-        let argon2 = Argon2::default();
+        let argon2 = vault_argon2()?;
 
         // Create a SaltString from the raw bytes
         let salt_string = SaltString::encode_b64(salt)
@@ -246,5 +261,24 @@ mod tests {
         let nonce1 = generate_nonce();
         let nonce2 = generate_nonce();
         assert_ne!(nonce1, nonce2);
+    }
+
+    #[test]
+    fn test_argon2_parameters_are_explicit() {
+        let argon2 = vault_argon2().unwrap();
+        assert_eq!(argon2.params().m_cost(), ARGON2_MEMORY_COST_KIB);
+        assert_eq!(argon2.params().t_cost(), ARGON2_TIME_COST);
+        assert_eq!(argon2.params().p_cost(), ARGON2_LANES);
+        assert_eq!(argon2.params().output_len(), Some(KEY_SIZE));
+
+        let salt = SaltString::encode_b64(&[7u8; SALT_SIZE]).unwrap();
+        let phc = argon2
+            .hash_password(b"test-password", &salt)
+            .unwrap()
+            .to_string();
+        assert!(phc.starts_with("$argon2id$v=19$"));
+        assert!(phc.contains(&format!("m={ARGON2_MEMORY_COST_KIB}")));
+        assert!(phc.contains(&format!("t={ARGON2_TIME_COST}")));
+        assert!(phc.contains(&format!("p={ARGON2_LANES}")));
     }
 }
