@@ -19,7 +19,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 chacha20 = "0.9"
-openraft = { version = "0.10.0-alpha.17", features = ["type-alias"], optional = true }
+openraft = { version = "0.10.0-alpha.17", features = ["type-alias", "serde"], optional = true }
 futures-util = { workspace = true, optional = true }
 
 [dev-dependencies]

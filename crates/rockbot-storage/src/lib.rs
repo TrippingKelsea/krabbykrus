@@ -26,6 +26,8 @@ pub struct Store {
     db: Database,
 }
 
+pub(crate) type BytesTableDefinition = TableDefinition<'static, &'static str, &'static [u8]>;
+
 impl Store {
     pub const DEFAULT_DATA_FILE: &str = "rockbot.data";
 
@@ -332,6 +334,31 @@ impl Store {
             .into_iter()
             .map(|(key, bytes)| Ok((key, serde_json::from_slice(&bytes)?)))
             .collect()
+    }
+
+    pub(crate) fn replace_bytes_tables(
+        &self,
+        replacements: &[(BytesTableDefinition, Vec<(String, Vec<u8>)>)],
+    ) -> anyhow::Result<()> {
+        let write_txn = self.db.begin_write()?;
+        for (table, entries) in replacements {
+            let mut t = write_txn.open_table(*table)?;
+            let keys: Vec<String> = t
+                .iter()?
+                .map(|result| {
+                    let (key, _) = result?;
+                    Ok::<_, redb::Error>(key.value().to_owned())
+                })
+                .collect::<Result<_, _>>()?;
+            for key in keys {
+                let _ = t.remove(key.as_str())?;
+            }
+            for (key, value) in entries {
+                t.insert(key.as_str(), value.as_slice())?;
+            }
+        }
+        write_txn.commit()?;
+        Ok(())
     }
 }
 
