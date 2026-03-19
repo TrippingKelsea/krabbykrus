@@ -98,6 +98,10 @@ impl PluginManager {
 
     /// Load a plugin from a manifest
     pub async fn load_plugin(&mut self, manifest: PluginManifest) -> Result<()> {
+        Self::ensure_loading_enabled()?;
+        #[cfg(feature = "experimental")]
+        Self::validate_manifest(&manifest)?;
+
         tracing::info!("Loading plugin: {} v{}", manifest.name, manifest.version);
 
         let plugin = LoadedPlugin {
@@ -109,6 +113,44 @@ impl PluginManager {
         self.plugins.insert(plugin.id.clone(), plugin);
 
         Ok(())
+    }
+
+    #[cfg(feature = "experimental")]
+    fn validate_manifest(manifest: &PluginManifest) -> Result<()> {
+        if manifest.id.is_empty() {
+            return Err(PluginError::InvalidManifest {
+                message: "Plugin id may not be empty".to_string(),
+            });
+        }
+
+        if manifest.id.contains("..")
+            || manifest.id.contains('/')
+            || manifest.id.contains('\\')
+            || !manifest
+                .id
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
+        {
+            return Err(PluginError::InvalidManifest {
+                message: format!("Plugin id '{}' contains invalid path-like characters", manifest.id),
+            });
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "experimental")]
+    fn ensure_loading_enabled() -> Result<()> {
+        Ok(())
+    }
+
+    #[cfg(not(feature = "experimental"))]
+    fn ensure_loading_enabled() -> Result<()> {
+        Err(PluginError::SecurityError {
+            message:
+                "Plugin loading is disabled unless rockbot-plugins is built with the `experimental` feature"
+                    .to_string(),
+        })
     }
 
     /// Unload a plugin
@@ -164,7 +206,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_plugin_loading() {
+    async fn test_plugin_loading_requires_experimental_feature() {
         let mut manager = PluginManager::new();
 
         let manifest = PluginManifest {
@@ -178,9 +220,26 @@ mod tests {
             channels: vec![],
         };
 
-        manager.load_plugin(manifest).await.unwrap();
+        let err = manager.load_plugin(manifest).await.unwrap_err();
+        assert!(matches!(err, PluginError::SecurityError { .. }));
+    }
 
-        assert!(manager.get_plugin("test-plugin").is_some());
-        assert_eq!(manager.list_plugins().len(), 1);
+    #[cfg(feature = "experimental")]
+    #[tokio::test]
+    async fn test_plugin_loading_rejects_path_like_ids() {
+        let mut manager = PluginManager::new();
+        let manifest = PluginManifest {
+            id: "../bad-plugin".to_string(),
+            name: "Bad Plugin".to_string(),
+            version: "1.0.0".to_string(),
+            description: "A test plugin".to_string(),
+            author: "Test Author".to_string(),
+            capabilities: vec![],
+            tools: vec![],
+            channels: vec![],
+        };
+
+        let err = manager.load_plugin(manifest).await.unwrap_err();
+        assert!(matches!(err, PluginError::InvalidManifest { .. }));
     }
 }

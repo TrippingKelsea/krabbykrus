@@ -8,6 +8,9 @@ license = "MIT"
 [lints]
 workspace = true
 
+[features]
+experimental = []
+
 [dependencies]
 tokio = { workspace = true }
 serde = { workspace = true }
