@@ -43,6 +43,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, RwLock};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -4326,7 +4327,13 @@ impl Gateway {
             .get("x-rockbot-a2a-token")
             .and_then(|v| v.to_str().ok());
 
-        bearer == Some(expected.as_str()) || direct == Some(expected.as_str())
+        bearer
+            .or(direct)
+            .is_some_and(|provided| Self::constant_time_secret_eq(provided, &expected))
+    }
+
+    fn constant_time_secret_eq(provided: &str, expected: &str) -> bool {
+        provided.as_bytes().ct_eq(expected.as_bytes()).into()
     }
 
     async fn begin_browser_web_auth(

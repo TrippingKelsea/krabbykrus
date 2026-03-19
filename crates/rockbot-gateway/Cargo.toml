@@ -103,6 +103,7 @@ rustls-pemfile = { workspace = true }
 rockbot-pki = { path = "../rockbot-pki" }
 ring = { workspace = true }
 x509-parser = { workspace = true }
+subtle = "2.6"
 
 # S3 CA distribution + Route53 DNS (optional)
 rockbot-deploy = { path = "../rockbot-deploy", optional = true }
