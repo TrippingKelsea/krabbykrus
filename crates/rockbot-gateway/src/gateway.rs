@@ -3669,8 +3669,16 @@ impl Gateway {
         const CERT_SIGN_MAX_ATTEMPTS: usize = 3;
         const CERT_SIGN_WINDOW_SECS: u64 = 60;
 
+        if let std::collections::hash_map::Entry::Occupied(mut entry) = attempts.entry(ip) {
+            entry
+                .get_mut()
+                .retain(|attempt| now.duration_since(*attempt).as_secs() < CERT_SIGN_WINDOW_SECS);
+            if entry.get().is_empty() {
+                entry.remove();
+            }
+        }
+
         let entry = attempts.entry(ip).or_default();
-        entry.retain(|attempt| now.duration_since(*attempt).as_secs() < CERT_SIGN_WINDOW_SECS);
         if entry.len() >= CERT_SIGN_MAX_ATTEMPTS {
             return false;
         }
@@ -7864,6 +7872,22 @@ mod tests {
         assert!(Gateway::record_cert_sign_attempt(&mut attempts, ip, now));
         assert!(Gateway::record_cert_sign_attempt(&mut attempts, ip, now));
         assert!(!Gateway::record_cert_sign_attempt(&mut attempts, ip, now));
+    }
+
+    #[test]
+    fn test_cert_sign_rate_limit_drops_stale_empty_entries() {
+        let mut attempts = HashMap::new();
+        let ip = std::net::IpAddr::from([127, 0, 0, 1]);
+        let stale = std::time::Instant::now() - std::time::Duration::from_secs(61);
+        attempts.insert(ip, vec![stale]);
+
+        assert!(Gateway::record_cert_sign_attempt(
+            &mut attempts,
+            ip,
+            std::time::Instant::now()
+        ));
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts.get(&ip).map(Vec::len), Some(1));
     }
 
     struct EnvGuard {
