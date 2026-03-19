@@ -1783,7 +1783,7 @@ impl Agent {
             return Ok(());
         }
 
-        let split_at = context.messages.len() - keep_recent;
+        let split_at = Self::find_safe_compaction_boundary(&context.messages, keep_recent);
         let to_summarize: Vec<Message> = context.messages.drain(0..split_at).collect();
 
         // Build a summarization transcript from the old messages
@@ -1903,6 +1903,25 @@ impl Agent {
         );
 
         Ok(())
+    }
+
+    fn find_safe_compaction_boundary(messages: &[Message], keep_recent: usize) -> usize {
+        let mut split_at = messages.len().saturating_sub(keep_recent);
+        while split_at > 0 {
+            let current = &messages[split_at];
+            let previous = &messages[split_at - 1];
+
+            let previous_has_tool_calls = matches!(previous.metadata.role, MessageRole::Assistant)
+                && previous.metadata.extra.contains_key("tool_calls");
+            let current_is_tool_result = matches!(current.metadata.role, MessageRole::Tool);
+
+            if previous_has_tool_calls || current_is_tool_result {
+                split_at -= 1;
+                continue;
+            }
+            break;
+        }
+        split_at
     }
 
     /// Build LLM chat completion request with system prompt assembly
@@ -4786,6 +4805,30 @@ mod tests {
         Agent::merge_streaming_tool_calls(&mut accumulated, &deltas);
         assert_eq!(accumulated.len(), 1);
         assert_eq!(accumulated[0].function.arguments, "{\"path\":\"file.txt\"}");
+    }
+
+    #[test]
+    fn test_safe_compaction_boundary_keeps_tool_exchange_together() {
+        let user = Message::text("u1").with_role(MessageRole::User);
+        let mut assistant = Message::text("calling tool").with_role(MessageRole::Assistant);
+        assistant.metadata.extra.insert(
+            "tool_calls".to_string(),
+            serde_json::json!([{
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "arguments": "{}"
+                }
+            }]),
+        );
+        let tool = Message::tool_result("call_1", "read", "ok");
+        let tail = Message::text("latest").with_role(MessageRole::User);
+
+        let messages = vec![user, assistant, tool, tail];
+        let split_at = Agent::find_safe_compaction_boundary(&messages, 2);
+
+        assert_eq!(split_at, 1);
     }
 
     #[test]
