@@ -3833,7 +3833,7 @@ impl AppState {
                 // Append to last assistant message, or create a new one
                 if let Some(last) = self.butler_chat.messages.last_mut() {
                     if last.role == ChatRole::Assistant {
-                        last.content.push_str(&text);
+                        last.append_raw_delta(&text);
                     } else {
                         self.butler_chat.messages.push(ChatMessage::assistant(text));
                     }
