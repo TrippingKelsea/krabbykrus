@@ -626,7 +626,8 @@ impl Agent {
         message: Message,
         options: ProcessMessageOptions,
     ) -> Result<AgentResponse> {
-        self.process_message_inner(session_id, message, options, None).await
+        self.process_message_inner(session_id, message, options, None)
+            .await
     }
 
     /// Like `process_message`, but sends real-time progress events to the
@@ -843,162 +844,162 @@ impl Agent {
                 .process_llm_response(&db_session_id, &mut context, llm_response, &progress_tx)
                 .await?;
 
-        // --- Output guardrail check ---
-        if !self.guardrail_pipeline.is_empty() {
-            let response_text = response_message.extract_text().unwrap_or_default();
-            let guardrail_result = self.guardrail_pipeline.check_output(&response_text).await;
-            let result_label = match &guardrail_result {
-                GuardrailResult::Pass => "pass".to_string(),
-                GuardrailResult::Warn(msg) => format!("warn: {msg}"),
-                GuardrailResult::Block(msg) => format!("block: {msg}"),
-            };
+            // --- Output guardrail check ---
+            if !self.guardrail_pipeline.is_empty() {
+                let response_text = response_message.extract_text().unwrap_or_default();
+                let guardrail_result = self.guardrail_pipeline.check_output(&response_text).await;
+                let result_label = match &guardrail_result {
+                    GuardrailResult::Pass => "pass".to_string(),
+                    GuardrailResult::Warn(msg) => format!("warn: {msg}"),
+                    GuardrailResult::Block(msg) => format!("block: {msg}"),
+                };
+                trajectory.record(
+                    TrajectoryEvent::Guardrail {
+                        name: "pipeline".to_string(),
+                        direction: "output".to_string(),
+                        result: result_label,
+                    },
+                    0,
+                    token_usage.total_tokens,
+                );
+                // For output, we warn but don't block — the response already exists
+            }
+
+            // --- Reflection pass ---
+            if self.config.reflection_enabled && !tool_results.is_empty() {
+                trajectory.record(
+                    TrajectoryEvent::Reflection {
+                        action: "starting".to_string(),
+                    },
+                    0,
+                    token_usage.total_tokens,
+                );
+
+                let reflection_result = self
+                    .run_reflection(
+                        &db_session_id,
+                        &mut context,
+                        &response_message,
+                        &progress_tx,
+                    )
+                    .await;
+
+                match reflection_result {
+                    Ok(Some((new_msg, extra_results, extra_tokens))) => {
+                        trajectory.record(
+                            TrajectoryEvent::Reflection {
+                                action: "corrected".to_string(),
+                            },
+                            0,
+                            token_usage.total_tokens + extra_tokens.total_tokens,
+                        );
+                        response_message = new_msg;
+                        token_usage.prompt_tokens += extra_tokens.prompt_tokens;
+                        token_usage.completion_tokens += extra_tokens.completion_tokens;
+                        token_usage.total_tokens += extra_tokens.total_tokens;
+                        // Extend tool results if reflection made more calls
+                        let _ = extra_results; // tool_results already consumed upstream
+                    }
+                    Ok(None) => {
+                        trajectory.record(
+                            TrajectoryEvent::Reflection {
+                                action: "no_changes".to_string(),
+                            },
+                            0,
+                            token_usage.total_tokens,
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Reflection pass failed: {e}");
+                        trajectory.record(
+                            TrajectoryEvent::Reflection {
+                                action: format!("error: {e}"),
+                            },
+                            0,
+                            token_usage.total_tokens,
+                        );
+                    }
+                }
+            }
+
+            // Record completion in trajectory
             trajectory.record(
-                TrajectoryEvent::Guardrail {
-                    name: "pipeline".to_string(),
-                    direction: "output".to_string(),
-                    result: result_label,
+                TrajectoryEvent::Complete {
+                    total_iterations: tool_results.len(),
+                    total_tool_calls: tool_results.len(),
+                    final_tokens: token_usage.clone(),
+                    duration_ms: start_time.elapsed().as_millis() as u64,
                 },
                 0,
                 token_usage.total_tokens,
             );
-            // For output, we warn but don't block — the response already exists
-        }
 
-        // --- Reflection pass ---
-        if self.config.reflection_enabled && !tool_results.is_empty() {
-            trajectory.record(
-                TrajectoryEvent::Reflection {
-                    action: "starting".to_string(),
-                },
-                0,
-                token_usage.total_tokens,
-            );
+            // Store response message
+            self.session_manager
+                .add_message(&db_session_id, response_message.clone())
+                .await?;
 
-            let reflection_result = self
-                .run_reflection(
-                    &db_session_id,
-                    &mut context,
-                    &response_message,
-                    &progress_tx,
-                )
+            // Update session token stats
+            let mut session = self
+                .session_manager
+                .get_session(&db_session_id)
+                .await?
+                .ok_or_else(|| AgentError::ExecutionFailed {
+                    message: "Session disappeared during processing".to_string(),
+                })?;
+            session.add_tokens(token_usage.prompt_tokens, token_usage.completion_tokens);
+            self.session_manager.update_session(&session).await?;
+
+            // Update agent statistics
+            let processing_time_ms = start_time.elapsed().as_millis() as u64;
+            self.update_stats(token_usage.total_tokens, processing_time_ms)
                 .await;
 
-            match reflection_result {
-                Ok(Some((new_msg, extra_results, extra_tokens))) => {
-                    trajectory.record(
-                        TrajectoryEvent::Reflection {
-                            action: "corrected".to_string(),
-                        },
-                        0,
-                        token_usage.total_tokens + extra_tokens.total_tokens,
-                    );
-                    response_message = new_msg;
-                    token_usage.prompt_tokens += extra_tokens.prompt_tokens;
-                    token_usage.completion_tokens += extra_tokens.completion_tokens;
-                    token_usage.total_tokens += extra_tokens.total_tokens;
-                    // Extend tool results if reflection made more calls
-                    let _ = extra_results; // tool_results already consumed upstream
-                }
-                Ok(None) => {
-                    trajectory.record(
-                        TrajectoryEvent::Reflection {
-                            action: "no_changes".to_string(),
-                        },
-                        0,
-                        token_usage.total_tokens,
-                    );
-                }
-                Err(e) => {
-                    warn!("Reflection pass failed: {e}");
-                    trajectory.record(
-                        TrajectoryEvent::Reflection {
-                            action: format!("error: {e}"),
-                        },
-                        0,
-                        token_usage.total_tokens,
-                    );
-                }
-            }
-        }
+            // Record observability metrics
+            crate::metrics::record_agent_message(&self.config.id);
+            let model_label = self.config.model.as_deref().unwrap_or("default");
+            crate::metrics::record_llm_request(
+                &self.config.id,
+                model_label,
+                start_time.elapsed(),
+                token_usage.prompt_tokens,
+                token_usage.completion_tokens,
+            );
 
-        // Record completion in trajectory
-        trajectory.record(
-            TrajectoryEvent::Complete {
-                total_iterations: tool_results.len(),
-                total_tool_calls: tool_results.len(),
-                final_tokens: token_usage.clone(),
-                duration_ms: start_time.elapsed().as_millis() as u64,
-            },
-            0,
-            token_usage.total_tokens,
-        );
-
-        // Store response message
-        self.session_manager
-            .add_message(&db_session_id, response_message.clone())
-            .await?;
-
-        // Update session token stats
-        let mut session = self
-            .session_manager
-            .get_session(&db_session_id)
-            .await?
-            .ok_or_else(|| AgentError::ExecutionFailed {
-                message: "Session disappeared during processing".to_string(),
-            })?;
-        session.add_tokens(token_usage.prompt_tokens, token_usage.completion_tokens);
-        self.session_manager.update_session(&session).await?;
-
-        // Update agent statistics
-        let processing_time_ms = start_time.elapsed().as_millis() as u64;
-        self.update_stats(token_usage.total_tokens, processing_time_ms)
-            .await;
-
-        // Record observability metrics
-        crate::metrics::record_agent_message(&self.config.id);
-        let model_label = self.config.model.as_deref().unwrap_or("default");
-        crate::metrics::record_llm_request(
-            &self.config.id,
-            model_label,
-            start_time.elapsed(),
-            token_usage.prompt_tokens,
-            token_usage.completion_tokens,
-        );
-
-        // Store episodic memory entry if enabled and tool work was done
-        if let Some(ref store) = self.episodic_store {
-            if !tool_results.is_empty() {
-                let response_text = response_message.extract_text().unwrap_or_default();
-                let summary = if response_text.len() > 200 {
-                    format!("{}...", &response_text[..200])
-                } else {
-                    response_text
-                };
-                let episode = rockbot_memory::Episode {
-                    session_id: db_session_id.clone(),
-                    timestamp: chrono::Utc::now(),
-                    summary,
-                    outcome: if tool_results.iter().all(|r| r.success) {
-                        "success".to_string()
+            // Store episodic memory entry if enabled and tool work was done
+            if let Some(ref store) = self.episodic_store {
+                if !tool_results.is_empty() {
+                    let response_text = response_message.extract_text().unwrap_or_default();
+                    let summary = if response_text.len() > 200 {
+                        format!("{}...", &response_text[..200])
                     } else {
-                        "partial".to_string()
-                    },
-                    tools_used: tool_results.iter().map(|r| r.tool_name.clone()).collect(),
-                    tokens_used: token_usage.total_tokens,
-                };
-                if let Err(e) = store.store(&self.config.id, &episode).await {
-                    debug!("Failed to store episode: {e}");
+                        response_text
+                    };
+                    let episode = rockbot_memory::Episode {
+                        session_id: db_session_id.clone(),
+                        timestamp: chrono::Utc::now(),
+                        summary,
+                        outcome: if tool_results.iter().all(|r| r.success) {
+                            "success".to_string()
+                        } else {
+                            "partial".to_string()
+                        },
+                        tools_used: tool_results.iter().map(|r| r.tool_name.clone()).collect(),
+                        tokens_used: token_usage.total_tokens,
+                    };
+                    if let Err(e) = store.store(&self.config.id, &episode).await {
+                        debug!("Failed to store episode: {e}");
+                    }
                 }
             }
-        }
 
-        // Fire PostMessage hook
-        let post_event = HookEvent::PostMessage {
-            agent_id: self.config.id.clone(),
-            session_id: db_session_id.clone(),
-            response: response_message.clone(),
-        };
-        self.hook_registry.fire(&post_event).await;
+            // Fire PostMessage hook
+            let post_event = HookEvent::PostMessage {
+                agent_id: self.config.id.clone(),
+                session_id: db_session_id.clone(),
+                response: response_message.clone(),
+            };
+            self.hook_registry.fire(&post_event).await;
 
             let handoff = tool_results.iter().find_map(|tr| {
                 if let ToolResult::Handoff {
@@ -1421,7 +1422,13 @@ impl Agent {
     ) {
         for delta in deltas {
             // Find existing tool call by id, or create new
-            if let Some(existing) = accumulated.iter_mut().find(|tc| tc.id == delta.id) {
+            let existing = if delta.id.is_empty() {
+                accumulated.last_mut()
+            } else {
+                accumulated.iter_mut().find(|tc| tc.id == delta.id)
+            };
+
+            if let Some(existing) = existing {
                 // Append argument fragments
                 existing
                     .function
@@ -1429,6 +1436,9 @@ impl Agent {
                     .push_str(&delta.function.arguments);
                 if existing.function.name.is_empty() && !delta.function.name.is_empty() {
                     existing.function.name.clone_from(&delta.function.name);
+                }
+                if existing.id.is_empty() && !delta.id.is_empty() {
+                    existing.id.clone_from(&delta.id);
                 }
             } else {
                 accumulated.push(delta.clone());
@@ -1974,7 +1984,8 @@ impl Agent {
 
             if let rockbot_llm::MessageRole::Assistant = role {
                 if let Some(ref calls) = tool_calls {
-                    let required_ids: HashSet<_> = calls.iter().map(|call| call.id.clone()).collect();
+                    let required_ids: HashSet<_> =
+                        calls.iter().map(|call| call.id.clone()).collect();
                     let mut satisfied_ids = HashSet::new();
 
                     for next in context.messages.iter().skip(idx + 1) {
@@ -2257,7 +2268,11 @@ impl Agent {
         {
             Ok(content) => return Ok(content),
             Err(e) => {
-                trace!("Context file {} not found in managed store: {}", filename, e);
+                trace!(
+                    "Context file {} not found in managed store: {}",
+                    filename,
+                    e
+                );
             }
         }
 
@@ -4400,9 +4415,16 @@ The user wants me to explore the codebase. I should start by listing the directo
             .storage_root
             .clone()
             .unwrap_or_else(rockbot_storage_runtime::default_storage_root);
-        rockbot_storage_runtime::StorageRuntime::new_with_root_sync(&rockbot_config::Config::default(), storage_root.clone())
-            .and_then(|runtime| runtime.agent_vdisk_path(&self.config.id))
-            .unwrap_or_else(|_| storage_root.join("agents").join(format!("{}.data", self.config.id)))
+        rockbot_storage_runtime::StorageRuntime::new_with_root_sync(
+            &rockbot_config::Config::default(),
+            storage_root.clone(),
+        )
+        .and_then(|runtime| runtime.agent_vdisk_path(&self.config.id))
+        .unwrap_or_else(|_| {
+            storage_root
+                .join("agents")
+                .join(format!("{}.data", self.config.id))
+        })
     }
 
     /// Get the workspace path for this agent (used for tool execution and system prompt context).
@@ -4807,6 +4829,30 @@ mod tests {
         }];
         Agent::merge_streaming_tool_calls(&mut accumulated, &deltas);
         assert_eq!(accumulated.len(), 1);
+        assert_eq!(accumulated[0].function.arguments, "{\"path\":\"file.txt\"}");
+    }
+
+    #[test]
+    fn test_merge_streaming_tool_calls_append_empty_id_continuation() {
+        let mut accumulated = vec![rockbot_llm::ToolCall {
+            id: "tc_1".to_string(),
+            r#type: "function".to_string(),
+            function: rockbot_llm::FunctionCall {
+                name: "read".to_string(),
+                arguments: "{\"path\":\"".to_string(),
+            },
+        }];
+        let deltas = vec![rockbot_llm::ToolCall {
+            id: String::new(),
+            r#type: "function".to_string(),
+            function: rockbot_llm::FunctionCall {
+                name: String::new(),
+                arguments: "file.txt\"}".to_string(),
+            },
+        }];
+        Agent::merge_streaming_tool_calls(&mut accumulated, &deltas);
+        assert_eq!(accumulated.len(), 1);
+        assert_eq!(accumulated[0].id, "tc_1");
         assert_eq!(accumulated[0].function.arguments, "{\"path\":\"file.txt\"}");
     }
 
