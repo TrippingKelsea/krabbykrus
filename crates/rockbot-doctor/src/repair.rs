@@ -44,6 +44,21 @@ impl DoctorFix {
     }
 }
 
+const DISALLOWED_PATH_PREFIXES: &[&str] = &["security", "credentials", "pki"];
+
+fn validate_fix_path(path: &[String]) -> anyhow::Result<()> {
+    let Some(first) = path.first() else {
+        anyhow::bail!("Empty field path");
+    };
+    if DISALLOWED_PATH_PREFIXES.contains(&first.as_str()) {
+        anyhow::bail!(
+            "Doctor auto-fix may not modify `{}` paths without interactive confirmation",
+            first
+        );
+    }
+    Ok(())
+}
+
 /// Apply a fix to raw TOML text, returning the patched text.
 ///
 /// Uses `toml_edit` to preserve comments and formatting.
@@ -54,12 +69,15 @@ pub fn apply_fix(raw_toml: &str, fix: &DoctorFix) -> anyhow::Result<String> {
 
     match fix {
         DoctorFix::RemoveField { path } => {
+            validate_fix_path(path)?;
             remove_path(&mut doc, path)?;
         }
         DoctorFix::SetField { path, new_value } => {
+            validate_fix_path(path)?;
             set_path(&mut doc, path, new_value)?;
         }
         DoctorFix::AddField { path, value } => {
+            validate_fix_path(path)?;
             set_path(&mut doc, path, value)?;
         }
     }
@@ -139,14 +157,20 @@ pub fn parse_fix_suggestion(output: &str, field_path: &str) -> Option<DoctorFix>
         if let Some(rest) = line.strip_prefix("SET:") {
             let value = rest.trim().to_string();
             if !value.is_empty() {
-                let path = field_path.split('.').map(String::from).collect();
+                let path: Vec<String> = field_path.split('.').map(String::from).collect();
+                if validate_fix_path(&path).is_err() {
+                    return None;
+                }
                 return Some(DoctorFix::SetField {
                     path,
                     new_value: value,
                 });
             }
         } else if line == "REMOVE" {
-            let path = field_path.split('.').map(String::from).collect();
+            let path: Vec<String> = field_path.split('.').map(String::from).collect();
+            if validate_fix_path(&path).is_err() {
+                return None;
+            }
             return Some(DoctorFix::RemoveField { path });
         } else if let Some(rest) = line.strip_prefix("ADD:") {
             let rest = rest.trim();
@@ -154,7 +178,10 @@ pub fn parse_fix_suggestion(output: &str, field_path: &str) -> Option<DoctorFix>
             if let Some(eq_pos) = rest.find('=') {
                 let add_path = rest[..eq_pos].trim();
                 let add_value = rest[eq_pos + 1..].trim().to_string();
-                let path = add_path.split('.').map(String::from).collect();
+                let path: Vec<String> = add_path.split('.').map(String::from).collect();
+                if validate_fix_path(&path).is_err() {
+                    return None;
+                }
                 return Some(DoctorFix::AddField {
                     path,
                     value: add_value,
@@ -229,20 +256,26 @@ mod tests {
     #[test]
     fn test_parse_fix_add() {
         let fix = parse_fix_suggestion("ADD: security.sandbox.enabled = true", "security.sandbox");
-        let fix = fix.unwrap();
-        match fix {
-            DoctorFix::AddField { path, value } => {
-                assert_eq!(path, vec!["security", "sandbox", "enabled"]);
-                assert_eq!(value, "true");
-            }
-            _ => panic!("Expected AddField"),
-        }
+        assert!(fix.is_none());
     }
 
     #[test]
     fn test_parse_fix_cannot() {
         let fix = parse_fix_suggestion("CANNOT_FIX: ambiguous error", "gateway.port");
         assert!(fix.is_none());
+    }
+
+    #[test]
+    fn test_apply_fix_rejects_sensitive_paths() {
+        let toml = "[security.sandbox]\nmode = \"tools\"\n";
+        let fix = DoctorFix::SetField {
+            path: vec!["security".into(), "sandbox".into(), "mode".into()],
+            new_value: "\"disabled\"".into(),
+        };
+        let err = apply_fix(toml, &fix).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("may not modify `security` paths"));
     }
 
     #[test]
