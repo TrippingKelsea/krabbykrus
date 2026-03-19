@@ -62,6 +62,9 @@ pub enum ToolError {
     #[error("Security error: {message}")]
     SecurityError { message: String },
 
+    #[error("Tool '{tool_name}' requires approval")]
+    ApprovalRequired { tool_name: String },
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -682,8 +685,11 @@ impl ToolRegistry {
                             });
                         }
                     }
+                } else {
+                    return Err(ToolError::ApprovalRequired {
+                        tool_name: tool_name.to_string(),
+                    });
                 }
-                // If no approval callback, proceed (autonomous mode)
             }
         }
 
@@ -987,6 +993,46 @@ mod tests {
             .unwrap();
 
         assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_approval_required_tool_without_callback_is_blocked() {
+        let config = ToolConfig {
+            profile: "standard".to_string(),
+            deny: vec![],
+            configs: HashMap::new(),
+        };
+        let registry = ToolRegistry::new(config).await.unwrap();
+
+        let context = ToolExecutionContext {
+            session_id: "test".to_string(),
+            agent_id: "agent1".to_string(),
+            workspace_path: std::path::PathBuf::from("/tmp"),
+            security_context: rockbot_security::SecurityContext {
+                session_id: "test".to_string(),
+                capabilities: {
+                    let mut caps = rockbot_security::Capabilities::new();
+                    caps.add(rockbot_security::Capability::ProcessExecute);
+                    caps
+                },
+                sandbox_enabled: false,
+                restrictions: rockbot_security::SecurityRestrictions::default(),
+            },
+            credential_accessor: None,
+            command_allowlist: vec![],
+            approval_callback: None,
+            agent_invoker: None,
+            delegation_depth: 0,
+            blackboard: None,
+            swarm_id: None,
+        };
+
+        let err = registry
+            .execute_tool("exec", r#"{"command": "echo hello"}"#, context)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ToolError::ApprovalRequired { .. }));
     }
 
     #[tokio::test]
