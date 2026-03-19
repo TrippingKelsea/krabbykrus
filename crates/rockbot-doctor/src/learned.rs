@@ -111,11 +111,17 @@ impl LearnedStore {
 
     /// Write all entries to the JSONL file (overwrites existing content).
     pub fn save(&self) -> anyhow::Result<()> {
-        let mut file = std::fs::File::create(&self.path)?;
+        let parent = self
+            .path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let mut file = tempfile::NamedTempFile::new_in(parent)?;
         for entry in &self.entries {
             let line = serde_json::to_string(entry)?;
             writeln!(file, "{line}")?;
         }
+        file.as_file().sync_all()?;
+        file.persist(&self.path)?;
         Ok(())
     }
 
