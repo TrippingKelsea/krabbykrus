@@ -26,7 +26,7 @@ pub struct Store {
     db: Database,
 }
 
-pub(crate) type BytesTableDefinition = TableDefinition<'static, &'static str, &'static [u8]>;
+pub type BytesTableDefinition = TableDefinition<'static, &'static str, &'static [u8]>;
 
 impl Store {
     pub const DEFAULT_DATA_FILE: &str = "rockbot.data";
@@ -336,7 +336,7 @@ impl Store {
             .collect()
     }
 
-    pub(crate) fn replace_bytes_tables(
+    pub fn replace_bytes_tables(
         &self,
         replacements: &[(BytesTableDefinition, Vec<(String, Vec<u8>)>)],
     ) -> anyhow::Result<()> {
@@ -356,6 +356,19 @@ impl Store {
             for (key, value) in entries {
                 t.insert(key.as_str(), value.as_slice())?;
             }
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub fn put_many(
+        &self,
+        ops: &[(BytesTableDefinition, String, Vec<u8>)],
+    ) -> anyhow::Result<()> {
+        let write_txn = self.db.begin_write()?;
+        for (table, key, value) in ops {
+            let mut t = write_txn.open_table(*table)?;
+            t.insert(key.as_str(), value.as_slice())?;
         }
         write_txn.commit()?;
         Ok(())

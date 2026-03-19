@@ -735,14 +735,16 @@ impl StorageRuntime {
         created_via: &str,
     ) -> Result<()> {
         let disk_path = self.agent_vdisk_path(&config.id)?;
-        self.upsert_agent_vdisk_registry(&config.id, &disk_path)?;
-
+        let topology = self.open_topology_store_sync()?;
+        let now = now_rfc3339();
+        let existing_vdisk: Option<AgentVdiskRecord> =
+            topology.get_json(tables::AGENT_VDISKS, &config.id)?;
         let zone_id = config
             .zone_id
             .clone()
             .or_else(|| config.owner_agent_id.clone().map(|owner| format!("zone:{owner}")))
             .unwrap_or_else(|| "zone:default".to_string());
-        self.ensure_zone(&ZoneRecord {
+        let zone = ZoneRecord {
             zone_id: zone_id.clone(),
             owner_agent_id: config.owner_agent_id.clone(),
             root_agent_id: config.owner_agent_id.clone().or_else(|| Some(config.id.clone())),
@@ -753,8 +755,8 @@ impl StorageRuntime {
             allowed_tool_classes: Vec::new(),
             allow_cross_zone_delegation: false,
             allow_subagent_creation: true,
-        })?;
-        self.upsert_topology_node(&TopologyNodeRecord {
+        };
+        let node = TopologyNodeRecord {
             agent_id: config.id.clone(),
             creator_agent_id: config.creator_agent_id.clone(),
             owner_agent_id: config.owner_agent_id.clone(),
@@ -766,9 +768,36 @@ impl StorageRuntime {
             ownership_changed_at: None,
             created_via: created_via.to_string(),
             agent_vdisk_path: Some(disk_path.display().to_string()),
-        })?;
+        };
+        let vdisk = AgentVdiskRecord {
+            agent_id: config.id.clone(),
+            disk_path: disk_path.display().to_string(),
+            key_label: format!("agent:{}", config.id),
+            created_at: existing_vdisk
+                .as_ref()
+                .map(|record| record.created_at.clone())
+                .unwrap_or_else(|| now.clone()),
+            updated_at: now,
+        };
+        let mut ops = vec![
+            (
+                tables::AGENT_VDISKS,
+                config.id.clone(),
+                serde_json::to_vec(&vdisk)?,
+            ),
+            (
+                tables::ZONES,
+                zone.zone_id.clone(),
+                serde_json::to_vec(&zone)?,
+            ),
+            (
+                tables::TOPOLOGY_NODES,
+                node.agent_id.clone(),
+                serde_json::to_vec(&node)?,
+            ),
+        ];
         if let Some(owner) = &config.owner_agent_id {
-            self.record_topology_edge(&TopologyEdgeRecord {
+            let spawn_edge = TopologyEdgeRecord {
                 edge_id: format!("spawn:{}:{}", owner, config.id),
                 from_agent_id: owner.clone(),
                 to_agent_id: config.id.clone(),
@@ -778,8 +807,8 @@ impl StorageRuntime {
                 observed_count: 0,
                 created_at: now_rfc3339(),
                 updated_at: now_rfc3339(),
-            })?;
-            self.record_topology_edge(&TopologyEdgeRecord {
+            };
+            let delegate_edge = TopologyEdgeRecord {
                 edge_id: format!("delegate:{}:{}", owner, config.id),
                 from_agent_id: owner.clone(),
                 to_agent_id: config.id.clone(),
@@ -789,8 +818,27 @@ impl StorageRuntime {
                 observed_count: 0,
                 created_at: now_rfc3339(),
                 updated_at: now_rfc3339(),
-            })?;
+            };
+            for edge in [spawn_edge, delegate_edge] {
+                let edge_bytes = serde_json::to_vec(&edge)?;
+                ops.push((
+                    tables::TOPOLOGY_EDGES,
+                    edge.edge_id.clone(),
+                    edge_bytes.clone(),
+                ));
+                ops.push((
+                    tables::TOPOLOGY_EDGES_FROM,
+                    format!("{}\0{}", edge.from_agent_id, edge.edge_id),
+                    edge_bytes.clone(),
+                ));
+                ops.push((
+                    tables::TOPOLOGY_EDGES_TO,
+                    format!("{}\0{}", edge.to_agent_id, edge.edge_id),
+                    edge_bytes,
+                ));
+            }
         }
+        topology.put_many(&ops)?;
         Ok(())
     }
 
@@ -870,6 +918,9 @@ impl StorageRuntime {
     }
 
     pub async fn delete_agent_context_file(&self, agent_id: &str, filename: &str) -> Result<()> {
+        if filename == "SOUL.md" {
+            return Err(anyhow!("Cannot delete SOUL.md"));
+        }
         delete_agent_context_file_with_runtime(self, agent_id, filename).await
     }
 
@@ -1217,7 +1268,10 @@ pub fn storage_key_for_label(
                 "Encrypted storage is enabled, but no PKI manager is available for storage key '{label}'"
             )),
         },
-        StorageKeySource::DataLocal | StorageKeySource::External => Ok(None),
+        StorageKeySource::DataLocal | StorageKeySource::External => Err(anyhow!(
+            "Encrypted storage is enabled for '{label}', but key source '{:?}' is not implemented",
+            config.security.storage.key_source
+        )),
     }
 }
 
