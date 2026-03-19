@@ -110,13 +110,49 @@ fn normalize_path(path: &std::path::Path) -> PathBuf {
     normalized
 }
 
+fn canonicalize_existing_ancestor(path: &std::path::Path) -> std::io::Result<PathBuf> {
+    let mut current = path.to_path_buf();
+    let mut suffix = Vec::new();
+
+    loop {
+        if current.exists() {
+            let mut resolved = std::fs::canonicalize(&current)?;
+            for component in suffix.iter().rev() {
+                resolved.push(component);
+            }
+            return Ok(resolved);
+        }
+
+        let Some(name) = current.file_name().map(|name| name.to_os_string()) else {
+            return std::fs::canonicalize(&current);
+        };
+        suffix.push(name);
+
+        if !current.pop() {
+            return std::fs::canonicalize(path);
+        }
+    }
+}
+
 fn resolve_workspace_path(workspace_path: &std::path::Path, raw_path: &str) -> Result<PathBuf> {
-    let workspace = normalize_path(workspace_path);
+    let workspace = canonicalize_existing_ancestor(workspace_path).map_err(|e| {
+        crate::ToolError::InvalidParameters {
+            message: format!(
+                "failed to resolve workspace '{}': {e}",
+                workspace_path.display()
+            ),
+        }
+    })?;
     let candidate = if PathBuf::from(raw_path).is_absolute() {
         normalize_path(std::path::Path::new(raw_path))
     } else {
         normalize_path(&workspace.join(raw_path))
     };
+    let candidate = canonicalize_existing_ancestor(&candidate).map_err(|e| {
+        crate::ToolError::InvalidParameters {
+            message: format!("failed to resolve path '{raw_path}': {e}"),
+        }
+    })?;
 
     if !candidate.starts_with(&workspace) {
         return Err(crate::ToolError::InvalidParameters {
@@ -2999,6 +3035,18 @@ mod tests {
         let parsed = parse_command_line("printf 'hello world'").unwrap();
         assert_eq!(parsed.program, "printf");
         assert_eq!(parsed.args, vec!["hello world"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_workspace_path_rejects_symlink_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let link = dir.path().join("escape");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+
+        let err = resolve_workspace_path(dir.path(), "escape/secret.txt").unwrap_err();
+        assert!(matches!(err, crate::ToolError::InvalidParameters { .. }));
     }
 
     #[test]
