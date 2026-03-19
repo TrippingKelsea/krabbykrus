@@ -589,12 +589,13 @@ impl Tool for ExecTool {
                 .unwrap_or(30)
                 .min(MAX_EXEC_TIMEOUT_SECS); // Default 30 second timeout
 
-            sanitize_shell_command(&command)?;
+            let detected = sanitize_shell_command(&command)?;
 
-            let mut cmd = Command::new("sh");
-            cmd.arg("-c").arg(&command).current_dir(&workdir);
+            let mut cmd = Command::new(&detected.program);
+            cmd.args(&detected.args).current_dir(&workdir);
 
-            let output = tokio::time::timeout(std::time::Duration::from_secs(timeout), cmd.output())
+            let output =
+                tokio::time::timeout(std::time::Duration::from_secs(timeout), cmd.output())
                     .await
                     .map_err(|_| crate::ToolError::ExecutionFailed {
                         message: "Command timed out".to_string(),
@@ -3056,7 +3057,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_exec_tool_preserves_shell_features() {
+    async fn test_exec_tool_does_not_expand_shell_metacharacters() {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("marker.txt");
         let tool = ExecTool::new();
@@ -3065,7 +3066,7 @@ mod tests {
         let result = tool
             .execute(
                 serde_json::json!({
-                    "command": format!("printf safe > {}", marker.display()),
+                    "command": format!("printf safe ; touch {}", marker.display()),
                     "workdir": "."
                 }),
                 context,
@@ -3073,11 +3074,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(marker.exists(), "shell redirection should be interpreted");
-        let content = std::fs::read_to_string(&marker).unwrap();
-        assert_eq!(content, "safe");
+        assert!(
+            !marker.exists(),
+            "shell metacharacters should not be interpreted"
+        );
         if let ToolResult::Json { data } = result {
             assert_eq!(data.get("success").and_then(|v| v.as_bool()), Some(true));
+            assert_eq!(data.get("stdout").and_then(|v| v.as_str()), Some("safe"));
         } else {
             panic!("expected JSON result");
         }
