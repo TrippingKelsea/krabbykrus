@@ -29,8 +29,7 @@ impl ChatCommand for ButlerChatCommand {
         }
         // Sub-commands handled by Butler's own dispatch; this signals the TUI
         // to route through the Butler model.
-        CommandResult::Action(rockbot_chat::CommandAction::SendToAgent(
-            "__butler__".to_string(),
+        CommandResult::Action(rockbot_chat::CommandAction::SendToButler(
             message.to_string(),
         ))
     }

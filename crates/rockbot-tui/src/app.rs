@@ -4686,6 +4686,15 @@ impl App {
                 }
                 self.spawn_chat_request(&message);
             }
+            CommandAction::SendToButler(message) => {
+                if let Some(chat) = self.state.active_chat_mut() {
+                    chat.messages
+                        .push(ChatMessage::user(format!("@butler: {message}")));
+                    chat.loading = true;
+                    chat.auto_scroll = true;
+                }
+                self.spawn_chat_request(&message);
+            }
             CommandAction::SpawnAsync => {
                 // Command spawned async work via tx — nothing to do here
             }

@@ -31,6 +31,8 @@ pub enum CommandAction {
     ClearChat,
     /// Send a message to a specific agent. `(agent_id, message)`
     SendToAgent(String, String),
+    /// Route a message to the built-in Butler companion.
+    SendToButler(String),
     /// The command has spawned async work — no immediate display.
     SpawnAsync,
 }
