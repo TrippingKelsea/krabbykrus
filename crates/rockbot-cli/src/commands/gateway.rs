@@ -180,6 +180,7 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
     let sess = session_manager.clone();
     let llm = llm_registry.clone();
     let cred_accessor = credential_accessor.clone();
+    let agent_storage_root = storage_runtime.storage_root().to_path_buf();
 
     let agent_factory: rockbot_gateway::gateway::AgentFactory =
         Arc::new(move |agent_config: AgentInstance| {
@@ -189,6 +190,7 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
             let sess = sess.clone();
             let llm = llm.clone();
             let cred_accessor = cred_accessor.clone();
+            let agent_storage_root = agent_storage_root.clone();
 
             Box::pin(async move {
                 let model = agent_config.model.as_ref().unwrap_or(&defaults.model);
@@ -210,7 +212,7 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
                         }
                     })?);
 
-                let agent = Agent::new(
+                let mut agent = Agent::new(
                     agent_config,
                     llm_provider,
                     tr,
@@ -227,6 +229,7 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
                         message: e.to_string(),
                     }
                 })?;
+                agent.set_storage_root(agent_storage_root);
 
                 Ok(Arc::new(agent))
             })
@@ -293,8 +296,7 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
 
         // Create agent
         let invoker = gateway.agent_invoker();
-        let agent = Arc::new(
-            Agent::new(
+        let mut agent = Agent::new(
                 agent_config.clone(),
                 llm_provider,
                 tool_registry.clone(),
@@ -305,8 +307,9 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
                 None,
                 Some(invoker),
             )
-            .await?,
-        );
+            .await?;
+        agent.set_storage_root(storage_runtime.storage_root().to_path_buf());
+        let agent = Arc::new(agent);
 
         // Register with gateway
         gateway.register_agent(agent).await;

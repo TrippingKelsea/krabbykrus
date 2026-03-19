@@ -247,8 +247,39 @@ pub fn render_chat_messages(
             }
         }
 
+        if let Some(reasoning) = &msg.reasoning {
+            let expand_hint = if msg.reasoning_expanded { " [-]" } else { " [+]" };
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    "[?]",
+                    Style::default()
+                        .fg(palette::thinking_text(&state.tui_config))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" internal reasoning{expand_hint}"),
+                    Style::default().fg(palette::thinking_text(&state.tui_config)),
+                ),
+            ]));
+            if msg.reasoning_expanded {
+                for reasoning_line in reasoning.lines() {
+                    lines.push(Line::from(Span::styled(
+                        format!("    {reasoning_line}"),
+                        Style::default().fg(palette::thinking_text(&state.tui_config)),
+                    )));
+                }
+            }
+        }
+
         for line in msg.content.lines() {
             lines.push(Line::from(Span::styled(format!("  {line}"), style)));
+        }
+        if msg.content.is_empty() && msg.reasoning.is_some() {
+            lines.push(Line::from(Span::styled(
+                "  [No visible answer]",
+                Style::default().fg(palette::text_secondary(&state.tui_config)),
+            )));
         }
         lines.push(Line::from(""));
     }

@@ -922,47 +922,115 @@ pub struct ToolCallInfo {
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
     pub role: ChatRole,
+    pub raw_content: String,
     pub content: String,
+    pub reasoning: Option<String>,
+    pub reasoning_expanded: bool,
     pub timestamp: Option<String>,
     pub tool_calls: Vec<ToolCallInfo>,
 }
 
 impl ChatMessage {
     pub fn user(content: String) -> Self {
-        Self {
-            role: ChatRole::User,
+        Self::from_raw(
+            ChatRole::User,
             content,
-            timestamp: Some(chrono::Local::now().format("%H:%M:%S").to_string()),
-            tool_calls: Vec::new(),
-        }
+            Some(chrono::Local::now().format("%H:%M:%S").to_string()),
+            Vec::new(),
+        )
     }
 
     pub fn assistant(content: String) -> Self {
-        Self {
-            role: ChatRole::Assistant,
+        Self::from_raw(
+            ChatRole::Assistant,
             content,
-            timestamp: Some(chrono::Local::now().format("%H:%M:%S").to_string()),
-            tool_calls: Vec::new(),
-        }
+            Some(chrono::Local::now().format("%H:%M:%S").to_string()),
+            Vec::new(),
+        )
     }
 
     pub fn assistant_with_tools(content: String, tool_calls: Vec<ToolCallInfo>) -> Self {
-        Self {
-            role: ChatRole::Assistant,
+        Self::from_raw(
+            ChatRole::Assistant,
             content,
-            timestamp: Some(chrono::Local::now().format("%H:%M:%S").to_string()),
+            Some(chrono::Local::now().format("%H:%M:%S").to_string()),
+            tool_calls,
+        )
+    }
+
+    pub fn system(content: String) -> Self {
+        Self::from_raw(ChatRole::System, content, None, Vec::new())
+    }
+
+    pub fn from_raw(
+        role: ChatRole,
+        raw_content: String,
+        timestamp: Option<String>,
+        tool_calls: Vec<ToolCallInfo>,
+    ) -> Self {
+        let (content, reasoning) = extract_reasoning(&raw_content);
+        Self {
+            role,
+            raw_content,
+            content,
+            reasoning,
+            reasoning_expanded: false,
+            timestamp,
             tool_calls,
         }
     }
 
-    pub fn system(content: String) -> Self {
-        Self {
-            role: ChatRole::System,
-            content,
-            timestamp: None,
-            tool_calls: Vec::new(),
+    pub fn append_raw_delta(&mut self, delta: &str) {
+        self.raw_content.push_str(delta);
+        let (content, reasoning) = extract_reasoning(&self.raw_content);
+        self.content = content;
+        self.reasoning = reasoning;
+    }
+
+    pub fn set_raw_content(&mut self, raw_content: String) {
+        let (content, reasoning) = extract_reasoning(&raw_content);
+        self.raw_content = raw_content;
+        self.content = content;
+        self.reasoning = reasoning;
+    }
+}
+
+fn extract_reasoning(raw: &str) -> (String, Option<String>) {
+    let mut visible = String::with_capacity(raw.len());
+    let mut reasoning_chunks = Vec::new();
+    let mut remaining = raw;
+
+    loop {
+        if let Some(start) = remaining.find("<think>") {
+            visible.push_str(&remaining[..start]);
+            let after_open = &remaining[start + "<think>".len()..];
+            if let Some(end) = after_open.find("</think>") {
+                let reasoning = after_open[..end].trim();
+                if !reasoning.is_empty() {
+                    reasoning_chunks.push(reasoning.to_string());
+                }
+                remaining = &after_open[end + "</think>".len()..];
+            } else {
+                let reasoning = after_open.trim();
+                if !reasoning.is_empty() {
+                    reasoning_chunks.push(reasoning.to_string());
+                }
+                break;
+            }
+        } else {
+            visible.push_str(remaining);
+            break;
         }
     }
+
+    let visible = visible.replace("</think>", "").trim().to_string();
+    let reasoning = if reasoning_chunks.is_empty() {
+        None
+    } else {
+        Some(reasoning_chunks.join("\n\n"))
+    };
+
+    (visible, reasoning)
 }
 
 /// Vault unlock method
@@ -1061,6 +1129,32 @@ impl AccessLevel {
             Self::AllowHil2fa => Color::Magenta,
             Self::Deny => Color::Red,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_reasoning, ChatMessage, ChatRole};
+
+    #[test]
+    fn extracts_reasoning_from_complete_block() {
+        let (visible, reasoning) =
+            extract_reasoning("<think>plan quietly</think>Hello there.");
+        assert_eq!(visible, "Hello there.");
+        assert_eq!(reasoning.as_deref(), Some("plan quietly"));
+    }
+
+    #[test]
+    fn streaming_append_preserves_hidden_reasoning() {
+        let mut msg = ChatMessage::from_raw(
+            ChatRole::Assistant,
+            "<think>partial".to_string(),
+            None,
+            Vec::new(),
+        );
+        msg.append_raw_delta("</think>Visible");
+        assert_eq!(msg.content, "Visible");
+        assert_eq!(msg.reasoning.as_deref(), Some("partial"));
     }
 }
 
@@ -3569,8 +3663,8 @@ impl AppState {
                     .is_some_and(|m| m.role == ChatRole::Assistant && chat.loading);
                 if has_streamed {
                     if let Some(last) = chat.messages.last_mut() {
-                        if content.len() > last.content.len() {
-                            last.content = content;
+                        if content.len() > last.raw_content.len() {
+                            last.set_raw_content(content);
                         }
                     }
                 } else {
@@ -3587,8 +3681,8 @@ impl AppState {
                     .is_some_and(|m| m.role == ChatRole::Assistant && chat.loading);
                 if has_streamed {
                     if let Some(last) = chat.messages.last_mut() {
-                        if content.len() > last.content.len() {
-                            last.content = content;
+                        if content.len() > last.raw_content.len() {
+                            last.set_raw_content(content);
                         }
                         last.tool_calls = tool_calls;
                     }
@@ -3613,7 +3707,7 @@ impl AppState {
                     // Append to last assistant message, or create a new one
                     if let Some(last) = chat.messages.last_mut() {
                         if last.role == ChatRole::Assistant && chat.loading {
-                            last.content.push_str(text);
+                            last.append_raw_delta(text);
                         } else {
                             chat.messages.push(ChatMessage::assistant(text.to_string()));
                         }
@@ -3653,7 +3747,10 @@ impl AppState {
             }
             Message::SessionMessagesLoaded(session_key, messages) => {
                 let chat = self.session_chats.entry(session_key).or_default();
-                chat.messages = messages;
+                chat.messages = messages
+                    .into_iter()
+                    .map(|msg| ChatMessage::from_raw(msg.role, msg.raw_content, msg.timestamp, msg.tool_calls))
+                    .collect();
                 chat.loaded = true;
             }
 
@@ -3850,17 +3947,19 @@ impl AppState {
         }
     }
 
-    /// Toggle expand/collapse on all tool calls in the active chat
-    pub fn toggle_tool_expansion(&mut self) {
+    /// Toggle expand/collapse on all tool calls and reasoning blocks in the active chat.
+    pub fn toggle_detail_expansion(&mut self) {
         if let Some(chat) = self.active_chat_mut() {
-            // Find current state: if any are expanded, collapse all; otherwise expand all
             let any_expanded = chat
                 .messages
                 .iter()
-                .flat_map(|m| &m.tool_calls)
-                .any(|tc| tc.expanded);
+                .any(|msg| {
+                    msg.reasoning_expanded
+                        || msg.tool_calls.iter().any(|tc| tc.expanded)
+                });
             let new_state = !any_expanded;
             for msg in &mut chat.messages {
+                msg.reasoning_expanded = new_state;
                 for tc in &mut msg.tool_calls {
                     tc.expanded = new_state;
                 }

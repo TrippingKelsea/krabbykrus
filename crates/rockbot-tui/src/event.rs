@@ -8,10 +8,9 @@
 
 use anyhow::Result;
 use crossterm::event::{
-    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, EventStream, KeyCode, KeyEvent, KeyEventKind,
+    DisableBracketedPaste, DisableFocusChange, EventStream, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, KeyboardEnhancementFlags, MouseEvent, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags, EnableBracketedPaste, EnableFocusChange,
 };
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -116,7 +115,6 @@ impl TerminalGuard {
             EnterAlternateScreen,
             EnableBracketedPaste,
             EnableFocusChange,
-            EnableMouseCapture,
         )?;
 
         // Try to enable Kitty keyboard protocol for Shift+Enter detection.
@@ -155,7 +153,6 @@ impl Drop for TerminalGuard {
             stdout,
             DisableBracketedPaste,
             DisableFocusChange,
-            DisableMouseCapture,
             LeaveAlternateScreen,
         );
     }

@@ -4279,7 +4279,7 @@ impl App {
                     return Ok(());
                 }
                 KeyCode::Char('t') => {
-                    self.state.toggle_tool_expansion();
+                    self.state.toggle_detail_expansion();
                     return Ok(());
                 }
                 KeyCode::Up => {
@@ -6655,7 +6655,7 @@ async fn handle_gateway_event(
             output,
             locality: _,
         } => {
-            let _ = tx.send(Message::ChatStreamChunk(format!("{session_key}:{output}")));
+            let _ = (session_key, output);
         }
         GatewayEvent::ToolResult {
             session_key,
@@ -6677,15 +6677,7 @@ async fn handle_gateway_event(
             let _ = tx.send(Message::ToolExecutionObserved {
                 locality: locality.clone(),
             });
-            if !result.is_empty() && !session_key.is_empty() {
-                let prefix = locality.as_ref().map_or_else(
-                    || format!("\n[{tool_name}]\n"),
-                    |value| format!("\n[{tool_name} | executed on: {value}]\n"),
-                );
-                let _ = tx.send(Message::ChatStreamChunk(format!(
-                    "{session_key}:{prefix}{result}"
-                )));
-            }
+            let _ = (session_key, result);
         }
         GatewayEvent::AgentResponse {
             session_key,
@@ -7385,12 +7377,7 @@ async fn load_session_messages(
                                 .get("created_at")
                                 .and_then(|v| v.as_str())
                                 .map(std::string::ToString::to_string);
-                            Some(ChatMessage {
-                                role,
-                                content: text,
-                                timestamp,
-                                tool_calls: Vec::new(),
-                            })
+                            Some(ChatMessage::from_raw(role, text, timestamp, Vec::new()))
                         })
                         .collect()
                 })

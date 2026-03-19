@@ -2928,12 +2928,21 @@ impl Gateway {
                     }
                 } else {
                     // Try loading from the agent's SYSTEM-PROMPT.md file
-                    let agent_dir = dirs::config_dir()
-                        .unwrap_or_else(|| std::path::PathBuf::from("."))
-                        .join("rockbot/agents")
-                        .join(agent_id)
-                        .join("SYSTEM-PROMPT.md");
-                    if let Ok(content) = tokio::fs::read_to_string(&agent_dir).await {
+                    let storage_root = self
+                        .credentials_config
+                        .vault_path
+                        .parent()
+                        .map_or_else(
+                            rockbot_storage_runtime::default_storage_root,
+                            std::path::PathBuf::from,
+                        );
+                    if let Ok(content) = rockbot_storage_runtime::read_agent_context_file(
+                        &storage_root,
+                        agent_id,
+                        "SYSTEM-PROMPT.md",
+                    )
+                    .await
+                    {
                         if !content.trim().is_empty() {
                             let has_system = chat_req.messages.first().map_or(false, |m| {
                                 matches!(m.role, rockbot_llm::MessageRole::System)
@@ -3581,17 +3590,17 @@ impl Gateway {
     /// Get the directory path for an agent
     #[allow(clippy::unused_self)]
     fn agent_directory(&self, agent_id: &str) -> Result<std::path::PathBuf> {
-        if !Self::is_valid_agent_id(agent_id) {
-            return Err(GatewayError::InvalidRequest {
+        let storage_root = self
+            .credentials_config
+            .vault_path
+            .parent()
+            .map_or_else(rockbot_storage_runtime::default_storage_root, std::path::PathBuf::from);
+        rockbot_storage_runtime::agent_context_dir(&storage_root, agent_id).map_err(|_| {
+            GatewayError::InvalidRequest {
                 message: "invalid agent id".to_string(),
             }
-            .into());
-        }
-        Ok(dirs::config_dir()
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
-            .join("rockbot")
-            .join("agents")
-            .join(agent_id))
+            .into()
+        })
     }
 
     /// Initialize an agent's directory with default files
@@ -3600,69 +3609,28 @@ impl Gateway {
         agent_dir: &std::path::Path,
         system_prompt: Option<&str>,
     ) -> std::result::Result<(), std::io::Error> {
-        tokio::fs::create_dir_all(agent_dir).await?;
-
-        let soul_path = agent_dir.join("SOUL.md");
-        if !soul_path.exists() {
-            tokio::fs::write(
-                &soul_path,
-                "# Agent Identity\n\n\
-                 You are a capable autonomous agent. You accomplish tasks by taking direct action \
-                 using your tools — never by describing what you would do.\n\n\
-                 ## Principles\n\n\
-                 - Act decisively. Start working immediately when given a task.\n\
-                 - Be thorough. Complete every step before reporting results.\n\
-                 - Be resilient. When something fails, analyze the error and try a different approach.\n\
-                 - Be self-sufficient. Never ask the user to do something you can do with your tools.\n",
-            ).await?;
-        }
-
-        let prompt_path = agent_dir.join("SYSTEM-PROMPT.md");
-        if !prompt_path.exists() {
-            let content = system_prompt
-                .unwrap_or("# System Prompt\n\nCustomize this agent's system prompt here.\n");
-            tokio::fs::write(&prompt_path, content).await?;
-        }
-
-        let agents_path = agent_dir.join("AGENTS.md");
-        if !agents_path.exists() {
-            tokio::fs::write(
-                &agents_path,
-                "# Operational Guidelines\n\n\
-                 Define behavioral rules, constraints, and standard operating procedures here.\n",
-            )
-            .await?;
-        }
-
-        let memory_path = agent_dir.join("MEMORY.md");
-        if !memory_path.exists() {
-            tokio::fs::write(
-                &memory_path,
-                "# Memory Guidelines\n\n\
-                 Describe how this agent should use its memory tools, what to remember,\n\
-                 and how to organize stored knowledge.\n",
-            )
-            .await?;
-        }
-
-        Ok(())
+        let storage_root = agent_dir
+            .parent()
+            .and_then(|parent| parent.parent())
+            .ok_or_else(|| std::io::Error::other("invalid agent context path"))?;
+        let agent_id = agent_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| std::io::Error::other("invalid agent directory"))?;
+        rockbot_storage_runtime::StorageRuntime::new_with_root_sync(
+            &Config::default(),
+            storage_root.to_path_buf(),
+        )
+        .map_err(std::io::Error::other)?
+        .initialize_agent_context(agent_id, system_prompt)
+        .await
+        .map(|_| ())
+        .map_err(std::io::Error::other)
     }
-
-    /// Well-known context files that are always listed even if absent
-    const WELL_KNOWN_CONTEXT_FILES: &'static [&'static str] =
-        &["SOUL.md", "SYSTEM-PROMPT.md", "AGENTS.md", "MEMORY.md"];
 
     /// Validate a context filename — alphanumeric, hyphens, underscores, must end with .md
     fn is_valid_context_filename(name: &str) -> bool {
-        !name.is_empty()
-            && name.len() <= 64
-            && name.ends_with(".md")
-            && !name.contains('/')
-            && !name.contains('\\')
-            && !name.contains("..")
-            && name
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+        rockbot_storage_runtime::is_valid_agent_context_filename(name)
     }
 
     /// Extract agent_id and filename from a path like /api/agents/{id}/files/{name}
@@ -3691,44 +3659,26 @@ impl Gateway {
             return Self::json_error("Invalid path", StatusCode::BAD_REQUEST);
         };
 
-        let agent_dir = match self.agent_directory(agent_id) {
-            Ok(path) => path,
+        let storage_root = self
+            .credentials_config
+            .vault_path
+            .parent()
+            .map_or_else(rockbot_storage_runtime::default_storage_root, std::path::PathBuf::from);
+        let files = match rockbot_storage_runtime::list_agent_context_files(&storage_root, agent_id).await {
+            Ok(files) => files,
             Err(_) => return Self::json_error("Invalid agent id", StatusCode::BAD_REQUEST),
         };
-        let mut files: Vec<serde_json::Value> = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-
-        // Always include well-known files
-        for &name in Self::WELL_KNOWN_CONTEXT_FILES {
-            let file_path = agent_dir.join(name);
-            let (exists, size) = match tokio::fs::metadata(&file_path).await {
-                Ok(meta) => (true, meta.len()),
-                Err(_) => (false, 0),
-            };
-            seen.insert(name.to_string());
-            files.push(serde_json::json!({
-                "name": name,
-                "exists": exists,
-                "size_bytes": size,
-                "well_known": true,
-            }));
-        }
-
-        // Scan for additional .md files in the agent directory
-        if let Ok(mut entries) = tokio::fs::read_dir(&agent_dir).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.ends_with(".md") && !seen.contains(&name) {
-                    let size = entry.metadata().await.map(|m| m.len()).unwrap_or(0);
-                    files.push(serde_json::json!({
-                        "name": name,
-                        "exists": true,
-                        "size_bytes": size,
-                        "well_known": false,
-                    }));
-                }
-            }
-        }
+        let files: Vec<_> = files
+            .into_iter()
+            .map(|file| {
+                serde_json::json!({
+                    "name": file.name,
+                    "exists": file.exists,
+                    "size_bytes": file.size_bytes,
+                    "well_known": file.well_known,
+                })
+            })
+            .collect();
 
         let body = serde_json::to_string(&files).unwrap_or_default();
         Self::json_response(&body, StatusCode::OK)
@@ -3743,19 +3693,24 @@ impl Gateway {
             return Self::json_error("Invalid filename", StatusCode::BAD_REQUEST);
         }
 
-        let file_path = match self.agent_directory(agent_id) {
-            Ok(path) => path.join(filename),
-            Err(_) => return Self::json_error("Invalid agent id", StatusCode::BAD_REQUEST),
-        };
-        match tokio::fs::read_to_string(&file_path).await {
+        let storage_root = self
+            .credentials_config
+            .vault_path
+            .parent()
+            .map_or_else(rockbot_storage_runtime::default_storage_root, std::path::PathBuf::from);
+        match rockbot_storage_runtime::read_agent_context_file(&storage_root, agent_id, filename).await {
             Ok(content) => {
                 let body = serde_json::json!({ "name": filename, "content": content }).to_string();
                 Self::json_response(&body, StatusCode::OK)
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::json_error(
+            Err(e) if e
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Self::json_error(
                 &format!("File '{filename}' not found"),
                 StatusCode::NOT_FOUND,
-            ),
+            )}
             Err(e) => Self::json_error(
                 &format!("Failed to read file: {e}"),
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -3791,19 +3746,12 @@ impl Gateway {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let agent_dir = match self.agent_directory(agent_id) {
-            Ok(path) => path,
-            Err(_) => return Self::json_error("Invalid agent id", StatusCode::BAD_REQUEST),
-        };
-        if let Err(e) = tokio::fs::create_dir_all(&agent_dir).await {
-            return Self::json_error(
-                &format!("Failed to create agent directory: {e}"),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            );
-        }
-
-        let file_path = agent_dir.join(filename);
-        match tokio::fs::write(&file_path, content).await {
+        let storage_root = self
+            .credentials_config
+            .vault_path
+            .parent()
+            .map_or_else(rockbot_storage_runtime::default_storage_root, std::path::PathBuf::from);
+        match rockbot_storage_runtime::write_agent_context_file(&storage_root, agent_id, filename, content).await {
             Ok(()) => {
                 let resp = serde_json::json!({ "written": true, "name": filename, "size_bytes": content.len() }).to_string();
                 Self::json_response(&resp, StatusCode::OK)
@@ -3823,26 +3771,24 @@ impl Gateway {
         if !Self::is_valid_context_filename(filename) {
             return Self::json_error("Invalid filename", StatusCode::BAD_REQUEST);
         }
-        if filename == "SOUL.md" {
-            return Self::json_error(
-                "Cannot delete SOUL.md — it is required for agent identity",
-                StatusCode::BAD_REQUEST,
-            );
-        }
-
-        let file_path = match self.agent_directory(agent_id) {
-            Ok(path) => path.join(filename),
-            Err(_) => return Self::json_error("Invalid agent id", StatusCode::BAD_REQUEST),
-        };
-        match tokio::fs::remove_file(&file_path).await {
+        let storage_root = self
+            .credentials_config
+            .vault_path
+            .parent()
+            .map_or_else(rockbot_storage_runtime::default_storage_root, std::path::PathBuf::from);
+        match rockbot_storage_runtime::delete_agent_context_file(&storage_root, agent_id, filename).await {
             Ok(()) => {
                 let resp = serde_json::json!({ "deleted": true, "name": filename }).to_string();
                 Self::json_response(&resp, StatusCode::OK)
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::json_error(
+            Err(e) if e
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Self::json_error(
                 &format!("File '{filename}' not found"),
                 StatusCode::NOT_FOUND,
-            ),
+            )}
             Err(e) => Self::json_error(
                 &format!("Failed to delete file: {e}"),
                 StatusCode::INTERNAL_SERVER_ERROR,

@@ -20,6 +20,7 @@ rockbot-memory = { path = "../rockbot-memory" }
 rockbot-security = { path = "../rockbot-security" }
 rockbot-credentials = { path = "../rockbot-credentials" }
 rockbot-credentials-schema = { path = "../rockbot-credentials-schema" }
+rockbot-storage-runtime = { path = "../rockbot-storage-runtime" }
 
 tokio = { workspace = true }
 serde = { workspace = true }

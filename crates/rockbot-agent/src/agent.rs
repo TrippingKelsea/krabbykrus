@@ -250,6 +250,8 @@ pub struct Agent {
     /// Remote executor registry for dispatching tool calls to connected clients
     #[cfg(feature = "remote-exec")]
     remote_exec_registry: Option<Arc<rockbot_client::remote_exec::RemoteExecutorRegistry>>,
+    /// Storage root used for managed agent context files.
+    storage_root: Option<std::path::PathBuf>,
     /// Agent state
     state: Arc<RwLock<AgentState>>,
 }
@@ -570,6 +572,7 @@ impl Agent {
             swarm_id,
             #[cfg(feature = "remote-exec")]
             remote_exec_registry: None,
+            storage_root: None,
             state: Arc::new(RwLock::new(AgentState {
                 active_contexts: HashMap::new(),
                 stats: AgentStats::default(),
@@ -604,6 +607,11 @@ impl Agent {
         registry: Arc<rockbot_client::remote_exec::RemoteExecutorRegistry>,
     ) {
         self.remote_exec_registry = Some(registry);
+    }
+
+    /// Set the storage root for managed agent context files.
+    pub fn set_storage_root(&mut self, storage_root: std::path::PathBuf) {
+        self.storage_root = Some(storage_root);
     }
 
     /// Process an incoming message and generate a response
@@ -2103,9 +2111,9 @@ impl Agent {
              This includes hostname, current user, working directory, filesystem contents, installed tools, \
              operating system details, running processes, and any other live machine state. \
              Do NOT infer these from the gateway context, prior messages, or model knowledge.\n\n\
-             You have read/write access to your context directory. Your SOUL.md file at \
-             `{}/SOUL.md` defines your identity — you may read and update it to refine \
-             your behavior over time.",
+             Your managed agent context lives at `{}`. Your SOUL.md file there defines your \
+             identity, and AGENTS.md / MEMORY.md / SYSTEM-PROMPT.md refine your behavior over \
+             time. Treat those files as canonical context, but verify live environment state with tools.",
             self.config.id,
             context.session_id,
             context.available_tools.join(", "),
@@ -2164,19 +2172,21 @@ impl Agent {
     /// Returns `Err` if the file is not found anywhere — callers use
     /// `if let Ok(...)` to treat missing files as optional.
     async fn load_context_file(&self, filename: &str) -> Result<String> {
-        let agent_dir = self.get_agent_directory();
-        let file_path = agent_dir.join(filename);
+        let storage_root = self
+            .storage_root
+            .clone()
+            .unwrap_or_else(rockbot_storage_runtime::default_storage_root);
 
-        match tokio::fs::read_to_string(&file_path).await {
+        match rockbot_storage_runtime::read_agent_context_file(
+            &storage_root,
+            &self.config.id,
+            filename,
+        )
+        .await
+        {
             Ok(content) => return Ok(content),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                trace!(
-                    "Context file {} not found in agent dir, checking fallbacks",
-                    filename
-                );
-            }
             Err(e) => {
-                debug!("Could not load context file {}: {}", filename, e);
+                trace!("Context file {} not found in managed store: {}", filename, e);
             }
         }
 
@@ -4309,11 +4319,12 @@ The user wants me to explore the codebase. I should start by listing the directo
 
     /// Get the agent's config/data directory (for SOUL.md, SYSTEM-PROMPT.md, etc.)
     fn get_agent_directory(&self) -> std::path::PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
-            .join("rockbot")
-            .join("agents")
-            .join(&self.config.id)
+        let storage_root = self
+            .storage_root
+            .clone()
+            .unwrap_or_else(rockbot_storage_runtime::default_storage_root);
+        rockbot_storage_runtime::agent_context_dir(&storage_root, &self.config.id)
+            .unwrap_or_else(|_| storage_root.join("agents").join(&self.config.id))
     }
 
     /// Get the workspace path for this agent (used for tool execution and system prompt context).

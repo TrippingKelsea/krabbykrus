@@ -8,6 +8,17 @@ use rockbot_storage::Store;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub const WELL_KNOWN_AGENT_CONTEXT_FILES: &[&str] =
+    &["SOUL.md", "SYSTEM-PROMPT.md", "AGENTS.md", "MEMORY.md"];
+
+#[derive(Debug, Clone)]
+pub struct AgentContextFileInfo {
+    pub name: String,
+    pub exists: bool,
+    pub size_bytes: u64,
+    pub well_known: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreKind {
     Vault,
@@ -465,6 +476,77 @@ impl StorageRuntime {
             mode: StoreMode::Recovery,
         })
     }
+
+    pub fn agent_context_root(&self) -> PathBuf {
+        self.storage_root.join("agents")
+    }
+
+    pub async fn initialize_agent_context(
+        &self,
+        agent_id: &str,
+        system_prompt: Option<&str>,
+    ) -> Result<PathBuf> {
+        let agent_dir = agent_context_dir(&self.storage_root, agent_id)?;
+        tokio::fs::create_dir_all(&agent_dir).await?;
+
+        ensure_agent_context_file(
+            &agent_dir.join("SOUL.md"),
+            "# Agent Identity\n\n\
+             You are a capable autonomous agent. You accomplish tasks by taking direct action \
+             using your tools — never by describing what you would do.\n\n\
+             ## Principles\n\n\
+             - Act decisively. Start working immediately when given a task.\n\
+             - Be thorough. Complete every step before reporting results.\n\
+             - Be resilient. When something fails, analyze the error and try a different approach.\n\
+             - Be self-sufficient. Never ask the user to do something you can do with your tools.\n",
+        )
+        .await?;
+
+        ensure_agent_context_file(
+            &agent_dir.join("SYSTEM-PROMPT.md"),
+            system_prompt
+                .unwrap_or("# System Prompt\n\nCustomize this agent's system prompt here.\n"),
+        )
+        .await?;
+
+        ensure_agent_context_file(
+            &agent_dir.join("AGENTS.md"),
+            "# Operational Guidelines\n\n\
+             Define behavioral rules, constraints, and standard operating procedures here.\n",
+        )
+        .await?;
+
+        ensure_agent_context_file(
+            &agent_dir.join("MEMORY.md"),
+            "# Memory Guidelines\n\n\
+             Describe how this agent should use its memory tools, what to remember,\n\
+             and how to organize stored knowledge.\n",
+        )
+        .await?;
+
+        Ok(agent_dir)
+    }
+
+    pub async fn list_agent_context_files(&self, agent_id: &str) -> Result<Vec<AgentContextFileInfo>> {
+        list_agent_context_files(&self.storage_root, agent_id).await
+    }
+
+    pub async fn read_agent_context_file(&self, agent_id: &str, filename: &str) -> Result<String> {
+        read_agent_context_file(&self.storage_root, agent_id, filename).await
+    }
+
+    pub async fn write_agent_context_file(
+        &self,
+        agent_id: &str,
+        filename: &str,
+        content: &str,
+    ) -> Result<()> {
+        write_agent_context_file(&self.storage_root, agent_id, filename, content).await
+    }
+
+    pub async fn delete_agent_context_file(&self, agent_id: &str, filename: &str) -> Result<()> {
+        delete_agent_context_file(&self.storage_root, agent_id, filename).await
+    }
 }
 
 impl StoreKind {
@@ -498,6 +580,133 @@ pub fn default_pki_dir() -> PathBuf {
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
         .join("rockbot")
         .join("pki")
+}
+
+pub fn default_storage_root() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
+        .join("rockbot")
+}
+
+pub fn is_valid_agent_id(agent_id: &str) -> bool {
+    !agent_id.is_empty()
+        && agent_id.len() <= 64
+        && !agent_id.contains('/')
+        && !agent_id.contains('\\')
+        && !agent_id.contains("..")
+        && agent_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+pub fn is_valid_agent_context_filename(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.ends_with(".md")
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+pub fn agent_context_dir(storage_root: &Path, agent_id: &str) -> Result<PathBuf> {
+    if !is_valid_agent_id(agent_id) {
+        return Err(anyhow!("invalid agent id"));
+    }
+    Ok(storage_root.join("agents").join(agent_id))
+}
+
+async fn ensure_agent_context_file(path: &Path, content: &str) -> Result<()> {
+    if tokio::fs::metadata(path).await.is_err() {
+        tokio::fs::write(path, content).await?;
+    }
+    Ok(())
+}
+
+pub async fn list_agent_context_files(
+    storage_root: &Path,
+    agent_id: &str,
+) -> Result<Vec<AgentContextFileInfo>> {
+    let agent_dir = agent_context_dir(storage_root, agent_id)?;
+    let mut files: Vec<AgentContextFileInfo> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for &name in WELL_KNOWN_AGENT_CONTEXT_FILES {
+        let file_path = agent_dir.join(name);
+        let (exists, size) = match tokio::fs::metadata(&file_path).await {
+            Ok(meta) => (true, meta.len()),
+            Err(_) => (false, 0),
+        };
+        seen.insert(name.to_string());
+        files.push(AgentContextFileInfo {
+            name: name.to_string(),
+            exists,
+            size_bytes: size,
+            well_known: true,
+        });
+    }
+
+    if let Ok(mut entries) = tokio::fs::read_dir(&agent_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".md") && !seen.contains(&name) {
+                let size = entry.metadata().await.map(|m| m.len()).unwrap_or(0);
+                files.push(AgentContextFileInfo {
+                    name,
+                    exists: true,
+                    size_bytes: size,
+                    well_known: false,
+                });
+            }
+        }
+    }
+
+    Ok(files)
+}
+
+pub async fn read_agent_context_file(
+    storage_root: &Path,
+    agent_id: &str,
+    filename: &str,
+) -> Result<String> {
+    if !is_valid_agent_context_filename(filename) {
+        return Err(anyhow!("invalid filename"));
+    }
+    let path = agent_context_dir(storage_root, agent_id)?.join(filename);
+    Ok(tokio::fs::read_to_string(path).await?)
+}
+
+pub async fn write_agent_context_file(
+    storage_root: &Path,
+    agent_id: &str,
+    filename: &str,
+    content: &str,
+) -> Result<()> {
+    if !is_valid_agent_context_filename(filename) {
+        return Err(anyhow!("invalid filename"));
+    }
+    let agent_dir = agent_context_dir(storage_root, agent_id)?;
+    tokio::fs::create_dir_all(&agent_dir).await?;
+    tokio::fs::write(agent_dir.join(filename), content).await?;
+    Ok(())
+}
+
+pub async fn delete_agent_context_file(
+    storage_root: &Path,
+    agent_id: &str,
+    filename: &str,
+) -> Result<()> {
+    if filename == "SOUL.md" {
+        return Err(anyhow!("Cannot delete SOUL.md"));
+    }
+    if !is_valid_agent_context_filename(filename) {
+        return Err(anyhow!("invalid filename"));
+    }
+    let path = agent_context_dir(storage_root, agent_id)?.join(filename);
+    tokio::fs::remove_file(path).await?;
+    Ok(())
 }
 
 pub fn storage_root_dir(config_path: &Path, config: &Config) -> PathBuf {
@@ -620,5 +829,29 @@ mod tests {
         let plan = runtime.plan_store(StoreKind::Agents, &root.join("vault")).unwrap();
         assert_eq!(plan.resolution, ResolutionSource::VirtualDisk);
         assert!(plan.descriptor.contains("volume 'agents'"));
+    }
+
+    #[tokio::test]
+    async fn agent_context_files_round_trip_through_runtime_interface() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let cfg = cfg_with_root(root);
+        let runtime = StorageRuntime::new_with_root_sync(&cfg, root.to_path_buf()).unwrap();
+
+        runtime
+            .initialize_agent_context("hex", Some("# prompt"))
+            .await
+            .unwrap();
+        runtime
+            .write_agent_context_file("hex", "MEMORY.md", "# mem")
+            .await
+            .unwrap();
+
+        let files = runtime.list_agent_context_files("hex").await.unwrap();
+        assert!(files.iter().any(|f| f.name == "SOUL.md" && f.exists));
+        assert!(files.iter().any(|f| f.name == "MEMORY.md" && f.exists));
+
+        let memory = runtime.read_agent_context_file("hex", "MEMORY.md").await.unwrap();
+        assert_eq!(memory, "# mem");
     }
 }
