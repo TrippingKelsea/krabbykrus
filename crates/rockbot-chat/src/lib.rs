@@ -70,6 +70,13 @@ pub struct ChatCommandRegistry {
     commands: Vec<Box<dyn ChatCommand>>,
 }
 
+fn is_valid_agent_route_id(agent_id: &str) -> bool {
+    !agent_id.is_empty()
+        && agent_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+}
+
 impl Default for ChatCommandRegistry {
     fn default() -> Self {
         Self::new()
@@ -134,11 +141,11 @@ impl ChatCommandRegistry {
             .into_iter()
             .filter(|info| {
                 command_part.is_empty()
-                    || info.name.starts_with(&command_part)
+                    || info.name.to_ascii_lowercase().starts_with(&command_part)
                     || info
                         .aliases
                         .iter()
-                        .any(|alias| alias.starts_with(&command_part))
+                        .any(|alias| alias.to_ascii_lowercase().starts_with(&command_part))
             })
             .collect()
     }
@@ -155,8 +162,10 @@ pub fn parse_agent_route(input: &str) -> Option<(&str, &str)> {
 
     let rest = &input[2..];
     match rest.split_once(char::is_whitespace) {
-        Some((agent_id, message)) if !agent_id.is_empty() => Some((agent_id, message.trim())),
-        None if !rest.is_empty() => Some((rest, "")),
+        Some((agent_id, message)) if is_valid_agent_route_id(agent_id) => {
+            Some((agent_id, message.trim()))
+        }
+        None if is_valid_agent_route_id(rest) => Some((rest, "")),
         _ => None,
     }
 }
@@ -173,6 +182,7 @@ mod tests {
             Some(("main", "hello world"))
         );
         assert_eq!(parse_agent_route("$@agent-1"), Some(("agent-1", "")));
+        assert_eq!(parse_agent_route("$@../secrets nope"), None);
         assert_eq!(parse_agent_route("hello"), None);
         assert_eq!(parse_agent_route("/help"), None);
         assert_eq!(parse_agent_route("$@"), None);
@@ -228,15 +238,31 @@ mod tests {
 
     #[test]
     fn test_matching_commands() {
+        struct MixedCaseCmd;
+        impl ChatCommand for MixedCaseCmd {
+            fn info(&self) -> CommandInfo {
+                CommandInfo {
+                    name: "Test",
+                    aliases: &["T"],
+                    description: "A test command",
+                    usage: "/test [args]",
+                }
+            }
+
+            fn execute(&self, _args: &str, _ctx: &CommandContext) -> CommandResult {
+                CommandResult::Handled("ok".to_string())
+            }
+        }
+
         let mut registry = ChatCommandRegistry::new();
-        registry.register(Box::new(TestCmd));
+        registry.register(Box::new(MixedCaseCmd));
 
         let matches = registry.matching_commands("/te");
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].name, "test");
+        assert_eq!(matches[0].name, "Test");
 
         let alias_matches = registry.matching_commands("/t");
         assert_eq!(alias_matches.len(), 1);
-        assert_eq!(alias_matches[0].name, "test");
+        assert_eq!(alias_matches[0].name, "Test");
     }
 }
