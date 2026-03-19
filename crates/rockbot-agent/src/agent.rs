@@ -862,7 +862,12 @@ impl Agent {
                     0,
                     token_usage.total_tokens,
                 );
-                // For output, we warn but don't block — the response already exists
+                if let GuardrailResult::Block(reason) = guardrail_result {
+                    return Err(AgentError::ExecutionFailed {
+                        message: format!("Output blocked by guardrail: {reason}"),
+                    }
+                    .into());
+                }
             }
 
             // --- Reflection pass ---
