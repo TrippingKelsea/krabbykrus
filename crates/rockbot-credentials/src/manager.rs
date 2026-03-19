@@ -582,25 +582,8 @@ impl CredentialManager {
                 }
             }
             PermissionLevel::AllowHil2fa => {
-                // For now, treat same as AllowHil (2FA stubbed)
-                // In future: require YubiKey touch before approval
-                match self
-                    .request_hil_approval(path, agent_id, reason, PermissionLevel::AllowHil2fa)
-                    .await
-                {
-                    Ok(true) => self.retrieve_credential(path, permission_result).await,
-                    Ok(false) => Ok(CredentialRequestResult {
-                        permission: permission_result,
-                        credential: None,
-                        reason: Some("Request denied by human operator".to_string()),
-                    }),
-                    Err(CredentialError::ApprovalTimeout) => Ok(CredentialRequestResult {
-                        permission: permission_result,
-                        credential: None,
-                        reason: Some("Approval request timed out".to_string()),
-                    }),
-                    Err(e) => Err(e),
-                }
+                let _ = (path, agent_id, reason);
+                Err(CredentialError::YubikeyTouchRequired)
             }
             PermissionLevel::Allow => {
                 // Permission granted - retrieve credential immediately
@@ -1037,6 +1020,26 @@ mod tests {
 
         assert!(result.credential.is_none());
         assert!(result.reason.unwrap().contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn test_hil_2fa_requires_yubikey_touch() {
+        let (manager, _temp) = create_test_manager();
+        manager
+            .add_permission(PathPermission {
+                id: Uuid::new_v4(),
+                path_pattern: "secure://**".to_string(),
+                level: PermissionLevel::AllowHil2fa,
+                description: Some("Require touch".to_string()),
+            })
+            .await;
+
+        let err = manager
+            .request_credential("secure://api/token", "test-agent", "testing")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, CredentialError::YubikeyTouchRequired));
     }
 
     #[tokio::test]
