@@ -41,15 +41,7 @@ fn debug_vault_log(message: &str) {
     if std::env::var("ROCKBOT_TUI_DEBUG_VAULT").ok().as_deref() != Some("1") {
         return;
     }
-
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/rockbot_debug.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(f, "{message}");
-    }
+    tracing::debug!("{message}");
 }
 
 /// Content tabs for views that have sub-tabs
