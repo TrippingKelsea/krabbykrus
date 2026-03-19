@@ -389,10 +389,13 @@ impl Overseer {
 }
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s
     } else {
-        &s[..max]
+        s.char_indices()
+            .nth(max)
+            .map(|(idx, _)| &s[..idx])
+            .unwrap_or(s)
     }
 }
 
@@ -407,6 +410,12 @@ mod tests {
         assert_eq!(config.model_id, "Qwen/Qwen2.5-1.5B-Instruct-GGUF");
         assert_eq!(config.max_tokens, 128);
         assert!(!config.enforce);
+    }
+
+    #[test]
+    fn test_truncate_respects_utf8_boundaries() {
+        assert_eq!(truncate("hello", 10), "hello");
+        assert_eq!(truncate("éclair", 1), "é");
     }
 
     #[test]

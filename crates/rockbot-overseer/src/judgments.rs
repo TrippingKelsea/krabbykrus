@@ -283,10 +283,13 @@ pub fn parse_verdict(output: &str) -> OverseerVerdict {
 }
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s
     } else {
-        &s[..max]
+        s.char_indices()
+            .nth(max)
+            .map(|(idx, _)| &s[..idx])
+            .unwrap_or(s)
     }
 }
 
@@ -345,6 +348,11 @@ mod tests {
             }
             other => panic!("Expected AllowWithNote fallback, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_truncate_respects_utf8_boundaries() {
+        assert_eq!(truncate("éclair", 1), "é");
     }
 
     #[test]
