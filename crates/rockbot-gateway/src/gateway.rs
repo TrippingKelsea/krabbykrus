@@ -4240,9 +4240,36 @@ impl Gateway {
             .await
             .get(conn_id)
             .is_some_and(|conn| match conn.listener_kind {
-                ListenerKind::Client => true,
+                ListenerKind::Client => conn.identity.is_some(),
                 ListenerKind::Public => conn.browser_auth.authenticated,
             })
+    }
+
+    fn requires_ws_auth(msg: &WsMessageType) -> bool {
+        !matches!(
+            msg,
+            WsMessageType::Ping
+                | WsMessageType::HealthCheck
+                | WsMessageType::WebAuthBegin { .. }
+                | WsMessageType::WebAuthComplete { .. }
+                | WsMessageType::ClientIdentify { .. }
+        )
+    }
+
+    fn is_a2a_authorized(headers: &hyper::HeaderMap) -> bool {
+        let Ok(expected) = std::env::var("ROCKBOT_A2A_TOKEN") else {
+            return false;
+        };
+
+        let bearer = headers
+            .get(hyper::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "));
+        let direct = headers
+            .get("x-rockbot-a2a-token")
+            .and_then(|v| v.to_str().ok());
+
+        bearer == Some(expected.as_str()) || direct == Some(expected.as_str())
     }
 
     async fn begin_browser_web_auth(
@@ -4400,19 +4427,16 @@ impl Gateway {
             }
         };
 
-        let requires_public_auth = !matches!(
-            msg,
-            WsMessageType::Ping
-                | WsMessageType::HealthCheck
-                | WsMessageType::WebAuthBegin { .. }
-                | WsMessageType::WebAuthComplete { .. }
-        );
-        if requires_public_auth
-            && self.ws_listener_kind(conn_id).await == Some(ListenerKind::Public)
+        let requires_ws_auth = Self::requires_ws_auth(&msg);
+        if requires_ws_auth
+            && self
+                .ws_listener_kind(conn_id)
+                .await
+                .is_some_and(|kind| matches!(kind, ListenerKind::Public | ListenerKind::Client))
             && !self.is_ws_authenticated(conn_id).await
         {
             let resp = WsResponseType::Error {
-                message: "This public WebSocket connection is not authenticated yet".to_string(),
+                message: "This WebSocket connection is not authenticated yet".to_string(),
             };
             let _ = enqueue_ws_message(outbound_tx, WsMessage::Text(
                 serde_json::to_string(&resp).unwrap_or_default(),
@@ -7076,6 +7100,13 @@ impl Gateway {
         &self,
         req: Request<IncomingBody>,
     ) -> std::result::Result<Response<GatewayBody>, hyper::Error> {
+        if !Self::is_a2a_authorized(req.headers()) {
+            return Ok(Self::json_error(
+                "A2A requests require a valid bearer token",
+                StatusCode::UNAUTHORIZED,
+            ));
+        }
+
         let body = match Self::collect_limited_body(req, MAX_HTTP_BODY_BYTES).await {
             Ok(bytes) => bytes,
             Err(resp) => return Ok(resp),
@@ -7493,6 +7524,66 @@ mod tests {
 
         assert_eq!(health.active_connections, 0);
         assert_eq!(health.agents.len(), 0);
+    }
+
+    #[test]
+    fn test_requires_ws_auth_allows_client_identify() {
+        assert!(!Gateway::requires_ws_auth(&WsMessageType::ClientIdentify {
+            client_uuid: None,
+            hostname: "host".to_string(),
+            label: None,
+        }));
+        assert!(Gateway::requires_ws_auth(&WsMessageType::AgentMessage {
+            agent_id: "agent".to_string(),
+            session_key: "s".to_string(),
+            message: "hi".to_string(),
+            workspace: None,
+            executor_target: None,
+            allow_active_client_tools: None,
+        }));
+    }
+
+    #[test]
+    fn test_a2a_authorization_accepts_bearer_token() {
+        let _guard = EnvGuard::set("ROCKBOT_A2A_TOKEN", Some("secret-token"));
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            hyper::header::AUTHORIZATION,
+            hyper::header::HeaderValue::from_static("Bearer secret-token"),
+        );
+        assert!(Gateway::is_a2a_authorized(&headers));
+    }
+
+    #[test]
+    fn test_a2a_authorization_rejects_missing_token() {
+        let _guard = EnvGuard::set("ROCKBOT_A2A_TOKEN", Some("secret-token"));
+        let headers = hyper::HeaderMap::new();
+        assert!(!Gateway::is_a2a_authorized(&headers));
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let previous = std::env::var(key).ok();
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
     }
 
     #[tokio::test]
