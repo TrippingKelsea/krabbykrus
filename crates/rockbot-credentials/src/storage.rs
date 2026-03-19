@@ -19,7 +19,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::crypto::{
     decrypt, encrypt, generate_nonce, generate_salt, MasterKey, KEY_SIZE, NONCE_SIZE,
@@ -1426,10 +1426,7 @@ impl DecryptedCredential {
 
 impl Drop for DecryptedCredential {
     fn drop(&mut self) {
-        // Zeroize the secret data
-        for byte in &mut self.secret {
-            *byte = 0;
-        }
+        self.secret.zeroize();
     }
 }
 
