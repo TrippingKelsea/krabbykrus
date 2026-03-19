@@ -136,7 +136,7 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
         match if agents_probe_ok {
             storage_runtime.open_agents_store(&vault_path).await
         } else {
-            warn!("Agents store probe failed. Skipping virtual-disk agent store and falling back to TOML persistence.");
+            warn!("Agents store probe failed. Skipping virtual-disk agent store; agent config remains bootstrap-only and runtime changes will not persist.");
             Err(anyhow::anyhow!("agent store probe failed"))
         } {
             Ok(opened_agents) => {
@@ -147,7 +147,7 @@ async fn run_server(config_path: &PathBuf) -> Result<()> {
                 vault_store = Some(store);
             }
             Err(e) => {
-                warn!("Could not open vault store: {e}. Falling back to TOML persistence.");
+                warn!("Could not open vault store: {e}. Agent config remains bootstrap-only and runtime changes will not persist.");
             }
         }
     }

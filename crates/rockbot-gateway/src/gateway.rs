@@ -1134,7 +1134,7 @@ impl Gateway {
         self.agent_factory = Some(factory);
     }
 
-    /// Set the config file path (for persisting agent changes)
+    /// Set the config file path used for bootstrap loading and diagnostics.
     pub fn set_config_path(&mut self, path: std::path::PathBuf) {
         self.config_path = Some(path);
     }
@@ -1163,12 +1163,17 @@ impl Gateway {
         }
     }
 
-    /// Persist a single agent to the vault store. Falls back to TOML if no store.
+    /// Persist a single agent to the authoritative store if available.
     fn persist_agent_to_store(&self, agent: &rockbot_config::AgentInstance) {
         if let Some(ref store) = self.store {
             if let Err(e) = store.store_agent(&agent.id, agent) {
                 warn!("Failed to persist agent '{}' to vault: {e}", agent.id);
             }
+        } else {
+            warn!(
+                "No authoritative agent store is available; agent '{}' change is runtime-only",
+                agent.id
+            );
         }
     }
 
@@ -3796,147 +3801,6 @@ impl Gateway {
         }
     }
 
-    /// Persist a single new agent to the TOML config file
-    async fn persist_agent_to_config(&self, agent: &rockbot_config::AgentInstance) {
-        let Some(ref config_path) = self.config_path else {
-            return;
-        };
-        let config_path = config_path.clone();
-        let agent = agent.clone();
-
-        // Use toml_edit to append without disrupting existing content
-        tokio::task::spawn_blocking(move || {
-            let content = match std::fs::read_to_string(&config_path) {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("Failed to read config for agent persist: {}", e);
-                    return;
-                }
-            };
-            let mut doc: toml_edit::DocumentMut = match content.parse() {
-                Ok(d) => d,
-                Err(e) => {
-                    error!("Failed to parse config TOML: {}", e);
-                    return;
-                }
-            };
-
-            if !doc.contains_key("agents") {
-                doc["agents"] = toml_edit::Item::Table(toml_edit::Table::new());
-            }
-
-            let mut new_agent = toml_edit::Table::new();
-            new_agent["id"] = toml_edit::value(&agent.id);
-            if let Some(ref model) = agent.model {
-                new_agent["model"] = toml_edit::value(model);
-            }
-            if let Some(ref parent_id) = agent.parent_id {
-                new_agent["parent_id"] = toml_edit::value(parent_id);
-            }
-            if let Some(ref workspace) = agent.workspace {
-                new_agent["workspace"] = toml_edit::value(workspace.display().to_string());
-            }
-            if let Some(max_tool_calls) = agent.max_tool_calls {
-                new_agent["max_tool_calls"] = toml_edit::value(max_tool_calls as i64);
-            }
-            if let Some(temperature) = agent.temperature {
-                new_agent["temperature"] = toml_edit::value(temperature as f64);
-            }
-            if let Some(max_tokens) = agent.max_tokens {
-                new_agent["max_tokens"] = toml_edit::value(max_tokens as i64);
-            }
-            if let Some(ref system_prompt) = agent.system_prompt {
-                new_agent["system_prompt"] = toml_edit::value(system_prompt);
-            }
-            if !agent.enabled {
-                new_agent["enabled"] = toml_edit::value(false);
-            }
-
-            if let Some(list) = doc["agents"]["list"].as_array_of_tables_mut() {
-                list.push(new_agent);
-            } else {
-                let mut arr = toml_edit::ArrayOfTables::new();
-                arr.push(new_agent);
-                doc["agents"]["list"] = toml_edit::Item::ArrayOfTables(arr);
-            }
-
-            if let Err(e) = std::fs::write(&config_path, doc.to_string()) {
-                error!("Failed to write config after agent persist: {}", e);
-            }
-        })
-        .await
-        .ok();
-    }
-
-    /// Persist all agents to the TOML config file (full rewrite of agents section)
-    async fn persist_all_agents_to_config(&self, agents: &[rockbot_config::AgentInstance]) {
-        let Some(ref config_path) = self.config_path else {
-            return;
-        };
-        let config_path = config_path.clone();
-        let agents = agents.to_vec();
-
-        tokio::task::spawn_blocking(move || {
-            let content = match std::fs::read_to_string(&config_path) {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("Failed to read config for agents persist: {}", e);
-                    return;
-                }
-            };
-            let mut doc: toml_edit::DocumentMut = match content.parse() {
-                Ok(d) => d,
-                Err(e) => {
-                    error!("Failed to parse config TOML: {}", e);
-                    return;
-                }
-            };
-
-            if !doc.contains_key("agents") {
-                doc["agents"] = toml_edit::Item::Table(toml_edit::Table::new());
-            }
-
-            // Rebuild the [[agents.list]] array
-            let mut arr = toml_edit::ArrayOfTables::new();
-            for agent in &agents {
-                let mut t = toml_edit::Table::new();
-                t["id"] = toml_edit::value(&agent.id);
-                if let Some(ref model) = agent.model {
-                    t["model"] = toml_edit::value(model);
-                }
-                if let Some(ref parent_id) = agent.parent_id {
-                    t["parent_id"] = toml_edit::value(parent_id);
-                }
-                if let Some(ref workspace) = agent.workspace {
-                    t["workspace"] = toml_edit::value(workspace.display().to_string());
-                }
-                if let Some(max_tool_calls) = agent.max_tool_calls {
-                    t["max_tool_calls"] = toml_edit::value(max_tool_calls as i64);
-                }
-                if let Some(temperature) = agent.temperature {
-                    t["temperature"] = toml_edit::value(temperature as f64);
-                }
-                if let Some(max_tokens) = agent.max_tokens {
-                    t["max_tokens"] = toml_edit::value(max_tokens as i64);
-                }
-                if let Some(ref system_prompt) = agent.system_prompt {
-                    t["system_prompt"] = toml_edit::value(system_prompt);
-                }
-                if !agent.enabled {
-                    t["enabled"] = toml_edit::value(false);
-                }
-                arr.push(t);
-            }
-            doc["agents"]["list"] = toml_edit::Item::ArrayOfTables(arr);
-
-            if let Err(e) = std::fs::write(&config_path, doc.to_string()) {
-                error!("Failed to write config after agents persist: {}", e);
-            }
-        })
-        .await
-        .ok();
-    }
-
     /// Handle WebSocket upgrade request
     #[allow(clippy::expect_used)] // Response::builder() only fails on invalid headers
     async fn handle_websocket_upgrade(
@@ -5766,11 +5630,8 @@ impl Gateway {
             }
         }
 
-        // Persist to vault store (preferred) or config file (fallback)
+        // Persist to authoritative store when available; otherwise keep runtime-only.
         self.persist_agent_to_store(&config);
-        if self.store.is_none() {
-            self.persist_agent_to_config(&config).await;
-        }
 
         // Try to create the agent via factory
         let status = if let Some(ref factory) = self.agent_factory {
@@ -5929,19 +5790,13 @@ impl Gateway {
             }
         }
 
-        // Persist: vault store (preferred) or config file (fallback)
+        // Persist to authoritative store when available; otherwise keep runtime-only.
         // Grab the updated config for potential agent recreation
         let updated_config = configs.iter().find(|c| c.id == agent_id).cloned();
         if let Some(ref cfg) = updated_config {
             self.persist_agent_to_store(cfg);
         }
-        if self.store.is_none() {
-            let configs_snapshot: Vec<_> = configs.iter().cloned().collect();
-            drop(configs);
-            self.persist_all_agents_to_config(&configs_snapshot).await;
-        } else {
-            drop(configs);
-        }
+        drop(configs);
 
         // Recreate the running agent instance so it picks up config changes (e.g. model)
         if let (Some(ref factory), Some(cfg)) = (&self.agent_factory, updated_config) {
@@ -5998,15 +5853,9 @@ impl Gateway {
         let removed_config = configs.len() < had_config;
 
         if removed_config {
-            // Remove from vault store (preferred) or config file (fallback)
+            // Remove from authoritative store when available.
             self.delete_agent_from_store(&agent_id);
-            if self.store.is_none() {
-                let configs_snapshot: Vec<_> = configs.iter().cloned().collect();
-                drop(configs);
-                self.persist_all_agents_to_config(&configs_snapshot).await;
-            } else {
-                drop(configs);
-            }
+            drop(configs);
         } else {
             drop(configs);
         }
