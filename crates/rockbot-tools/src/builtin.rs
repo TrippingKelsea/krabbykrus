@@ -60,6 +60,23 @@ fn get_string_param<'a>(params: &'a serde_json::Value, keys: &[&str]) -> Option<
         .find_map(|key| params.get(*key).and_then(|v| v.as_str()))
 }
 
+fn parse_command_line(command: &str) -> Result<DetectedCommand> {
+    let parts = shell_words::split(command).map_err(|e| crate::ToolError::InvalidParameters {
+        message: format!("invalid command syntax: {e}"),
+    })?;
+
+    let Some((program, args)) = parts.split_first() else {
+        return Err(crate::ToolError::InvalidParameters {
+            message: "command cannot be empty".to_string(),
+        });
+    };
+
+    Ok(DetectedCommand {
+        program: program.clone(),
+        args: args.to_vec(),
+    })
+}
+
 fn normalize_path(path: &std::path::Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -517,12 +534,12 @@ impl Tool for ExecTool {
                 .unwrap_or(30)
                 .min(MAX_EXEC_TIMEOUT_SECS); // Default 30 second timeout
 
-            // Execute command with timeout
-            let mut cmd = Command::new("sh");
-            cmd.arg("-c").arg(&command).current_dir(&workdir);
+            let parsed = parse_command_line(&command)?;
 
-            let output =
-                tokio::time::timeout(std::time::Duration::from_secs(timeout), cmd.output())
+            let mut cmd = Command::new(&parsed.program);
+            cmd.args(&parsed.args).current_dir(&workdir);
+
+            let output = tokio::time::timeout(std::time::Duration::from_secs(timeout), cmd.output())
                     .await
                     .map_err(|_| crate::ToolError::ExecutionFailed {
                         message: "Command timed out".to_string(),
@@ -2956,6 +2973,50 @@ mod tests {
         std::fs::write(dir.path().join("package.json"), "{}").unwrap();
         let cmd = detect_test_command(dir.path(), None).await.unwrap();
         assert_eq!(cmd, "npm test");
+    }
+
+    #[test]
+    fn test_parse_command_line_supports_quoted_args() {
+        let parsed = parse_command_line("printf 'hello world'").unwrap();
+        assert_eq!(parsed.program, "printf");
+        assert_eq!(parsed.args, vec!["hello world"]);
+    }
+
+    #[test]
+    fn test_parse_command_line_rejects_empty_command() {
+        let err = parse_command_line("   ").unwrap_err();
+        assert!(matches!(err, crate::ToolError::InvalidParameters { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_exec_tool_does_not_invoke_shell_features() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker.txt");
+        let tool = ExecTool::new();
+        let context = make_exec_context(dir.path().to_path_buf());
+
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "command": format!("printf '%s\\n' safe '>' '{}'", marker.display()),
+                    "workdir": "."
+                }),
+                context,
+            )
+            .await
+            .unwrap();
+
+        assert!(!marker.exists(), "shell redirection should not be interpreted");
+        if let ToolResult::Json { data } = result {
+            assert_eq!(data.get("success").and_then(|v| v.as_bool()), Some(true));
+            let stdout = data.get("stdout").and_then(|v| v.as_str()).unwrap_or_default();
+            assert!(
+                stdout.contains(">\n"),
+                "expected shell metacharacters to remain literal: {stdout}"
+            );
+        } else {
+            panic!("expected JSON result");
+        }
     }
 
     #[tokio::test]

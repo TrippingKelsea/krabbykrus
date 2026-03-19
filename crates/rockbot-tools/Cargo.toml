@@ -24,6 +24,7 @@ regex = { workspace = true }
 glob = { workspace = true }
 reqwest = { workspace = true }
 strsim = { workspace = true }
+shell-words = "1.1"
 
 [dev-dependencies]
 tempfile = { workspace = true }
