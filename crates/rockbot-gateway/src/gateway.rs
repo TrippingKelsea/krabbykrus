@@ -1339,11 +1339,14 @@ impl Gateway {
             }
         };
 
-        let mut pending = self.pending_agents.write().await;
+        let pending_agents = {
+            let mut pending = self.pending_agents.write().await;
+            pending.drain(..).collect::<Vec<_>>()
+        };
         let mut still_pending = Vec::new();
         let mut created = 0;
 
-        for pending_agent in pending.drain(..) {
+        for pending_agent in pending_agents {
             let config = pending_agent.config.clone();
             let agent_id = config.id.clone();
 
@@ -1371,6 +1374,7 @@ impl Gateway {
         }
 
         let still_pending_count = still_pending.len();
+        let mut pending = self.pending_agents.write().await;
         *pending = still_pending;
 
         Ok((created, still_pending_count))
