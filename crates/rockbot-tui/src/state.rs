@@ -3566,6 +3566,11 @@ impl AppState {
 
             Message::AgentsLoaded(agents) => {
                 self.agents = agents;
+                if self.agents.is_empty() {
+                    self.selected_agent = 0;
+                } else {
+                    self.selected_agent = self.selected_agent.min(self.agents.len() - 1);
+                }
                 self.agents_loading = false;
                 self.agents_error = None;
             }
