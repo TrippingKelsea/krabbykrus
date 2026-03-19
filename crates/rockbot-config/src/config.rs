@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 /// Result type for config operations
@@ -1241,7 +1241,7 @@ pub struct ProcessCapabilities {
 /// Configuration watcher for hot reloading
 pub struct ConfigWatcher {
     _watcher: RecommendedWatcher,
-    rx: mpsc::Receiver<Config>,
+    rx: watch::Receiver<Option<Config>>,
 }
 
 impl Config {
@@ -1352,7 +1352,7 @@ impl Config {
     pub fn watch<P: AsRef<Path>>(path: P) -> std::result::Result<ConfigWatcher, notify::Error> {
         let path = path.as_ref().to_path_buf();
         let path_for_closure = path.clone();
-        let (tx, rx) = mpsc::channel(16);
+        let (tx, rx) = watch::channel(None);
 
         let mut watcher =
             notify::recommended_watcher(move |res: notify::Result<Event>| match res {
@@ -1366,8 +1366,8 @@ impl Config {
                             Ok(content) => match Config::from_toml(&content) {
                                 Ok(config) => {
                                     info!("Configuration reloaded successfully");
-                                    if tx.try_send(config).is_err() {
-                                        warn!("Failed to send config update (channel full)");
+                                    if tx.send_replace(Some(config)).is_some() {
+                                        debug!("Replaced pending config update with newer version");
                                     }
                                 }
                                 Err(e) => {
@@ -1397,7 +1397,10 @@ impl Config {
 impl ConfigWatcher {
     /// Get the next configuration update
     pub async fn next_update(&mut self) -> Option<Config> {
-        self.rx.recv().await
+        match self.rx.changed().await {
+            Ok(()) => self.rx.borrow().clone(),
+            Err(_) => None,
+        }
     }
 }
 
