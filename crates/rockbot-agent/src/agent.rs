@@ -789,6 +789,7 @@ impl Agent {
                         if planning_mode == "approval_required" {
                             // Return the plan to the user for approval instead of executing
                             info!("Plan requires approval, returning plan to user");
+                            let plan_request = self.planning_prompt_message(&db_session_id);
                             let plan_response = Message::text(format!(
                                 "I've created a plan for this task. Please review and approve it \
                                  by replying with \"approved\" or provide feedback:\n\n{plan_text}"
@@ -796,6 +797,13 @@ impl Agent {
                             .with_session_id(&db_session_id)
                             .with_agent_id(&self.config.id)
                             .with_role(MessageRole::Assistant);
+
+                            self.session_manager
+                                .add_message(&db_session_id, plan_request)
+                                .await?;
+                            self.session_manager
+                                .add_message(&db_session_id, plan_response.clone())
+                                .await?;
 
                             trajectory.record(
                                 TrajectoryEvent::Complete {
@@ -3427,17 +3435,7 @@ The user wants me to explore the codebase. I should start by listing the directo
         info!("Running planning phase for session {}", session_id);
 
         // Ask the model to produce a plan (without tools — pure text response)
-        let plan_prompt = Message::text(
-            "Before executing, produce a concise numbered plan (3-8 steps) for this task. \
-             Each step should describe one concrete action. Do not execute anything yet — \
-             only output the plan. Format:\n\
-             1. [action]\n\
-             2. [action]\n\
-             ...",
-        )
-        .with_session_id(session_id)
-        .with_agent_id(&self.config.id)
-        .with_role(MessageRole::User);
+        let plan_prompt = self.planning_prompt_message(session_id);
 
         // Build request WITHOUT tools so the model produces only text
         let system_prompt = self.assemble_system_prompt(context).await?;
@@ -3495,6 +3493,20 @@ The user wants me to explore the codebase. I should start by listing the directo
             session_id
         );
         Ok(Some(clean_plan))
+    }
+
+    fn planning_prompt_message(&self, session_id: &str) -> Message {
+        Message::text(
+            "Before executing, produce a concise numbered plan (3-8 steps) for this task. \
+             Each step should describe one concrete action. Do not execute anything yet — \
+             only output the plan. Format:\n\
+             1. [action]\n\
+             2. [action]\n\
+             ...",
+        )
+        .with_session_id(session_id)
+        .with_agent_id(&self.config.id)
+        .with_role(MessageRole::User)
     }
 
     /// Run a reflection/self-critique pass after the tool loop completes.
@@ -5171,6 +5183,67 @@ mod tests {
             .extract_text()
             .unwrap_or_default()
             .contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn test_approval_required_plans_are_persisted_to_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut agent = build_test_agent(temp.path(), None).await;
+        agent.config.planning_mode = "approval_required".to_string();
+
+        let response = agent
+            .process_message(
+                "approval-plan".to_string(),
+                Message::text("implement a feature that needs planning"),
+                ProcessMessageOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        assert!(response
+            .message
+            .extract_text()
+            .unwrap_or_default()
+            .contains("Please review and approve"));
+
+        let session = agent
+            .session_manager
+            .query_sessions(rockbot_session::SessionQuery {
+                agent_id: Some(agent.config.id.clone()),
+                session_key: Some("approval-plan".to_string()),
+                state: None,
+                exclude_archived: false,
+                created_after: None,
+                created_before: None,
+                limit: Some(1),
+                offset: None,
+            })
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("session should exist");
+        let history = agent
+            .session_manager
+            .get_message_history(&session.id, None, None)
+            .await
+            .unwrap()
+            .messages;
+
+        assert!(history.iter().any(|message| {
+            message
+                .message
+                .extract_text()
+                .unwrap_or_default()
+                .contains("Before executing, produce a concise numbered plan")
+        }));
+        assert!(history.iter().any(|message| {
+            message
+                .message
+                .extract_text()
+                .unwrap_or_default()
+                .contains("Please review and approve")
+        }));
     }
 
     #[test]
