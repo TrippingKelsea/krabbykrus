@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::crypto::{
@@ -291,8 +292,9 @@ impl CredentialVault {
         }
 
         let legacy_size = fs::metadata(&legacy_path)?.len();
-        let volume_info = rockbot_vdisk::volume_info(disk_path, volume_name)
-            .map_err(|e| CredentialError::Internal(format!("Failed to inspect virtual disk: {e}")))?;
+        let volume_info = rockbot_vdisk::volume_info(disk_path, volume_name).map_err(|e| {
+            CredentialError::Internal(format!("Failed to inspect virtual disk: {e}"))
+        })?;
         let needs_import = match volume_info {
             None => true,
             Some(info) if info.len != legacy_size => true,
@@ -336,7 +338,9 @@ impl CredentialVault {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| data_dir.clone());
-        let runtime = StorageRuntime::new_with_root_sync(&rockbot_config::Config::default(), storage_root).ok();
+        let runtime =
+            StorageRuntime::new_with_root_sync(&rockbot_config::Config::default(), storage_root)
+                .ok();
         let store = if let Some(runtime) = runtime {
             runtime
                 .open_vault_store_sync(&data_dir)
@@ -513,7 +517,9 @@ impl CredentialVault {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| data_dir.clone());
-        let runtime = StorageRuntime::new_with_root_sync(&rockbot_config::Config::default(), storage_root).ok();
+        let runtime =
+            StorageRuntime::new_with_root_sync(&rockbot_config::Config::default(), storage_root)
+                .ok();
         let store = if let Some(runtime) = runtime {
             runtime
                 .open_vault_store_sync(&data_dir)
@@ -685,7 +691,7 @@ impl CredentialVault {
         let decrypted = decrypt(&master_key, &verification_nonce, &verification_ciphertext)
             .map_err(|_| CredentialError::InvalidPassword)?;
 
-        if decrypted != VERIFICATION_PLAINTEXT {
+        if !verification_matches(&decrypted) {
             return Err(CredentialError::InvalidPassword);
         }
 
@@ -1393,6 +1399,10 @@ impl CredentialVault {
     }
 }
 
+fn verification_matches(candidate: &[u8]) -> bool {
+    candidate.ct_eq(VERIFICATION_PLAINTEXT).into()
+}
+
 /// Decrypted credential data ready for use.
 #[derive(Debug)]
 pub struct DecryptedCredential {
@@ -1457,6 +1467,16 @@ mod tests {
         let err = vault.unlock(wrong_key).unwrap_err();
         assert!(matches!(err, CredentialError::InvalidPassword));
         assert!(!vault.is_unlocked());
+    }
+
+    #[test]
+    fn test_verification_matches_exact_plaintext() {
+        assert!(verification_matches(VERIFICATION_PLAINTEXT));
+    }
+
+    #[test]
+    fn test_verification_rejects_wrong_length_plaintext() {
+        assert!(!verification_matches(b"wrong"));
     }
 
     #[test]
