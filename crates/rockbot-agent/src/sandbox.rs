@@ -7,7 +7,8 @@
 use rockbot_config::SandboxConfig;
 use std::path::Path;
 use std::time::Duration;
-use tokio::process::Command;
+use tokio::io::AsyncReadExt;
+use tokio::process::{Child, Command};
 use tracing::{debug, warn};
 
 fn sanitize_shell_command(command: &str) -> Result<String, SandboxError> {
@@ -77,6 +78,60 @@ pub struct SandboxResult {
     pub exit_code: Option<i32>,
     /// Whether the command was run inside a container.
     pub containerized: bool,
+}
+
+async fn finalize_child(
+    mut child: Child,
+    timeout: Duration,
+    containerized: bool,
+) -> Result<SandboxResult, SandboxError> {
+    let stdout_task = child.stdout.take().map(|mut stdout| {
+        tokio::spawn(async move {
+            let mut buf = Vec::new();
+            stdout.read_to_end(&mut buf).await.map(|_| buf)
+        })
+    });
+    let stderr_task = child.stderr.take().map(|mut stderr| {
+        tokio::spawn(async move {
+            let mut buf = Vec::new();
+            stderr.read_to_end(&mut buf).await.map(|_| buf)
+        })
+    });
+
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(e)) => return Err(SandboxError::ExecutionFailed(e.to_string())),
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            if containerized {
+                warn!("Container command timed out after {}s", timeout.as_secs());
+            }
+            return Err(SandboxError::Timeout(timeout.as_secs()));
+        }
+    };
+
+    let stdout = match stdout_task {
+        Some(task) => task
+            .await
+            .map_err(|e| SandboxError::ExecutionFailed(e.to_string()))?
+            .map_err(|e| SandboxError::ExecutionFailed(e.to_string()))?,
+        None => Vec::new(),
+    };
+    let stderr = match stderr_task {
+        Some(task) => task
+            .await
+            .map_err(|e| SandboxError::ExecutionFailed(e.to_string()))?
+            .map_err(|e| SandboxError::ExecutionFailed(e.to_string()))?,
+        None => Vec::new(),
+    };
+
+    Ok(SandboxResult {
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: String::from_utf8_lossy(&stderr).to_string(),
+        exit_code: status.code(),
+        containerized,
+    })
 }
 
 /// Check if Docker is available on the system (with 10s timeout).
@@ -156,21 +211,7 @@ pub async fn execute_in_container(
         .spawn()
         .map_err(|e| SandboxError::SpawnFailed(e.to_string()))?;
 
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => return Err(SandboxError::ExecutionFailed(e.to_string())),
-        Err(_) => {
-            warn!("Container command timed out after {}s", timeout.as_secs());
-            return Err(SandboxError::Timeout(timeout.as_secs()));
-        }
-    };
-
-    Ok(SandboxResult {
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        exit_code: output.status.code(),
-        containerized: true,
-    })
+    finalize_child(child, timeout, true).await
 }
 
 /// Execute a command with sandbox awareness.
@@ -217,18 +258,7 @@ async fn execute_direct(
         .spawn()
         .map_err(|e| SandboxError::SpawnFailed(e.to_string()))?;
 
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => return Err(SandboxError::ExecutionFailed(e.to_string())),
-        Err(_) => return Err(SandboxError::Timeout(timeout.as_secs())),
-    };
-
-    Ok(SandboxResult {
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        exit_code: output.status.code(),
-        containerized: false,
-    })
+    finalize_child(child, timeout, false).await
 }
 
 /// Errors that can occur during sandboxed execution.
@@ -362,5 +392,26 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, SandboxError::ExecutionFailed(_)));
+    }
+
+    #[tokio::test]
+    async fn test_execute_direct_timeout_kills_child_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker.txt");
+
+        let result = execute_direct(
+            &SandboxConfig::default(),
+            dir.path(),
+            &format!("sleep 1; touch {}", marker.display()),
+            Duration::from_millis(100),
+        )
+        .await;
+
+        assert!(matches!(result, Err(SandboxError::Timeout(_))));
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert!(
+            !marker.exists(),
+            "timed out child process should not continue running"
+        );
     }
 }
