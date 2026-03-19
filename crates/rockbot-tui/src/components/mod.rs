@@ -85,6 +85,10 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, message: Option<&(String
 
 /// Create a centered rectangle for modals
 pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    if area.width == 0 || area.height == 0 {
+        return area;
+    }
+
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -94,14 +98,20 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         ])
         .split(area);
 
-    Layout::default()
+    let rect = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Percentage((100 - percent_x) / 2),
             Constraint::Percentage(percent_x),
             Constraint::Percentage((100 - percent_x) / 2),
         ])
-        .split(popup_layout[1])[1]
+        .split(popup_layout[1])[1];
+
+    Rect {
+        width: rect.width.max(1),
+        height: rect.height.max(1),
+        ..rect
+    }
 }
 
 /// Create styled key hint spans
