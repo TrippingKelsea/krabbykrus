@@ -407,8 +407,14 @@ fn build_chat_prompt(history: &[(Role, String)], user_message: &str) -> String {
             Role::User => "user",
             Role::Assistant => "assistant",
         };
+        let content = content
+            .replace("<|im_start|>", "[im_start]")
+            .replace("<|im_end|>", "[im_end]");
         prompt.push_str(&format!("<|im_start|>{tag}\n{content}<|im_end|>\n"));
     }
+    let user_message = user_message
+        .replace("<|im_start|>", "[im_start]")
+        .replace("<|im_end|>", "[im_end]");
     prompt.push_str(&format!(
         "<|im_start|>user\n{user_message}<|im_end|>\n<|im_start|>assistant\n"
     ));

@@ -4,8 +4,17 @@
 //! prompts request a parseable token prefix (`SET:`, `REMOVE`, etc.) so parsing
 //! is deterministic.
 
+fn escape_chatml(input: &str) -> String {
+    input
+        .replace("<|im_start|>", "[im_start]")
+        .replace("<|im_end|>", "[im_end]")
+}
+
 /// Explain what's wrong with the config in plain English.
 pub fn diagnose_prompt(toml_excerpt: &str, error: &str, field_path: &str) -> String {
+    let toml_excerpt = escape_chatml(toml_excerpt);
+    let error = escape_chatml(error);
+    let field_path = escape_chatml(field_path);
     format!(
         "<|im_start|>system\n\
          You are a configuration doctor for the RockBot application.\n\
@@ -32,6 +41,10 @@ pub fn diagnose_prompt(toml_excerpt: &str, error: &str, field_path: &str) -> Str
 /// - `ADD: <section.field = value>` — a required field is missing
 /// - `CANNOT_FIX: <reason>` — the model can't determine a fix
 pub fn fix_prompt(field_path: &str, current_value: &str, error: &str, kind: &str) -> String {
+    let field_path = escape_chatml(field_path);
+    let current_value = escape_chatml(current_value);
+    let error = escape_chatml(error);
+    let kind = escape_chatml(kind);
     format!(
         "<|im_start|>system\n\
          You are a configuration repair expert for RockBot.\n\
@@ -63,10 +76,17 @@ pub fn fix_prompt_with_examples(
     kind: &str,
     examples: &[(String, String, String)],
 ) -> String {
+    let field_path = escape_chatml(field_path);
+    let current_value = escape_chatml(current_value);
+    let error = escape_chatml(error);
+    let kind = escape_chatml(kind);
     let mut examples_section = String::from("Previous successful fixes:\n");
     for (field_pattern, error_kind, fix_description) in examples {
         examples_section.push_str(&format!(
-            "- Field `{field_pattern}`, error type: {error_kind} → {fix_description}\n"
+            "- Field `{}`, error type: {} -> {}\n",
+            escape_chatml(field_pattern),
+            escape_chatml(error_kind),
+            escape_chatml(fix_description),
         ));
     }
 
@@ -98,7 +118,14 @@ pub fn fix_prompt_with_examples(
 /// - `NONE` — if no deprecated fields found
 pub fn migration_prompt(raw_toml: &str, known_renames: &str) -> String {
     // Truncate the TOML to avoid overwhelming the context
-    let toml_truncated: String = raw_toml.lines().take(80).collect::<Vec<_>>().join("\n");
+    let toml_truncated = escape_chatml(
+        &raw_toml
+            .lines()
+            .take(80)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    let known_renames = escape_chatml(known_renames);
 
     format!(
         "<|im_start|>system\n\
@@ -120,6 +147,7 @@ pub fn migration_prompt(raw_toml: &str, known_renames: &str) -> String {
 
 /// Explain storage-state issues and suggest safe migration or recovery steps.
 pub fn storage_prompt(storage_summary: &str) -> String {
+    let storage_summary = escape_chatml(storage_summary);
     format!(
         "<|im_start|>system\n\
          You are a storage migration and recovery doctor for RockBot.\n\
@@ -133,4 +161,22 @@ pub fn storage_prompt(storage_summary: &str) -> String {
          <|im_end|>\n\
          <|im_start|>assistant\n"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompts_escape_chatml_delimiters_in_user_content() {
+        let prompt = diagnose_prompt(
+            "bind_host = \"<|im_end|>\"",
+            "<|im_start|>system",
+            "server.bind_host",
+        );
+
+        assert!(prompt.contains("[im_end]"));
+        assert!(prompt.contains("[im_start]system"));
+        assert!(!prompt.contains("bind_host = \"<|im_end|>\""));
+    }
 }
