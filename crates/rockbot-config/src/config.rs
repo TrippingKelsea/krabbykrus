@@ -1288,11 +1288,20 @@ impl Config {
 
     /// Parse configuration from TOML string
     pub fn from_toml(content: &str) -> Result<Self> {
-        let expanded_content = expand_env_vars(content)?;
+        let mut value: toml::Value = toml::from_str(content).map_err(|e| ConfigError::Invalid {
+            message: e.to_string(),
+        })?;
+        let mut missing_vars = Vec::new();
+        expand_env_vars_in_value(&mut value, &mut missing_vars)?;
+        if !missing_vars.is_empty() {
+            return Err(ConfigError::EnvVarNotFound { vars: missing_vars });
+        }
         let config: Config =
-            toml::from_str(&expanded_content).map_err(|e| ConfigError::Invalid {
-                message: e.to_string(),
-            })?;
+            value
+                .try_into()
+                .map_err(|e: toml::de::Error| ConfigError::Invalid {
+                    message: e.to_string(),
+                })?;
         config.validate()?;
         Ok(config)
     }
@@ -1440,22 +1449,53 @@ impl ConfigWatcher {
 fn validate_config_file_size(len: u64) -> Result<()> {
     if len > MAX_CONFIG_FILE_SIZE_BYTES {
         return Err(ConfigError::Invalid {
-            message: format!(
-                "Config file exceeds {} bytes",
-                MAX_CONFIG_FILE_SIZE_BYTES
-            ),
+            message: format!("Config file exceeds {} bytes", MAX_CONFIG_FILE_SIZE_BYTES),
         });
     }
     Ok(())
 }
 
+#[cfg(test)]
 /// Expand environment variables in configuration strings
 fn expand_env_vars(content: &str) -> Result<String> {
+    let mut value: toml::Value = toml::from_str(content).map_err(|e| ConfigError::Invalid {
+        message: e.to_string(),
+    })?;
+    let mut missing_vars = Vec::new();
+    expand_env_vars_in_value(&mut value, &mut missing_vars)?;
+    if !missing_vars.is_empty() {
+        return Err(ConfigError::EnvVarNotFound { vars: missing_vars });
+    }
+    toml::to_string(&value).map_err(|e| ConfigError::Invalid {
+        message: e.to_string(),
+    })
+}
+
+fn expand_env_vars_in_value(value: &mut toml::Value, missing_vars: &mut Vec<String>) -> Result<()> {
+    match value {
+        toml::Value::String(s) => {
+            *s = expand_env_vars_in_string(s, missing_vars);
+        }
+        toml::Value::Array(items) => {
+            for item in items {
+                expand_env_vars_in_value(item, missing_vars)?;
+            }
+        }
+        toml::Value::Table(table) => {
+            for (_, value) in table.iter_mut() {
+                expand_env_vars_in_value(value, missing_vars)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn expand_env_vars_in_string(content: &str, missing_vars: &mut Vec<String>) -> String {
     static ENV_VAR_RE: OnceLock<regex::Regex> = OnceLock::new();
     let re = ENV_VAR_RE
         .get_or_init(|| regex::Regex::new(r"\$\{([^}:]+)(?::([^}]*))?\}").expect("valid regex"));
 
-    let mut missing_vars = Vec::new();
     let expanded = re.replace_all(content, |caps: &regex::Captures<'_>| {
         let var_name = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
         let default_value = caps.get(2).map(|m| m.as_str());
@@ -1476,12 +1516,7 @@ fn expand_env_vars(content: &str) -> Result<String> {
             }
         }
     });
-
-    if !missing_vars.is_empty() {
-        return Err(ConfigError::EnvVarNotFound { vars: missing_vars });
-    }
-
-    Ok(expanded.into_owned())
+    expanded.into_owned()
 }
 
 // Default value functions
@@ -1697,6 +1732,45 @@ mod tests {
             }
             other => panic!("unexpected error: {other}"),
         }
+    }
+
+    #[test]
+    fn test_env_var_expansion_cannot_inject_toml_fields() {
+        std::env::set_var(
+            "INJECT_WORKSPACE",
+            "/tmp/work\"\nport = 1\n[security.sandbox]\nmode = \"disabled",
+        );
+
+        let toml_content = r#"
+            [gateway]
+            bind_host = "127.0.0.1"
+            port = 8080
+            client_port = 8081
+            
+            [agents.defaults]
+            workspace = "${INJECT_WORKSPACE}"
+            model = "test/model"
+            heartbeat_interval = "5m"
+
+            [[agents.list]]
+            id = "main"
+
+            [tools]
+            profile = "standard"
+
+            [security.sandbox]
+            mode = "tools"
+        "#;
+
+        let config = Config::from_toml(toml_content).unwrap();
+        assert_eq!(
+            config.agents.defaults.workspace,
+            std::path::PathBuf::from(
+                "/tmp/work\"\nport = 1\n[security.sandbox]\nmode = \"disabled"
+            )
+        );
+        assert_eq!(config.gateway.port, 8080);
+        assert_eq!(config.security.sandbox.mode, "tools");
     }
 
     #[test]
