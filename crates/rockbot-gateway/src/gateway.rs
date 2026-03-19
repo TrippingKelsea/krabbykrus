@@ -1318,25 +1318,95 @@ impl Gateway {
         let Some(ref store) = self.store else {
             return;
         };
-        let agents_config = self.agents_config.read().await;
-        if agents_config.is_empty() {
-            return;
-        }
         // Only migrate if vault is empty
         match store.list_agents() {
             Ok(existing) if !existing.is_empty() => return,
             Err(_) => return,
             _ => {}
         }
-        info!(
-            "Migrating {} agent(s) from TOML config to vault store",
-            agents_config.len()
+
+        let agents_config = self.agents_config.read().await;
+        if !agents_config.is_empty() {
+            info!(
+                "Migrating {} agent(s) from TOML config to vault store",
+                agents_config.len()
+            );
+            for agent in agents_config.iter() {
+                if let Err(e) = store.store_agent(&agent.id, agent) {
+                    warn!("Failed to migrate agent '{}' to vault: {e}", agent.id);
+                } else {
+                    info!("Migrated agent '{}' to vault", agent.id);
+                }
+            }
+            return;
+        }
+        drop(agents_config);
+
+        let storage_root = self.credentials_config.vault_path.parent().map_or_else(
+            rockbot_storage_runtime::default_storage_root,
+            std::path::PathBuf::from,
         );
-        for agent in agents_config.iter() {
-            if let Err(e) = store.store_agent(&agent.id, agent) {
-                warn!("Failed to migrate agent '{}' to vault: {e}", agent.id);
+        let Ok(runtime) =
+            rockbot_storage_runtime::StorageRuntime::new_with_root_sync(&Config::default(), storage_root)
+        else {
+            return;
+        };
+        let Ok(legacy_agent_ids) = runtime.discover_legacy_agent_ids() else {
+            return;
+        };
+        if legacy_agent_ids.is_empty() {
+            return;
+        }
+
+        let topology_by_agent: HashMap<String, rockbot_storage_runtime::TopologyNodeRecord> =
+            runtime
+                .list_topology_nodes()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|node| (node.agent_id.clone(), node))
+                .collect();
+
+        info!(
+            "Migrating {} legacy agent disk(s) into vault store",
+            legacy_agent_ids.len()
+        );
+        for (idx, agent_id) in legacy_agent_ids.iter().enumerate() {
+            let topology = topology_by_agent.get(agent_id);
+            let config = rockbot_config::AgentInstance {
+                id: agent_id.clone(),
+                primary: idx == 0,
+                workspace: None,
+                model: None,
+                max_tool_calls: None,
+                temperature: None,
+                max_tokens: None,
+                parent_id: topology.and_then(|node| node.owner_agent_id.clone()),
+                creator_agent_id: topology.and_then(|node| node.creator_agent_id.clone()),
+                owner_agent_id: topology.and_then(|node| node.owner_agent_id.clone()),
+                zone_id: topology.and_then(|node| node.zone_id.clone()),
+                system_prompt: None,
+                enabled: topology.is_none_or(|node| node.state != "disabled"),
+                mcp_servers: std::collections::HashMap::new(),
+                config: std::collections::HashMap::new(),
+                max_context_tokens: 128000,
+                guardrails: Vec::new(),
+                reflection_enabled: false,
+                breakpoint_tools: Vec::new(),
+                planning_mode: "never".to_string(),
+                expose_as_tool: None,
+                episodic_memory: false,
+                workflow: None,
+                llm_timeout_secs: 45,
+                tool_timeout_secs: 120,
+            };
+            if let Err(e) = store.store_agent(agent_id, &config) {
+                warn!("Failed to migrate legacy agent '{}' to vault: {e}", agent_id);
             } else {
-                info!("Migrated agent '{}' to vault", agent.id);
+                info!(
+                    "Migrated legacy agent '{}' to vault store using default runtime settings",
+                    agent_id
+                );
             }
         }
     }
@@ -8130,5 +8200,36 @@ mod tests {
             pending_result.await.unwrap(),
             rockbot_tools::ApprovalResult::Approved
         ));
+    }
+
+    #[tokio::test]
+    async fn test_auto_migrates_legacy_agent_vdisks_when_store_is_empty() {
+        let mut gateway = create_test_gateway().await;
+        let temp = tempfile::tempdir().unwrap();
+        let vault_path = temp.path().join("vault");
+        std::fs::create_dir_all(&vault_path).unwrap();
+
+        gateway.credentials_config.vault_path = vault_path.clone();
+        let mut config = Config::default();
+        config.credentials.vault_path = vault_path.clone();
+        config.security.storage.enabled = false;
+
+        let runtime = rockbot_storage_runtime::StorageRuntime::new_with_root_sync(
+            &config,
+            temp.path().to_path_buf(),
+        )
+        .unwrap();
+        runtime
+            .initialize_agent_context("Hex", Some("# legacy prompt"))
+            .await
+            .unwrap();
+
+        let opened = runtime.open_agents_store(&vault_path).await.unwrap();
+        gateway.set_store(opened.store);
+        gateway.auto_migrate_agents_to_store().await;
+
+        let agents = gateway.load_agents_from_store();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].id, "Hex");
     }
 }

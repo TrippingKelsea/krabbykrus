@@ -659,6 +659,37 @@ impl StorageRuntime {
         self.storage_root.join("agents")
     }
 
+    pub fn discover_legacy_agent_ids(&self) -> Result<Vec<String>> {
+        let root = self.agent_vdisk_dir();
+        if !root.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut ids = std::collections::BTreeSet::new();
+        for entry in std::fs::read_dir(&root)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            let candidate = if file_type.is_dir() {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("data") {
+                path.file_stem()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+            } else {
+                None
+            };
+
+            if let Some(agent_id) = candidate.filter(|id| is_valid_agent_id(id)) {
+                ids.insert(agent_id);
+            }
+        }
+
+        Ok(ids.into_iter().collect())
+    }
+
     pub fn agent_vdisk_path(&self, agent_id: &str) -> Result<PathBuf> {
         if !is_valid_agent_id(agent_id) {
             return Err(anyhow!("invalid agent id"));
@@ -1389,6 +1420,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(prompt, "# custom prompt");
+    }
+
+    #[test]
+    fn discover_legacy_agent_ids_finds_dirs_and_vdisks() {
+        let dir = workspace_tempdir();
+        let root = dir.path();
+        let cfg = cfg_with_root(root);
+        let runtime = StorageRuntime::new_with_root_sync(&cfg, root.to_path_buf()).unwrap();
+
+        std::fs::create_dir_all(root.join("agents").join("Hex")).unwrap();
+        std::fs::write(root.join("agents").join("Hex.data"), b"placeholder").unwrap();
+        std::fs::write(root.join("agents").join("not-an-agent.txt"), b"skip").unwrap();
+
+        let ids = runtime.discover_legacy_agent_ids().unwrap();
+        assert_eq!(ids, vec!["Hex".to_string()]);
     }
 
     #[test]
