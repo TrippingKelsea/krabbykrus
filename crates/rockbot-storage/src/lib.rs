@@ -14,7 +14,7 @@ pub mod raft;
 pub use redb::TableDefinition;
 
 use encrypted_backend::EncryptedBackend;
-use redb::{Database, ReadableTable};
+use redb::{Database, ReadableTable, StorageBackend};
 use rockbot_vdisk::VolumeBackend;
 use std::convert::TryInto;
 use std::path::Path;
@@ -65,8 +65,10 @@ impl Store {
         capacity: u64,
         key: Option<[u8; 32]>,
     ) -> anyhow::Result<Self> {
-        validate_redb_volume_header(disk_path, volume_name)?;
         let backend = VolumeBackend::open(disk_path, volume_name, capacity, key)?;
+        validate_redb_header(&backend).map_err(|err| {
+            anyhow::anyhow!("virtual disk volume '{volume_name}' is invalid: {err}")
+        })?;
         let db = Database::builder().create_with_backend(backend)?;
         let store = Self { db };
         store.initialize_tables()?;
@@ -382,19 +384,13 @@ const REDB_NUM_FULL_REGIONS_OFFSET: usize = 24;
 const REDB_TRAILING_REGION_DATA_PAGES_OFFSET: usize = 28;
 const REDB_HEADER_PREFIX_LEN: usize = 32;
 
-fn validate_redb_volume_header(disk_path: &Path, volume_name: &str) -> anyhow::Result<()> {
-    let Some(info) = rockbot_vdisk::volume_info(disk_path, volume_name)? else {
-        return Ok(());
-    };
-    if info.len < REDB_HEADER_PREFIX_LEN as u64 {
+fn validate_redb_header<B: StorageBackend>(backend: &B) -> anyhow::Result<()> {
+    let logical_len = backend.len()?;
+    if logical_len < REDB_HEADER_PREFIX_LEN as u64 {
         return Ok(());
     }
 
-    let Some(prefix) =
-        rockbot_vdisk::read_volume_prefix(disk_path, volume_name, REDB_HEADER_PREFIX_LEN)?
-    else {
-        return Ok(());
-    };
+    let prefix = backend.read(0, REDB_HEADER_PREFIX_LEN)?;
     if prefix.len() < REDB_HEADER_PREFIX_LEN || prefix[..REDB_MAGIC.len()] != REDB_MAGIC {
         return Ok(());
     }
@@ -431,11 +427,8 @@ fn validate_redb_volume_header(disk_path: &Path, volume_name: &str) -> anyhow::R
             .ok_or_else(|| anyhow::anyhow!("redb volume header overflow"))?;
     }
 
-    if info.len < expected_len {
-        anyhow::bail!(
-            "virtual disk volume '{volume_name}' is truncated: redb header expects {expected_len} bytes, found {}",
-            info.len
-        );
+    if logical_len < expected_len {
+        anyhow::bail!("redb header expects {expected_len} bytes, found {logical_len}");
     }
 
     Ok(())
@@ -619,7 +612,32 @@ mod tests {
             Err(err) => err,
         };
         assert!(
-            err.to_string().contains("is truncated"),
+            err.to_string().contains("is invalid: redb header expects"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn truncated_encrypted_redb_volume_returns_error_instead_of_panicking() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source.redb");
+        let disk = dir.path().join("rockbot.data");
+        let key = [0x5Au8; 32];
+
+        let store = Store::open(&source).unwrap();
+        store.put(tables::KV_STORE, "health", b"ok").unwrap();
+        drop(store);
+
+        let mut bytes = std::fs::read(&source).unwrap();
+        bytes.truncate(bytes.len().saturating_sub(4096));
+        rockbot_vdisk::import_bytes(&disk, "state", &bytes, Some(key)).unwrap();
+
+        let err = match Store::open_volume(&disk, "state", 64 * 1024 * 1024, Some(key)) {
+            Ok(_) => panic!("truncated encrypted volume unexpectedly opened"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("is invalid: redb header expects"),
             "unexpected error: {err}"
         );
     }
