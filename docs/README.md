@@ -11,6 +11,7 @@ Current storage model:
 - `rockbot.toml` is bootstrap/defaults/config only
 - `rockbot.data` stores shared control-plane state
 - `agents/{id}.data` stores canonical per-agent local state
+- floating tags such as `preview` are used for prerelease workflow publishing
 
 ## Architecture
 
