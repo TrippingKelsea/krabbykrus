@@ -115,7 +115,11 @@ impl StateMachine {
         }
     }
 
-    fn persist_snapshot(&mut self, meta: SnapshotMetaOf<TypeConfig>, data: Vec<u8>) -> io::Result<()> {
+    fn persist_snapshot(
+        &mut self,
+        meta: SnapshotMetaOf<TypeConfig>,
+        data: Vec<u8>,
+    ) -> io::Result<()> {
         self.store
             .put_json(tables::REPLICATION_META, SNAPSHOT_META_KEY, &meta)
             .map_err(|e| io::Error::other(e.to_string()))?;
@@ -142,7 +146,10 @@ impl StateMachine {
             (tables::AGENT_OBJECTS.name(), tables::AGENT_OBJECTS),
             (tables::TOPOLOGY_NODES.name(), tables::TOPOLOGY_NODES),
             (tables::TOPOLOGY_EDGES.name(), tables::TOPOLOGY_EDGES),
-            (tables::TOPOLOGY_EDGES_FROM.name(), tables::TOPOLOGY_EDGES_FROM),
+            (
+                tables::TOPOLOGY_EDGES_FROM.name(),
+                tables::TOPOLOGY_EDGES_FROM,
+            ),
             (tables::TOPOLOGY_EDGES_TO.name(), tables::TOPOLOGY_EDGES_TO),
             (tables::ZONES.name(), tables::ZONES),
             (tables::ZONE_MEMBERS.name(), tables::ZONE_MEMBERS),
@@ -152,7 +159,10 @@ impl StateMachine {
             (tables::AGENT_VDISKS.name(), tables::AGENT_VDISKS),
             (tables::NODE_KEYS.name(), tables::NODE_KEYS),
             (tables::VAULT_OBJECTS.name(), tables::VAULT_OBJECTS),
-            (tables::VAULT_PROVIDER_GRANTS.name(), tables::VAULT_PROVIDER_GRANTS),
+            (
+                tables::VAULT_PROVIDER_GRANTS.name(),
+                tables::VAULT_PROVIDER_GRANTS,
+            ),
             (tables::VAULT_NODE_GRANTS.name(), tables::VAULT_NODE_GRANTS),
             (tables::VAULT_POLICIES.name(), tables::VAULT_POLICIES),
         ]
@@ -247,10 +257,13 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
     }
 
     async fn get_current_snapshot(&mut self) -> Result<Option<SnapshotOf<TypeConfig>>, io::Error> {
-        Ok(self.current_snapshot.clone().map(|snapshot| SnapshotOf::<TypeConfig> {
-            meta: snapshot.meta,
-            snapshot: Cursor::new(snapshot.data),
-        }))
+        Ok(self
+            .current_snapshot
+            .clone()
+            .map(|snapshot| SnapshotOf::<TypeConfig> {
+                meta: snapshot.meta,
+                snapshot: Cursor::new(snapshot.data),
+            }))
     }
 }
 
@@ -287,9 +300,7 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
     }
 }
 
-fn bytes_table_def(
-    name: &str,
-) -> Result<BytesTableDefinition, io::Error> {
+fn bytes_table_def(name: &str) -> Result<BytesTableDefinition, io::Error> {
     match name {
         "endpoints" => Ok(tables::ENDPOINTS),
         "credentials" => Ok(tables::CREDENTIALS),
@@ -340,7 +351,9 @@ mod tests {
     #[tokio::test]
     async fn state_machine_builds_and_reloads_snapshots() {
         let store = open_store();
-        store.put(tables::AGENTS, "agent-1", br#"{"id":"agent-1"}"#).unwrap();
+        store
+            .put(tables::AGENTS, "agent-1", br#"{"id":"agent-1"}"#)
+            .unwrap();
         store
             .put(tables::BLACKBOARDS, "board-1", br#"{"name":"board-1"}"#)
             .unwrap();

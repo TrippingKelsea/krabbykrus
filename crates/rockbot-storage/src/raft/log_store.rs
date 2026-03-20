@@ -258,12 +258,12 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+    use crate::raft::StoreRequest;
+    use openraft::vote::RaftLeaderIdExt;
     use openraft::EntryPayload;
     use openraft::LogId;
     use openraft::Vote;
-    use openraft::vote::RaftLeaderIdExt;
     use tempfile::tempdir;
-    use crate::raft::StoreRequest;
 
     fn open_store() -> Arc<Store> {
         let dir = tempdir().unwrap();

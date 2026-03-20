@@ -294,9 +294,14 @@ mod tests {
     #[tokio::test]
     async fn test_execute_direct_echo() {
         let dir = tempfile::tempdir().unwrap();
-        let result = execute_direct(&SandboxConfig::default(), dir.path(), "echo hello", Duration::from_secs(5))
-            .await
-            .unwrap();
+        let result = execute_direct(
+            &SandboxConfig::default(),
+            dir.path(),
+            "echo hello",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
         assert_eq!(result.stdout.trim(), "hello");
         assert_eq!(result.exit_code, Some(0));
         assert!(!result.containerized);
@@ -305,9 +310,14 @@ mod tests {
     #[tokio::test]
     async fn test_execute_direct_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let result = execute_direct(&SandboxConfig::default(), dir.path(), "exit 42", Duration::from_secs(5))
-            .await
-            .unwrap();
+        let result = execute_direct(
+            &SandboxConfig::default(),
+            dir.path(),
+            "exit 42",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
         assert_eq!(result.exit_code, Some(42));
     }
 

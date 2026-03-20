@@ -28,8 +28,7 @@ pub const TOPOLOGY_EDGES_TO: TableDefinition<'static, &str, &[u8]> =
 pub const ZONES: TableDefinition<'static, &str, &[u8]> = TableDefinition::new("zones");
 pub const ZONE_MEMBERS: TableDefinition<'static, &str, &[u8]> =
     TableDefinition::new("zone_members");
-pub const BLACKBOARDS: TableDefinition<'static, &str, &[u8]> =
-    TableDefinition::new("blackboards");
+pub const BLACKBOARDS: TableDefinition<'static, &str, &[u8]> = TableDefinition::new("blackboards");
 pub const BLACKBOARD_ACL: TableDefinition<'static, &str, &[u8]> =
     TableDefinition::new("blackboard_acl");
 pub const OWNERSHIP_EVENTS: TableDefinition<'static, &str, &[u8]> =

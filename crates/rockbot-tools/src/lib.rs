@@ -639,20 +639,21 @@ impl ToolRegistry {
         // Check if tool requires human approval
         if tool.requires_approval() {
             // Check command allowlist for exec-like tools
-            let is_allowlisted = params
-                .get("command")
-                .and_then(|v| v.as_str())
-                .is_some_and(|cmd| {
-                    let executable = shell_words::split(cmd)
-                        .ok()
-                        .and_then(|parts| parts.into_iter().next())
-                        .unwrap_or_default();
-                    rockbot_security::command_matches_any_pattern(
-                        cmd,
-                        &executable,
-                        &context.command_allowlist,
-                    )
-                });
+            let is_allowlisted =
+                params
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|cmd| {
+                        let executable = shell_words::split(cmd)
+                            .ok()
+                            .and_then(|parts| parts.into_iter().next())
+                            .unwrap_or_default();
+                        rockbot_security::command_matches_any_pattern(
+                            cmd,
+                            &executable,
+                            &context.command_allowlist,
+                        )
+                    });
 
             if !is_allowlisted {
                 if let Some(ref callback) = context.approval_callback {
