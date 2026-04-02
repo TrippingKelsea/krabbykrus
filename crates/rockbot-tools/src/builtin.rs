@@ -10,6 +10,7 @@ use std::io::BufRead;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -19,6 +20,25 @@ struct DetectedCommand {
 }
 
 const MAX_EXEC_TIMEOUT_SECS: u64 = 600;
+const EXEC_OUTPUT_MAX_CHARS_DEFAULT: usize = 30_000;
+const EXEC_OUTPUT_MAX_CHARS_UPPER_LIMIT: usize = 150_000;
+const READ_MAX_FILE_BYTES_DEFAULT: u64 = 512 * 1024;
+const READ_MAX_FILE_BYTES_UPPER_LIMIT: u64 = 8 * 1024 * 1024;
+const READ_BINARY_SAMPLE_BYTES: usize = 8192;
+const BLOCKED_DEVICE_PATHS: &[&str] = &[
+    "/dev/zero",
+    "/dev/random",
+    "/dev/urandom",
+    "/dev/full",
+    "/dev/stdin",
+    "/dev/stdout",
+    "/dev/stderr",
+    "/dev/tty",
+    "/dev/console",
+    "/dev/fd/0",
+    "/dev/fd/1",
+    "/dev/fd/2",
+];
 
 impl std::fmt::Display for DetectedCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -94,6 +114,257 @@ fn sanitize_shell_command(command: &str) -> Result<DetectedCommand> {
     }
 
     parse_command_line(command)
+}
+
+fn get_bounded_env_usize(name: &str, default: usize, upper_limit: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| (1..=upper_limit).contains(value))
+        .unwrap_or(default)
+}
+
+fn get_bounded_env_u64(name: &str, default: u64, upper_limit: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| (1..=upper_limit).contains(value))
+        .unwrap_or(default)
+}
+
+fn get_exec_output_max_chars() -> usize {
+    get_bounded_env_usize(
+        "ROCKBOT_EXEC_MAX_OUTPUT_CHARS",
+        EXEC_OUTPUT_MAX_CHARS_DEFAULT,
+        EXEC_OUTPUT_MAX_CHARS_UPPER_LIMIT,
+    )
+}
+
+fn get_read_max_file_bytes() -> u64 {
+    get_bounded_env_u64(
+        "ROCKBOT_READ_MAX_FILE_BYTES",
+        READ_MAX_FILE_BYTES_DEFAULT,
+        READ_MAX_FILE_BYTES_UPPER_LIMIT,
+    )
+}
+
+fn truncate_utf8_chars(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
+}
+
+fn truncate_stream_output(text: &str, max_chars: usize, label: &str) -> String {
+    let total_chars = text.chars().count();
+    if total_chars <= max_chars {
+        return text.to_string();
+    }
+
+    let truncated = truncate_utf8_chars(text, max_chars);
+    format!("{truncated}\n...[{label} truncated at {max_chars} of {total_chars} chars]")
+}
+
+fn truncate_combined_output(text: &str, max_chars: usize) -> String {
+    let total_chars = text.chars().count();
+    if total_chars <= max_chars {
+        return text.to_string();
+    }
+
+    let truncated = truncate_utf8_chars(text, max_chars);
+    format!("{truncated}\n...[output truncated at {max_chars} of {total_chars} chars]")
+}
+
+fn is_blocked_device_path(path: &std::path::Path) -> bool {
+    let path_str = path.to_string_lossy();
+    BLOCKED_DEVICE_PATHS
+        .iter()
+        .any(|blocked| *blocked == path_str)
+        || (path_str.starts_with("/proc/")
+            && (path_str.ends_with("/fd/0")
+                || path_str.ends_with("/fd/1")
+                || path_str.ends_with("/fd/2")))
+}
+
+async fn ensure_safe_text_readable(path: &std::path::Path, limit: Option<usize>) -> Result<()> {
+    let metadata =
+        tokio::fs::metadata(path)
+            .await
+            .map_err(|e| crate::ToolError::ExecutionFailed {
+                message: format!("Failed to stat file: {e}"),
+            })?;
+
+    if !metadata.is_file() {
+        return Err(crate::ToolError::ExecutionFailed {
+            message: format!("{} is not a regular file", path.display()),
+        });
+    }
+
+    if is_blocked_device_path(path) {
+        return Err(crate::ToolError::ExecutionFailed {
+            message: format!("Refusing to read blocked device path {}", path.display()),
+        });
+    }
+
+    let max_bytes = get_read_max_file_bytes();
+    if metadata.len() > max_bytes && limit.is_none() {
+        return Err(crate::ToolError::ExecutionFailed {
+            message: format!(
+                "File {} is too large to read in full ({} bytes > {} bytes). Use offset/limit to read a smaller window.",
+                path.display(),
+                metadata.len(),
+                max_bytes
+            ),
+        });
+    }
+
+    let mut file =
+        tokio::fs::File::open(path)
+            .await
+            .map_err(|e| crate::ToolError::ExecutionFailed {
+                message: format!("Failed to open file: {e}"),
+            })?;
+    let mut sample = vec![0_u8; READ_BINARY_SAMPLE_BYTES];
+    let bytes_read =
+        file.read(&mut sample)
+            .await
+            .map_err(|e| crate::ToolError::ExecutionFailed {
+                message: format!("Failed to read file sample: {e}"),
+            })?;
+    sample.truncate(bytes_read);
+    if sample.contains(&0) {
+        return Err(crate::ToolError::ExecutionFailed {
+            message: format!(
+                "Refusing to read binary file {}. Use a more specific tool for binary content.",
+                path.display()
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+async fn read_text_window(
+    path: &std::path::Path,
+    offset: usize,
+    limit: Option<usize>,
+) -> Result<String> {
+    ensure_safe_text_readable(path, limit).await?;
+
+    if limit.is_none() {
+        return tokio::fs::read_to_string(path).await.map_err(|e| {
+            crate::ToolError::ExecutionFailed {
+                message: format!("Failed to read file: {e}"),
+            }
+        });
+    }
+
+    let file =
+        tokio::fs::File::open(path)
+            .await
+            .map_err(|e| crate::ToolError::ExecutionFailed {
+                message: format!("Failed to open file: {e}"),
+            })?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    let start = offset.saturating_sub(1);
+    let max_lines = limit.unwrap_or(usize::MAX);
+    let mut current = 0usize;
+    let mut results = Vec::new();
+
+    while let Some(line) =
+        lines
+            .next_line()
+            .await
+            .map_err(|e| crate::ToolError::ExecutionFailed {
+                message: format!("Failed to read file: {e}"),
+            })?
+    {
+        if current >= start {
+            results.push(line);
+            if results.len() >= max_lines {
+                break;
+            }
+        }
+        current += 1;
+    }
+
+    Ok(results.join("\n"))
+}
+
+fn normalized_whitespace_match(haystack: &str, needle: &str) -> Option<String> {
+    let norm_needle = normalize_whitespace(needle);
+    let norm_haystack = normalize_whitespace(haystack);
+    if !norm_haystack.contains(&norm_needle) {
+        return None;
+    }
+    find_original_span(haystack, needle)
+}
+
+pub(crate) fn is_safe_read_only_exec_command(command: &str) -> bool {
+    let Ok(parsed) = parse_command_line(command) else {
+        return false;
+    };
+
+    match parsed.program.as_str() {
+        "pwd" => parsed.args.is_empty(),
+        "git" => is_safe_read_only_git_command(&parsed.args),
+        "ls" => args_are_flags_or_safe_paths(&parsed.args),
+        "cat" | "head" | "tail" | "wc" | "stat" => args_are_flags_or_safe_paths(&parsed.args),
+        "find" => is_safe_read_only_find_command(&parsed.args),
+        _ => false,
+    }
+}
+
+fn is_safe_read_only_git_command(args: &[String]) -> bool {
+    let Some(subcommand) = args.first().map(String::as_str) else {
+        return false;
+    };
+
+    match subcommand {
+        "status" | "diff" | "show" | "log" | "rev-parse" | "ls-files" => true,
+        "branch" => args.iter().skip(1).all(|arg| {
+            matches!(
+                arg.as_str(),
+                "--show-current" | "--all" | "-a" | "--remotes" | "-r" | "--list" | "-vv" | "-v"
+            )
+        }),
+        _ => false,
+    }
+}
+
+fn args_are_flags_or_safe_paths(args: &[String]) -> bool {
+    args.iter()
+        .all(|arg| arg.starts_with('-') || is_safe_workspace_relative_arg(arg))
+}
+
+fn is_safe_workspace_relative_arg(arg: &str) -> bool {
+    !arg.is_empty()
+        && !arg.starts_with('/')
+        && !arg.starts_with('~')
+        && !arg.contains("..")
+        && !arg.contains('\0')
+}
+
+fn is_safe_read_only_find_command(args: &[String]) -> bool {
+    if args.is_empty() {
+        return true;
+    }
+
+    let dangerous_terms = [
+        "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprintf", "-fls",
+    ];
+    if args
+        .iter()
+        .any(|arg| dangerous_terms.iter().any(|term| arg == term))
+    {
+        return false;
+    }
+
+    args.iter().all(|arg| {
+        if arg.starts_with('-') {
+            true
+        } else {
+            is_safe_workspace_relative_arg(arg)
+        }
+    })
 }
 
 fn normalize_path(path: &std::path::Path) -> PathBuf {
@@ -248,25 +519,7 @@ impl Tool for ReadTool {
             // Resolve path relative to workspace
             let path = resolve_tool_path(&context, &params, &["file_path", "path", "file"])?;
 
-            // Read file content
-            let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
-                crate::ToolError::ExecutionFailed {
-                    message: format!("Failed to read file: {e}"),
-                }
-            })?;
-
-            // Apply offset and limit
-            let lines: Vec<&str> = content.lines().collect();
-            let start = offset.saturating_sub(1);
-            let end = if let Some(limit) = limit {
-                (start + limit).min(lines.len())
-            } else {
-                lines.len()
-            };
-
-            let result_lines = &lines[start..end];
-            let result_content = result_lines.join("\n");
-
+            let result_content = read_text_window(&path, offset, limit).await?;
             Ok(ToolResult::text(result_content))
         })
     }
@@ -455,28 +708,23 @@ impl Tool for EditTool {
             let count = content.matches(old_text.as_str()).count();
 
             if count == 0 {
-                // Try fuzzy matching before giving up
-                match find_fuzzy_match(&content, &old_text) {
-                    Some((matched_text, similarity)) => {
-                        let new_content = content.replacen(&matched_text, &new_text, 1);
-                        tokio::fs::write(&path, new_content.as_bytes())
-                            .await
-                            .map_err(|e| crate::ToolError::ExecutionFailed {
-                                message: format!("Failed to write file: {e}"),
-                            })?;
-                        return Ok(ToolResult::text(format!(
-                            "Edited {} (fuzzy match, {:.0}% similar)",
-                            path.display(),
-                            similarity * 100.0
-                        )));
-                    }
-                    None => {
-                        return Ok(ToolResult::error(format!(
-                            "old_text not found in {}",
-                            path.display()
-                        )));
-                    }
+                if let Some(matched_text) = normalized_whitespace_match(&content, &old_text) {
+                    let new_content = content.replacen(&matched_text, &new_text, 1);
+                    tokio::fs::write(&path, new_content.as_bytes())
+                        .await
+                        .map_err(|e| crate::ToolError::ExecutionFailed {
+                            message: format!("Failed to write file: {e}"),
+                        })?;
+                    return Ok(ToolResult::text(format!(
+                        "Edited {} (normalized whitespace match)",
+                        path.display()
+                    )));
                 }
+
+                return Ok(ToolResult::error(format!(
+                    "old_text not found in {}. The file may have changed; re-read the file and retry with more exact surrounding context.",
+                    path.display()
+                )));
             }
 
             let replace_all = params
@@ -606,12 +854,13 @@ impl Tool for ExecTool {
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let max_output_chars = get_exec_output_max_chars();
             let exit_code = output.status.code().unwrap_or(-1);
 
             let result = json!({
                 "exit_code": exit_code,
-                "stdout": stdout,
-                "stderr": stderr,
+                "stdout": truncate_stream_output(&stdout, max_output_chars, "stdout"),
+                "stderr": truncate_stream_output(&stderr, max_output_chars, "stderr"),
                 "success": output.status.success()
             });
 
@@ -2171,7 +2420,8 @@ impl Tool for TestTool {
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let combined = format!("{stdout}{stderr}");
+            let combined =
+                truncate_combined_output(&format!("{stdout}{stderr}"), get_exec_output_max_chars());
             let exit_code = output.status.code().unwrap_or(-1);
 
             if output.status.success() {
@@ -2358,7 +2608,8 @@ impl Tool for LintTool {
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let combined = format!("{stdout}{stderr}");
+            let combined =
+                truncate_combined_output(&format!("{stdout}{stderr}"), get_exec_output_max_chars());
             let exit_code = output.status.code().unwrap_or(-1);
 
             if output.status.success() {
@@ -2539,53 +2790,6 @@ impl Tool for ClarifyTool {
             // The agent loop will interpret this as a message to forward to the user.
             Ok(ToolResult::text(response))
         })
-    }
-}
-
-/// Attempt to find a fuzzy match for `needle` in `haystack`.
-/// Returns the actual text that matched and the similarity score.
-fn find_fuzzy_match(haystack: &str, needle: &str) -> Option<(String, f64)> {
-    use strsim::normalized_levenshtein;
-
-    // First try: normalize whitespace in both and do exact match
-    let norm_needle = normalize_whitespace(needle);
-    let norm_haystack = normalize_whitespace(haystack);
-    if norm_haystack.contains(&norm_needle) {
-        // Find the original text that corresponds to the normalized match
-        if let Some(original) = find_original_span(haystack, needle) {
-            return Some((original, 1.0));
-        }
-    }
-
-    // Second try: sliding window with Levenshtein similarity
-    let needle_lines: Vec<&str> = needle.lines().collect();
-    let haystack_lines: Vec<&str> = haystack.lines().collect();
-    let window_size = needle_lines.len();
-
-    if window_size == 0 || haystack_lines.len() < window_size {
-        return None;
-    }
-
-    let mut best_score = 0.0f64;
-    let mut best_window: Option<String> = None;
-
-    for i in 0..=(haystack_lines.len() - window_size) {
-        let window: String = haystack_lines[i..i + window_size].join("\n");
-        let score = normalized_levenshtein(
-            &normalize_whitespace(needle),
-            &normalize_whitespace(&window),
-        );
-        if score > best_score {
-            best_score = score;
-            best_window = Some(window);
-        }
-    }
-
-    // Require at least 80% similarity
-    if best_score >= 0.80 {
-        best_window.map(|w| (w, best_score))
-    } else {
-        None
     }
 }
 
@@ -2962,6 +3166,45 @@ mod tests {
         assert_eq!(content, "qux bar qux baz qux\n");
     }
 
+    #[tokio::test]
+    async fn test_read_tool_offset_beyond_end_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        tokio::fs::write(&file_path, "hello\nworld\n")
+            .await
+            .unwrap();
+
+        let tool = ReadTool::new();
+        let params = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "offset": 10,
+            "limit": 5
+        });
+        let context = make_context(dir.path().to_path_buf());
+        let result = tool.execute(params, context).await.unwrap();
+
+        if let ToolResult::Text { content } = result {
+            assert!(content.is_empty());
+        } else {
+            panic!("expected text result");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_tool_rejects_binary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.bin");
+        tokio::fs::write(&file_path, b"abc\0def").await.unwrap();
+
+        let tool = ReadTool::new();
+        let params = serde_json::json!({
+            "file_path": file_path.to_str().unwrap()
+        });
+        let context = make_context(dir.path().to_path_buf());
+        let error = tool.execute(params, context).await.unwrap_err();
+        assert!(error.to_string().contains("binary file"));
+    }
+
     // --- TestTool / LintTool detection tests ---
 
     fn make_exec_context(workspace: std::path::PathBuf) -> ToolExecutionContext {
@@ -3056,6 +3299,38 @@ mod tests {
         assert!(matches!(err, crate::ToolError::InvalidParameters { .. }));
     }
 
+    #[test]
+    fn test_truncate_stream_output_appends_notice() {
+        let text = "abcdef";
+        let truncated = truncate_stream_output(text, 3, "stdout");
+        assert!(truncated.starts_with("abc"));
+        assert!(truncated.contains("stdout truncated"));
+        assert!(truncated.contains("6 chars"));
+    }
+
+    #[test]
+    fn test_truncate_combined_output_appends_notice() {
+        let text = "abcdefgh";
+        let truncated = truncate_combined_output(text, 4);
+        assert!(truncated.starts_with("abcd"));
+        assert!(truncated.contains("output truncated"));
+        assert!(truncated.contains("8 chars"));
+    }
+
+    #[test]
+    fn test_safe_read_only_exec_command_detection() {
+        assert!(is_safe_read_only_exec_command("pwd"));
+        assert!(is_safe_read_only_exec_command("git status --short"));
+        assert!(is_safe_read_only_exec_command("git rev-parse HEAD"));
+        assert!(is_safe_read_only_exec_command("ls -la src"));
+        assert!(is_safe_read_only_exec_command("find src -name '*.rs'"));
+        assert!(is_safe_read_only_exec_command("cat README.md"));
+        assert!(!is_safe_read_only_exec_command("git commit -m test"));
+        assert!(!is_safe_read_only_exec_command("cat /etc/passwd"));
+        assert!(!is_safe_read_only_exec_command("find . -delete"));
+        assert!(!is_safe_read_only_exec_command("rm -rf /tmp/nope"));
+    }
+
     #[tokio::test]
     async fn test_exec_tool_does_not_expand_shell_metacharacters() {
         let dir = tempfile::tempdir().unwrap();
@@ -3084,6 +3359,14 @@ mod tests {
         } else {
             panic!("expected JSON result");
         }
+    }
+
+    #[test]
+    fn test_exec_output_limit_env_uses_default_for_invalid_values() {
+        assert_eq!(
+            get_bounded_env_usize("ROCKBOT_TEST_MISSING_LIMIT", 123, 456),
+            123
+        );
     }
 
     #[test]
@@ -3264,7 +3547,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_edit_fuzzy_no_match() {
+    async fn test_edit_no_approximate_auto_match() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
         tokio::fs::write(&file_path, "hello world\n").await.unwrap();
@@ -3278,6 +3561,8 @@ mod tests {
         let context = make_context(dir.path().to_path_buf());
         let result = tool.execute(params, context).await.unwrap();
         assert!(matches!(result, ToolResult::Error { .. }));
+        let content = tokio::fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(content, "hello world\n");
     }
 
     // -----------------------------------------------------------------------

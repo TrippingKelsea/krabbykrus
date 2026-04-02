@@ -485,6 +485,7 @@ pub enum ToolExecutionLocality {
 }
 
 const COMPACTION_SUMMARY_KEY: &str = "compaction_summary";
+const SESSION_SUMMARY_MAX_CHARS: usize = 1_500;
 
 impl Agent {
     /// Create a new agent with the given configuration
@@ -984,6 +985,10 @@ impl Agent {
             self.session_manager
                 .add_message(&db_session_id, response_message.clone())
                 .await?;
+            let mut summary_messages = context.messages.clone();
+            summary_messages.push(response_message.clone());
+            self.refresh_session_working_memory(&db_session_id, &summary_messages)
+                .await?;
 
             // Update session token stats
             let mut session = self
@@ -1198,7 +1203,10 @@ impl Agent {
 
             trajectory.record(
                 TrajectoryEvent::LlmResponse {
-                    content_preview: preview(&response_message.extract_text().unwrap_or_default(), 200),
+                    content_preview: preview(
+                        &response_message.extract_text().unwrap_or_default(),
+                        200,
+                    ),
                     tool_call_names: tool_results.iter().map(|r| r.tool_name.clone()).collect(),
                     tokens: token_usage.clone(),
                 },
@@ -1208,6 +1216,10 @@ impl Agent {
 
             self.session_manager
                 .add_message(&db_session_id, response_message.clone())
+                .await?;
+            let mut summary_messages = context.messages.clone();
+            summary_messages.push(response_message.clone());
+            self.refresh_session_working_memory(&db_session_id, &summary_messages)
                 .await?;
 
             let mut session = self
@@ -1800,6 +1812,8 @@ impl Agent {
 
         self.refresh_context_token_count(context);
         self.compact_context_if_needed(context).await?;
+        self.refresh_session_working_memory(&session_id, &context.messages)
+            .await?;
 
         Ok(context.clone())
     }
@@ -1820,6 +1834,8 @@ impl Agent {
         self.refresh_context_token_count(context);
         if context.token_count > self.compaction_threshold() {
             self.compact_context(context).await?;
+            self.refresh_session_working_memory(&context.session_id, &context.messages)
+                .await?;
         }
         Ok(())
     }
@@ -2127,45 +2143,7 @@ impl Agent {
         context: &mut ProcessingContext,
         stream: bool,
     ) -> Result<ChatCompletionRequest> {
-        // Assemble system prompt with context injection
-        let system_prompt = self.assemble_system_prompt(context).await?;
-
-        // Convert messages to LLM format, injecting system message if needed
-        let mut messages = Vec::new();
-
-        // Add system message first if we have a system prompt
-        if !system_prompt.is_empty() {
-            messages.push(rockbot_llm::Message {
-                role: rockbot_llm::MessageRole::System,
-                content: system_prompt,
-                images: vec![],
-                tool_calls: None,
-                tool_call_id: None,
-            });
-        }
-
-        messages.extend(self.llm_messages_from_context(context));
-
-        // Get tool definitions if tools are available
-        let tools = if !context.available_tools.is_empty() {
-            let tool_defs = self
-                .tool_registry
-                .get_tool_definitions(&context.available_tools)
-                .await?;
-            // Convert from rockbot_tools::ToolDefinition to rockbot_llm::ToolDefinition
-            Some(
-                tool_defs
-                    .into_iter()
-                    .map(|td| rockbot_llm::ToolDefinition {
-                        name: td.name,
-                        description: td.description,
-                        parameters: td.parameters,
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
-        };
+        let (system_prompt, messages, tools) = self.materialize_llm_request_parts(context).await?;
 
         let model = self
             .config
@@ -2193,6 +2171,23 @@ impl Agent {
             tool_chars
         );
 
+        let estimated_tokens =
+            Self::estimate_request_tokens(&system_prompt, &messages, tools.as_deref());
+        if let Err(e) = self
+            .session_manager
+            .update_context_budget(
+                &context.session_id,
+                estimated_tokens as u64,
+                self.config.max_context_tokens as u64,
+            )
+            .await
+        {
+            debug!(
+                "Failed to update context budget snapshot for session {}: {}",
+                context.session_id, e
+            );
+        }
+
         Ok(ChatCompletionRequest {
             model,
             messages,
@@ -2202,6 +2197,72 @@ impl Agent {
             stream,
             response_format: None,
         })
+    }
+
+    async fn materialize_llm_request_parts(
+        &self,
+        context: &mut ProcessingContext,
+    ) -> Result<(
+        String,
+        Vec<rockbot_llm::Message>,
+        Option<Vec<rockbot_llm::ToolDefinition>>,
+    )> {
+        let mut compacted_for_budget = false;
+
+        loop {
+            let system_prompt = self.assemble_system_prompt(context).await?;
+            let mut messages = Vec::new();
+
+            if !system_prompt.is_empty() {
+                messages.push(rockbot_llm::Message {
+                    role: rockbot_llm::MessageRole::System,
+                    content: system_prompt.clone(),
+                    images: vec![],
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+            }
+
+            messages.extend(self.llm_messages_from_context(context));
+
+            let tools = if !context.available_tools.is_empty() {
+                let tool_defs = self
+                    .tool_registry
+                    .get_tool_definitions(&context.available_tools)
+                    .await?;
+                Some(
+                    tool_defs
+                        .into_iter()
+                        .map(|td| rockbot_llm::ToolDefinition {
+                            name: td.name,
+                            description: td.description,
+                            parameters: td.parameters,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                None
+            };
+
+            let estimated_tokens =
+                Self::estimate_request_tokens(&system_prompt, &messages, tools.as_deref());
+            if !compacted_for_budget
+                && estimated_tokens > self.compaction_threshold()
+                && context.messages.len() > 10
+            {
+                info!(
+                    "Estimated full request budget {} tokens exceeds threshold {} for session {}, compacting",
+                    estimated_tokens,
+                    self.compaction_threshold(),
+                    context.session_id
+                );
+                self.compact_context(context).await?;
+                compacted_for_budget = true;
+                continue;
+            }
+
+            return Ok((system_prompt, messages, tools));
+        }
     }
 
     /// Assemble system prompt with context injection
@@ -2274,6 +2335,40 @@ impl Agent {
         );
         prompt_parts.push(context_section);
 
+        if let Ok(Some(session)) = self.session_manager.get_session(&context.session_id).await {
+            if !session.memory.working_summary.trim().is_empty() {
+                let mut section = format!(
+                    "# Session Working Memory\n\n{}",
+                    Self::truncate_content(
+                        &session.memory.working_summary,
+                        SESSION_SUMMARY_MAX_CHARS
+                    )
+                );
+                if let Some(intent) = session.memory.last_user_intent.as_deref() {
+                    section.push_str(&format!(
+                        "\n\nLatest intent: {}",
+                        Self::truncate_content(intent, 300)
+                    ));
+                }
+                if !session.memory.recent_tools.is_empty() {
+                    section.push_str(&format!(
+                        "\nRecent tools: {}",
+                        session.memory.recent_tools.join(", ")
+                    ));
+                }
+                if let Some(budget) = session.memory.context_budget.as_ref() {
+                    section.push_str(&format!(
+                        "\nContext budget: {} / {} tokens ({}%, {:?})",
+                        budget.estimated_input_tokens,
+                        budget.max_context_tokens,
+                        budget.utilization_percent,
+                        budget.status
+                    ));
+                }
+                prompt_parts.push(section);
+            }
+        }
+
         // Inject relevant past episodes from episodic memory
         if let Some(ref store) = self.episodic_store {
             let user_msg = context
@@ -2313,6 +2408,110 @@ impl Agent {
         prompt_parts.push(format!("# Current Time\n\n{timestamp}"));
 
         Ok(prompt_parts.join("\n\n---\n\n"))
+    }
+
+    async fn refresh_session_working_memory(
+        &self,
+        session_id: &str,
+        messages: &[Message],
+    ) -> Result<()> {
+        let (working_summary, last_user_intent, recent_tools) =
+            Self::build_session_working_memory(messages);
+        self.session_manager
+            .update_working_memory(session_id, working_summary, last_user_intent, recent_tools)
+            .await?;
+        Ok(())
+    }
+
+    fn build_session_working_memory(messages: &[Message]) -> (String, Option<String>, Vec<String>) {
+        let last_user_intent = messages
+            .iter()
+            .rev()
+            .find(|m| matches!(m.metadata.role, MessageRole::User))
+            .and_then(|m| m.extract_text())
+            .map(|text| Self::truncate_content(&text, 300));
+
+        let recent_assistant_result = messages
+            .iter()
+            .rev()
+            .find(|m| matches!(m.metadata.role, MessageRole::Assistant))
+            .and_then(|m| m.extract_text())
+            .map(|text| Self::truncate_content(&text, 400));
+
+        let latest_compaction_summary = messages
+            .iter()
+            .rev()
+            .find(|m| {
+                matches!(m.metadata.role, MessageRole::System)
+                    && m.metadata
+                        .extra
+                        .get(COMPACTION_SUMMARY_KEY)
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+            })
+            .and_then(|m| m.extract_text())
+            .map(|text| Self::truncate_content(&text, 600));
+
+        let mut recent_tools = Vec::new();
+        for tool_name in messages.iter().rev().filter_map(|m| {
+            m.metadata
+                .extra
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string)
+        }) {
+            if !recent_tools.contains(&tool_name) {
+                recent_tools.push(tool_name);
+            }
+            if recent_tools.len() >= 6 {
+                break;
+            }
+        }
+        recent_tools.reverse();
+
+        let mut summary_parts = Vec::new();
+        if let Some(intent) = last_user_intent.as_deref() {
+            summary_parts.push(format!("Current objective: {intent}"));
+        }
+        if let Some(result) = recent_assistant_result.as_deref() {
+            summary_parts.push(format!("Latest assistant state: {result}"));
+        }
+        if let Some(summary) = latest_compaction_summary.as_deref() {
+            summary_parts.push(format!("Compacted prior context: {summary}"));
+        }
+        if !recent_tools.is_empty() {
+            summary_parts.push(format!("Recent tools: {}", recent_tools.join(", ")));
+        }
+
+        let working_summary = if summary_parts.is_empty() {
+            "No session working memory recorded yet.".to_string()
+        } else {
+            Self::truncate_content(&summary_parts.join("\n"), SESSION_SUMMARY_MAX_CHARS)
+        };
+
+        (working_summary, last_user_intent, recent_tools)
+    }
+
+    fn estimate_request_tokens(
+        system_prompt: &str,
+        messages: &[rockbot_llm::Message],
+        tools: Option<&[rockbot_llm::ToolDefinition]>,
+    ) -> usize {
+        let _ = system_prompt;
+        let message_tokens: usize = messages
+            .iter()
+            .map(|message| crate::tokenizer::count_tokens(&message.content))
+            .sum();
+        let tool_tokens: usize = tools
+            .unwrap_or(&[])
+            .iter()
+            .map(|tool| {
+                crate::tokenizer::count_tokens(&tool.name)
+                    + crate::tokenizer::count_tokens(&tool.description)
+                    + crate::tokenizer::count_tokens(&tool.parameters.to_string())
+            })
+            .sum();
+        message_tokens + tool_tokens
     }
 
     /// Load a context file from the agent's config directory.
@@ -4133,7 +4332,8 @@ The user wants me to explore the codebase. I should start by listing the directo
                                 tool_call.id.clone(),
                                 tool_call.function.name.clone(),
                                 timeout_message.clone(),
-                            ).with_session_id(session_id);
+                            )
+                            .with_session_id(session_id);
                             tool_results.push(ToolExecutionResult {
                                 tool_name: tool_call.function.name.clone(),
                                 result: ToolResult::Error {
@@ -4669,8 +4869,8 @@ mod tests {
         Choice, CompletionStream, LlmError, LlmProvider, Message as LlmMessage, MockLlmProvider,
         ProviderCapabilities, Usage,
     };
-    use rockbot_security::{SandboxConfig, SecurityConfig};
     use rockbot_security::Capabilities;
+    use rockbot_security::{SandboxConfig, SecurityConfig};
     use rockbot_tools::{Tool, ToolConfig};
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -4731,13 +4931,8 @@ mod tests {
             .await
             .unwrap(),
         );
-        build_test_agent_with_components(
-            workspace,
-            llm_provider,
-            tool_registry,
-            approval_callback,
-        )
-        .await
+        build_test_agent_with_components(workspace, llm_provider, tool_registry, approval_callback)
+            .await
     }
 
     async fn build_test_agent_with_components(
@@ -4864,7 +5059,10 @@ mod tests {
             Ok(vec![])
         }
 
-        async fn get_model_info(&self, _model_id: &str) -> rockbot_llm::Result<rockbot_llm::ModelInfo> {
+        async fn get_model_info(
+            &self,
+            _model_id: &str,
+        ) -> rockbot_llm::Result<rockbot_llm::ModelInfo> {
             Err(LlmError::ModelNotFound {
                 model: "mock".to_string(),
             })
@@ -4927,7 +5125,11 @@ mod tests {
                     index: 0,
                     delta: rockbot_llm::StreamingDelta {
                         role: None,
-                        content: Some(if attempt == 0 { "partial".to_string() } else { "final".to_string() }),
+                        content: Some(if attempt == 0 {
+                            "partial".to_string()
+                        } else {
+                            "final".to_string()
+                        }),
                         tool_calls: None,
                     },
                     finish_reason: if attempt == 0 {
@@ -4958,7 +5160,10 @@ mod tests {
             Ok(vec![])
         }
 
-        async fn get_model_info(&self, _model_id: &str) -> rockbot_llm::Result<rockbot_llm::ModelInfo> {
+        async fn get_model_info(
+            &self,
+            _model_id: &str,
+        ) -> rockbot_llm::Result<rockbot_llm::ModelInfo> {
             Err(LlmError::ModelNotFound {
                 model: "mock".to_string(),
             })
@@ -5018,12 +5223,9 @@ mod tests {
     #[tokio::test]
     async fn test_streaming_error_cleans_up_active_context() {
         let temp = tempfile::tempdir().unwrap();
-        let agent = build_test_agent_with_provider(
-            temp.path(),
-            Arc::new(FailingStreamingProvider),
-            None,
-        )
-        .await;
+        let agent =
+            build_test_agent_with_provider(temp.path(), Arc::new(FailingStreamingProvider), None)
+                .await;
         let (tx, _rx) = tokio::sync::mpsc::channel(8);
 
         let _err = agent
@@ -5757,5 +5959,95 @@ mod tests {
         assert_eq!(messages[0].content, "summary");
         assert!(matches!(messages[1].role, rockbot_llm::MessageRole::User));
         assert_eq!(messages[1].content, "latest user message");
+    }
+
+    #[test]
+    fn test_build_session_working_memory_summarizes_recent_state() {
+        let mut summary =
+            Message::system("Previous work summary", SystemLevel::Info).with_session_id("s1");
+        summary.metadata.extra.insert(
+            COMPACTION_SUMMARY_KEY.to_string(),
+            serde_json::Value::Bool(true),
+        );
+        let tool = Message::tool_result("call_1", "read", "read ok");
+        let user = Message::text("Fix the startup timeout bug").with_role(MessageRole::User);
+        let assistant = Message::text("I found the failing path in the gateway startup sequence.")
+            .with_role(MessageRole::Assistant);
+
+        let (working_summary, last_user_intent, recent_tools) =
+            Agent::build_session_working_memory(&[summary, tool, user, assistant]);
+
+        assert!(working_summary.contains("Current objective"));
+        assert!(working_summary.contains("Compacted prior context"));
+        assert_eq!(
+            last_user_intent.as_deref(),
+            Some("Fix the startup timeout bug")
+        );
+        assert_eq!(recent_tools, vec!["read"]);
+    }
+
+    #[tokio::test]
+    async fn test_assemble_system_prompt_includes_session_working_memory() {
+        let temp = tempfile::tempdir().unwrap();
+        let agent = build_test_agent(temp.path(), None).await;
+        let session = agent
+            .session_manager
+            .create_session("test-agent", "memory-key")
+            .await
+            .unwrap();
+        agent
+            .session_manager
+            .update_working_memory(
+                &session.id,
+                "Investigating flaky startup behavior".to_string(),
+                Some("Fix flaky startup behavior".to_string()),
+                vec!["read".to_string(), "test".to_string()],
+            )
+            .await
+            .unwrap();
+        agent
+            .session_manager
+            .update_context_budget(&session.id, 3000, 4096)
+            .await
+            .unwrap();
+
+        let context = ProcessingContext {
+            session_id: session.id.clone(),
+            messages: vec![Message::text("latest user message").with_role(MessageRole::User)],
+            available_tools: vec!["read".to_string()],
+            token_count: 0,
+            workspace_override: None,
+            remote_executor_target: None,
+            remote_executor_strict: false,
+            remote_workspace_override: None,
+            delegation_depth: 0,
+        };
+
+        let prompt = agent.assemble_system_prompt(&context).await.unwrap();
+        assert!(prompt.contains("Session Working Memory"));
+        assert!(prompt.contains("Investigating flaky startup behavior"));
+        assert!(prompt.contains("Fix flaky startup behavior"));
+        assert!(prompt.contains("Recent tools: read, test"));
+        assert!(prompt.contains("Context budget: 3000 / 4096"));
+    }
+
+    #[test]
+    fn test_estimate_request_tokens_counts_messages_and_tools() {
+        let messages = vec![rockbot_llm::Message {
+            role: rockbot_llm::MessageRole::User,
+            content: "hello world".to_string(),
+            images: vec![],
+            tool_calls: None,
+            tool_call_id: None,
+        }];
+        let tools = vec![rockbot_llm::ToolDefinition {
+            name: "read".to_string(),
+            description: "Read a file".to_string(),
+            parameters: serde_json::json!({"type":"object"}),
+        }];
+
+        let estimate = Agent::estimate_request_tokens("", &messages, Some(&tools));
+        assert!(estimate >= crate::tokenizer::count_tokens("hello world"));
+        assert!(estimate > crate::tokenizer::count_tokens("hello world"));
     }
 }

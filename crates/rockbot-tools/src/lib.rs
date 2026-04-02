@@ -644,15 +644,17 @@ impl ToolRegistry {
                     .get("command")
                     .and_then(|v| v.as_str())
                     .is_some_and(|cmd| {
-                        let executable = shell_words::split(cmd)
-                            .ok()
-                            .and_then(|parts| parts.into_iter().next())
-                            .unwrap_or_default();
-                        rockbot_security::command_matches_any_pattern(
-                            cmd,
-                            &executable,
-                            &context.command_allowlist,
-                        )
+                        builtin::is_safe_read_only_exec_command(cmd) || {
+                            let executable = shell_words::split(cmd)
+                                .ok()
+                                .and_then(|parts| parts.into_iter().next())
+                                .unwrap_or_default();
+                            rockbot_security::command_matches_any_pattern(
+                                cmd,
+                                &executable,
+                                &context.command_allowlist,
+                            )
+                        }
                     });
 
             if !is_allowlisted {
@@ -990,6 +992,55 @@ mod tests {
 
         let result = registry
             .execute_tool("exec", r#"{"command": "printf '%s' hello"}"#, context)
+            .await
+            .unwrap();
+
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_safe_read_only_exec_command_skips_approval() {
+        let config = ToolConfig {
+            profile: "standard".to_string(),
+            deny: vec![],
+            configs: HashMap::new(),
+        };
+        let registry = ToolRegistry::new(config).await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "hello").unwrap();
+
+        let context = ToolExecutionContext {
+            session_id: "test".to_string(),
+            agent_id: "agent1".to_string(),
+            workspace_path: dir.path().to_path_buf(),
+            security_context: rockbot_security::SecurityContext {
+                session_id: "test".to_string(),
+                capabilities: {
+                    let mut caps = rockbot_security::Capabilities::new();
+                    caps.add(rockbot_security::Capability::ProcessExecute);
+                    caps
+                },
+                sandbox_enabled: false,
+                restrictions: rockbot_security::SecurityRestrictions::default(),
+            },
+            credential_accessor: None,
+            command_allowlist: vec![],
+            approval_callback: Some(Arc::new(|_tool, _agent, _params| {
+                Box::pin(async {
+                    ApprovalResult::Denied {
+                        reason: "should not reach".to_string(),
+                    }
+                })
+            })),
+            agent_invoker: None,
+            delegation_depth: 0,
+            blackboard: None,
+            swarm_id: None,
+        };
+
+        let result = registry
+            .execute_tool("exec", r#"{"command": "pwd"}"#, context)
             .await
             .unwrap();
 

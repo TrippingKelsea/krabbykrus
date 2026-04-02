@@ -43,6 +43,8 @@ pub struct Session {
     pub updated_at: DateTime<Utc>,
     pub token_stats: TokenStats,
     #[serde(default)]
+    pub memory: SessionMemory,
+    #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
     pub state: SessionState,
 }
@@ -53,6 +55,37 @@ pub struct TokenStats {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub total_tokens: u64,
+}
+
+/// Session-level working memory used to keep long-running autonomous work coherent.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SessionMemory {
+    /// Rolling summary of the current task state.
+    pub working_summary: String,
+    /// Latest user intent or task request.
+    pub last_user_intent: Option<String>,
+    /// Recently used tools, newest last.
+    pub recent_tools: Vec<String>,
+    /// Last context budget snapshot recorded before an LLM call.
+    pub context_budget: Option<ContextBudgetSnapshot>,
+}
+
+/// Snapshot of estimated request budget for the active session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextBudgetSnapshot {
+    pub estimated_input_tokens: u64,
+    pub max_context_tokens: u64,
+    pub utilization_percent: u8,
+    pub status: ContextBudgetStatus,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextBudgetStatus {
+    Normal,
+    Warning,
+    Critical,
 }
 
 /// Current state of a session
@@ -137,6 +170,7 @@ impl Session {
             created_at: now,
             updated_at: now,
             token_stats: TokenStats::default(),
+            memory: SessionMemory::default(),
             metadata: HashMap::new(),
             state: SessionState::Active,
         }
@@ -163,6 +197,42 @@ impl Session {
             key.into(),
             serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
         );
+        self.updated_at = Utc::now();
+    }
+
+    pub fn update_working_memory(
+        &mut self,
+        working_summary: String,
+        last_user_intent: Option<String>,
+        recent_tools: Vec<String>,
+    ) {
+        self.memory.working_summary = working_summary;
+        self.memory.last_user_intent = last_user_intent;
+        self.memory.recent_tools = recent_tools;
+        self.updated_at = Utc::now();
+    }
+
+    pub fn update_context_budget(&mut self, estimated_input_tokens: u64, max_context_tokens: u64) {
+        let utilization_percent = if max_context_tokens == 0 {
+            0
+        } else {
+            ((estimated_input_tokens.saturating_mul(100)) / max_context_tokens).min(100) as u8
+        };
+        let status = if utilization_percent >= 90 {
+            ContextBudgetStatus::Critical
+        } else if utilization_percent >= 75 {
+            ContextBudgetStatus::Warning
+        } else {
+            ContextBudgetStatus::Normal
+        };
+
+        self.memory.context_budget = Some(ContextBudgetSnapshot {
+            estimated_input_tokens,
+            max_context_tokens,
+            utilization_percent,
+            status,
+            updated_at: Utc::now(),
+        });
         self.updated_at = Utc::now();
     }
 
@@ -293,6 +363,39 @@ impl SessionManager {
         let mut sessions = self.sessions.write().await;
         sessions.insert(session.id.clone(), session.clone());
         Ok(())
+    }
+
+    pub async fn update_working_memory(
+        &self,
+        session_id: &str,
+        working_summary: String,
+        last_user_intent: Option<String>,
+        recent_tools: Vec<String>,
+    ) -> Result<()> {
+        let mut session =
+            self.get_session(session_id)
+                .await?
+                .ok_or_else(|| SessionError::NotFound {
+                    session_id: session_id.to_string(),
+                })?;
+        session.update_working_memory(working_summary, last_user_intent, recent_tools);
+        self.update_session(&session).await
+    }
+
+    pub async fn update_context_budget(
+        &self,
+        session_id: &str,
+        estimated_input_tokens: u64,
+        max_context_tokens: u64,
+    ) -> Result<()> {
+        let mut session =
+            self.get_session(session_id)
+                .await?
+                .ok_or_else(|| SessionError::NotFound {
+                    session_id: session_id.to_string(),
+                })?;
+        session.update_context_budget(estimated_input_tokens, max_context_tokens);
+        self.update_session(&session).await
     }
 
     pub async fn add_message(&self, session_id: &str, message: Message) -> Result<()> {
@@ -510,5 +613,55 @@ mod tests {
 
         assert_eq!(history.total_count, 2);
         assert_eq!(history.messages.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_update_working_memory_persists() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("sessions.redb");
+        let manager = SessionManager::new(&db_path, 100).await.unwrap();
+
+        let session = manager
+            .create_session("test-agent", "test-key")
+            .await
+            .unwrap();
+        manager
+            .update_working_memory(
+                &session.id,
+                "Investigating a failing test".to_string(),
+                Some("Fix the failing startup test".to_string()),
+                vec!["read".to_string(), "test".to_string()],
+            )
+            .await
+            .unwrap();
+
+        let updated = manager.get_session(&session.id).await.unwrap().unwrap();
+        assert!(updated.memory.working_summary.contains("Investigating"));
+        assert_eq!(
+            updated.memory.last_user_intent.as_deref(),
+            Some("Fix the failing startup test")
+        );
+        assert_eq!(updated.memory.recent_tools, vec!["read", "test"]);
+    }
+
+    #[tokio::test]
+    async fn test_update_context_budget_sets_warning_status() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("sessions.redb");
+        let manager = SessionManager::new(&db_path, 100).await.unwrap();
+
+        let session = manager
+            .create_session("test-agent", "test-key")
+            .await
+            .unwrap();
+        manager
+            .update_context_budget(&session.id, 80, 100)
+            .await
+            .unwrap();
+
+        let updated = manager.get_session(&session.id).await.unwrap().unwrap();
+        let snapshot = updated.memory.context_budget.expect("budget snapshot");
+        assert_eq!(snapshot.utilization_percent, 80);
+        assert_eq!(snapshot.status, ContextBudgetStatus::Warning);
     }
 }
