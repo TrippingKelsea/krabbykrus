@@ -4524,9 +4524,7 @@ impl App {
 
         let selected = self.state.slash_completion_index % matches.len();
         let command_name = matches[selected].name;
-        let rest = self
-            .state
-            .input_buffer[1..]
+        let rest = self.state.input_buffer[1..]
             .split_once(char::is_whitespace)
             .map(|(_, args)| args.trim_start().to_string());
 
@@ -6058,7 +6056,11 @@ pub async fn run_app(config_path: PathBuf, vault_path: PathBuf, gateway_url: Str
     }
 }
 
-async fn run_app_inner(config_path: PathBuf, vault_path: PathBuf, gateway_url: String) -> Result<()> {
+async fn run_app_inner(
+    config_path: PathBuf,
+    vault_path: PathBuf,
+    gateway_url: String,
+) -> Result<()> {
     use crate::event::{spawn_terminal_input, AppEvent, TerminalGuard};
 
     // TerminalGuard owns raw mode, alternate screen, keyboard enhancement,
@@ -7058,12 +7060,17 @@ async fn load_agents(client: &rockbot_client::GatewayClient) -> Result<Vec<Agent
             _ if !enabled => AgentStatus::Disabled,
             _ => AgentStatus::Active,
         };
+        let reason = entry
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
 
         agents.push(AgentInfo {
             id,
             primary,
             model,
             status,
+            reason,
             session_count,
             parent_id,
             system_prompt,

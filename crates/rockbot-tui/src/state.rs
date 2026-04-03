@@ -612,6 +612,7 @@ pub struct AgentInfo {
     pub primary: bool,
     pub model: Option<String>,
     pub status: AgentStatus,
+    pub reason: Option<String>,
     pub session_count: usize,
     pub parent_id: Option<String>,
     pub system_prompt: Option<String>,
@@ -1138,8 +1139,7 @@ mod tests {
 
     #[test]
     fn extracts_reasoning_from_complete_block() {
-        let (visible, reasoning) =
-            extract_reasoning("<think>plan quietly</think>Hello there.");
+        let (visible, reasoning) = extract_reasoning("<think>plan quietly</think>Hello there.");
         assert_eq!(visible, "Hello there.");
         assert_eq!(reasoning.as_deref(), Some("plan quietly"));
     }
@@ -3741,7 +3741,14 @@ impl AppState {
                 let chat = self.session_chats.entry(session_key).or_default();
                 chat.messages = messages
                     .into_iter()
-                    .map(|msg| ChatMessage::from_raw(msg.role, msg.raw_content, msg.timestamp, msg.tool_calls))
+                    .map(|msg| {
+                        ChatMessage::from_raw(
+                            msg.role,
+                            msg.raw_content,
+                            msg.timestamp,
+                            msg.tool_calls,
+                        )
+                    })
                     .collect();
                 chat.loaded = true;
             }
@@ -3945,10 +3952,7 @@ impl AppState {
             let any_expanded = chat
                 .messages
                 .iter()
-                .any(|msg| {
-                    msg.reasoning_expanded
-                        || msg.tool_calls.iter().any(|tc| tc.expanded)
-                });
+                .any(|msg| msg.reasoning_expanded || msg.tool_calls.iter().any(|tc| tc.expanded));
             let new_state = !any_expanded;
             for msg in &mut chat.messages {
                 msg.reasoning_expanded = new_state;

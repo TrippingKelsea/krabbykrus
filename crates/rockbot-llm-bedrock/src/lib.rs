@@ -539,13 +539,12 @@ impl BedrockProvider {
     }
 
     /// Normalize model ID: strip "bedrock/" prefix, then prepend a cross-region
-    /// inference profile prefix for models that require it.
+    /// inference profile prefix for raw foundation model IDs that require it.
+    /// Already-qualified inference profile IDs pass through unchanged.
     fn normalize_model(&self, model_id: &str) -> String {
         let stripped = model_id.strip_prefix("bedrock/").unwrap_or(model_id);
 
-        // Already has a region prefix — pass through unchanged
-        if stripped.starts_with("us.") || stripped.starts_with("eu.") || stripped.starts_with("ap.")
-        {
+        if Self::has_inference_profile_prefix(stripped) {
             return stripped.to_string();
         }
 
@@ -555,6 +554,13 @@ impl BedrockProvider {
         }
 
         stripped.to_string()
+    }
+
+    fn has_inference_profile_prefix(model_id: &str) -> bool {
+        model_id.starts_with("global.")
+            || model_id.starts_with("us.")
+            || model_id.starts_with("eu.")
+            || model_id.starts_with("ap.")
     }
 
     /// Returns true when a model requires a cross-region inference profile.
@@ -1566,19 +1572,21 @@ mod tests {
 
     #[test]
     fn test_normalize_model_pass_through_prefixed() {
-        // Already-prefixed IDs must not gain a second prefix
-        assert!(
-            "us.anthropic.claude-sonnet-4-20250514-v1:0".starts_with("us."),
-            "us-prefixed IDs pass through unchanged"
-        );
-        assert!(
-            "eu.anthropic.claude-3-5-haiku-20241022-v1:0".starts_with("eu."),
-            "eu-prefixed IDs pass through unchanged"
-        );
-        assert!(
-            "ap.amazon.nova-pro-v1:0".starts_with("ap."),
-            "ap-prefixed IDs pass through unchanged"
-        );
+        assert!(BedrockProvider::has_inference_profile_prefix(
+            "us.anthropic.claude-sonnet-4-20250514-v1:0"
+        ));
+        assert!(BedrockProvider::has_inference_profile_prefix(
+            "eu.anthropic.claude-3-5-haiku-20241022-v1:0"
+        ));
+        assert!(BedrockProvider::has_inference_profile_prefix(
+            "ap.amazon.nova-pro-v1:0"
+        ));
+        assert!(BedrockProvider::has_inference_profile_prefix(
+            "global.anthropic.claude-opus-4-6-v1"
+        ));
+        assert!(!BedrockProvider::has_inference_profile_prefix(
+            "anthropic.claude-opus-4-6-v1"
+        ));
     }
 
     #[test]

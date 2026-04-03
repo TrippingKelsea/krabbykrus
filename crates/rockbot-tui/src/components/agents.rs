@@ -85,6 +85,13 @@ fn render_agent_details(frame: &mut Frame, area: Rect, state: &AppState) {
             Span::raw(format!("{}", agent.session_count)),
         ]));
 
+        if let Some(reason) = agent.reason.as_deref() {
+            content.push(Line::from(vec![
+                Span::styled("Pending Reason: ", Style::default().fg(Color::Cyan)),
+                Span::styled(reason, Style::default().fg(Color::Yellow)),
+            ]));
+        }
+
         if let Some(ref prompt) = agent.system_prompt {
             content.push(Line::from(""));
             content.push(Line::from(Span::styled(
